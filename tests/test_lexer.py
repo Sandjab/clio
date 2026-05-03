@@ -47,3 +47,25 @@ def test_lex_takes_gives_with_primitive():
     assert "GIVES" in keyword_values
     assert "str" in keyword_values
     assert types.count(TokenType.COLON) == 5  # TAKES:, input:, GIVES:, output:, MODE:
+
+
+def test_lex_list_records_enums():
+    src = (
+        "STEP foo\n"
+        "  GIVES: items: List<{name: str, age: int}>\n"
+        "  MODE:  exact\n"
+    )
+    tokens = lex(src)
+    types = [t.type for t in tokens]
+    assert TokenType.LANGLE in types
+    assert TokenType.RANGLE in types
+    assert TokenType.LBRACE in types
+    assert TokenType.RBRACE in types
+
+
+def test_lex_enum():
+    src = "STEP foo\n  TAKES: s: enum(a|b|c)\n  MODE: exact\n"
+    tokens = lex(src)
+    assert any(t.type == TokenType.PIPE for t in tokens)
+    assert any(t.type == TokenType.LPAREN for t in tokens)
+    assert any(t.type == TokenType.RPAREN for t in tokens)

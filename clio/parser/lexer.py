@@ -4,6 +4,18 @@ from clio.parser.tokens import Token, TokenType
 
 _KEYWORD_VALUES = {k.value for k in Keyword}
 
+_SINGLE_CHAR_TOKENS = {
+    ":": TokenType.COLON,
+    ",": TokenType.COMMA,
+    "<": TokenType.LANGLE,
+    ">": TokenType.RANGLE,
+    "{": TokenType.LBRACE,
+    "}": TokenType.RBRACE,
+    "(": TokenType.LPAREN,
+    ")": TokenType.RPAREN,
+    "|": TokenType.PIPE,
+}
+
 
 class LexError(Exception):
     def __init__(self, msg: str, line: int, col: int) -> None:
@@ -34,13 +46,9 @@ def lex(source: str) -> list[Token]:
                 i += 1
                 col += 1
                 continue
-            if ch == ":":
-                tokens.append(Token(TokenType.COLON, ":", lineno, col))
-                i += 1
-                col += 1
-                continue
-            if ch == ",":
-                tokens.append(Token(TokenType.COMMA, ",", lineno, col))
+            single = _SINGLE_CHAR_TOKENS.get(ch)
+            if single is not None:
+                tokens.append(Token(single, ch, lineno, col))
                 i += 1
                 col += 1
                 continue

@@ -16,3 +16,5 @@ class Keyword(str, Enum):
     FLOAT = "float"
     STR = "str"
     BOOL = "bool"
+    LIST = "List"
+    ENUM = "enum"

@@ -7,6 +7,13 @@ class TokenType(str, Enum):
     IDENT = "IDENT"
     COLON = "COLON"
     COMMA = "COMMA"
+    LANGLE = "LANGLE"      # <
+    RANGLE = "RANGLE"      # >
+    LBRACE = "LBRACE"      # {
+    RBRACE = "RBRACE"      # }
+    LPAREN = "LPAREN"      # (
+    RPAREN = "RPAREN"      # )
+    PIPE = "PIPE"          # |
     NEWLINE = "NEWLINE"
     INDENT = "INDENT"
     DEDENT = "DEDENT"
