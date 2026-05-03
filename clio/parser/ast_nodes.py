@@ -45,5 +45,20 @@ class StepDecl:
 
 
 @dataclass(frozen=True)
+class ContractRef(TypeExpr):
+    name: str          # the contract being referenced
+    line: int
+    col: int
+
+
+@dataclass(frozen=True)
+class ContractDecl:
+    name: str
+    shape: TypeExpr    # always a RecordType in v0.1
+    line: int
+    col: int
+
+
+@dataclass(frozen=True)
 class Program:
-    decls: tuple[StepDecl, ...]
+    decls: tuple[object, ...]    # StepDecl | ContractDecl

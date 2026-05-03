@@ -18,3 +18,6 @@ class Keyword(str, Enum):
     BOOL = "bool"
     LIST = "List"
     ENUM = "enum"
+    CONTRACT = "CONTRACT"
+    SHAPE = "SHAPE"
+    CSV = "CSV"
