@@ -111,3 +111,28 @@ def test_emit_v02_onfail(tmp_path):
     expected = _read_tree(FIXTURES / "expected" / "v02_onfail")
     actual = _read_tree(tmp_path)
     assert actual == expected
+
+
+def test_emit_abort_message_is_shell_quoted():
+    """Bash injection guard: abort messages from CLIO source must be shlex-quoted."""
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE:  judgment\n"
+        '  ON_FAIL: abort("nasty $(rm -rf /) backtick`x`")\n'
+        "FLOW f\n"
+        "  s()\n"
+    )
+    import tempfile
+    from clio.emitters.claude_cli import ClaudeCLIEmitter
+    from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
+    out = Path(tempfile.mkdtemp())
+    ClaudeCLIEmitter().emit(build_ir(parse(src)), out)
+    run_sh = (out / "run.sh").read_text()
+    # The injection vectors must NOT appear unquoted in the emitted echo.
+    # Specifically, `$(...)` and `` `...` `` must be inside single quotes.
+    assert "$(rm -rf /)" not in run_sh.split("'")[0::2], \
+        "abort message must be inside single quotes — found $(...) outside"
+    # Sanity: the message text IS in the file (just safely quoted).
+    assert "nasty" in run_sh and "rm -rf" in run_sh

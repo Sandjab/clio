@@ -320,10 +320,10 @@ class ClaudeCLIEmitter(BaseEmitter):
                     f'{ind}fi',
                 ]
             elif s.kind == "abort":
-                msg = (s.abort_message or "").replace('"', '\\"')
+                full_msg = f"[clio] step {step.name}: {s.abort_message or ''}"
                 out += [
                     f'{ind}if [ -z "$RESPONSE_{idx:02d}" ]; then',
-                    f'{ind}    echo "[clio] step {step.name}: {msg}" >&2',
+                    f'{ind}    echo {shlex.quote(full_msg)} >&2',
                     f'{ind}    exit 1',
                     f'{ind}fi',
                 ]

@@ -58,7 +58,7 @@ if [ -z "$RESPONSE_02" ]; then
         RESPONSE_02="$(_clio_run_attempt "${MODELS_02[$MODEL_IDX_02]}" "$PROMPT_02" steps/02_detect_churn.schema.json || true)"
     fi
     if [ -z "$RESPONSE_02" ]; then
-        echo "[clio] step detect_churn: churn detection failed" >&2
+        echo '[clio] step detect_churn: churn detection failed' >&2
         exit 1
     fi
     if [ $MODEL_IDX_02 -eq 0 ] && [ -n "$RESPONSE_02" ]; then
