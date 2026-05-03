@@ -30,31 +30,59 @@ Each target is an emitter module that transforms the IR graph into a runnable pr
 
 ---
 
-## `target: python` (Milestone 2)
+## `target: python`
 
-**What it emits**: a Python package with a CLI entry point.
+Produces a runnable Python package depending on `anthropic` and `pydantic`.
 
-**Runtime dependency**: Python 3.12+, `anthropic` SDK, `pydantic` v2.
+### Layout
 
-| IR element        | Emitted artifact                                  |
-|-------------------|---------------------------------------------------|
-| STEP `exact`      | Function in `steps/name.py`                       |
-| STEP `judgment`   | Function that calls Anthropic API with Pydantic model as `response_model` |
-| CONTRACT          | Pydantic model class in `contracts.py`            |
-| FLOW              | `async def run()` in `flow.py` using asyncio      |
-| WHILE loop        | `while` loop with state dict                      |
-| FOR EACH          | `asyncio.gather()` or sequential loop             |
-| MATCH/CASE        | Python `match/case`                                |
-| IF/ELSE           | Python `if/else`                                   |
-| ON_FAIL/fallback  | `try/except` with retry decorator                  |
-| RESOURCES         | Config dataclass in `config.py`                    |
-| CACHE             | `@cached_judgment` decorator with hash-based file store |
+```
+output/
+  pyproject.toml
+  README.md
+  <pkg>/
+    __init__.py
+    contracts.py        # Pydantic v2 BaseModel per CONTRACT
+    flow.py             # orchestrator: calls steps in chain order
+    __main__.py         # CLI: `python -m <pkg>`
+    steps/
+      <exact>.py        # NotImplementedError stub (user fills body)
+      <judgment>.py     # auto-generated: SDK + cache + ON_FAIL chain
+    clio_runtime/
+      cache.py          # copied verbatim from clio/runtime/cache.py
+```
 
-**Judgment steps**: the emitter generates a function that constructs the prompt from a template, calls `anthropic.messages.create()` with `tools` for structured output, and validates the response against the Pydantic model.
+### Use
 
-**Contract validation**: Pydantic does both schema definition and runtime validation. No additional library needed — the emitted Pydantic model IS the contract. Retry logic is a simple `for` loop with `try/except ValidationError`.
+```bash
+pip install -e ./output
+python -m <pkg> --kwargs '{"file": "customers.csv"}'
+```
 
-**Model routing**: the emitter generates a `get_model()` function that reads the strategy from config and returns the appropriate model string.
+Or programmatically:
+
+```python
+from <pkg>.flow import run
+result = run(file="customers.csv")
+```
+
+### Cache layout interchangeable with `claude-cli`
+
+Both targets read/write `<output>/.cache/<step_name>/<sha256>.json` with the same key derivation (SHA256 of `step + model + prompt + schema`). Switching targets between runs preserves cache hits.
+
+### Model name mapping
+
+`RESOURCES.models` short names map to Anthropic SDK full model IDs at emit time:
+
+| CLIO short | Anthropic ID |
+|------------|--------------|
+| `haiku` | `claude-haiku-4-5-20251001` |
+| `sonnet` | `claude-sonnet-4-6` |
+| `opus` | `claude-opus-4-7` |
+
+### System prompt
+
+Each judgment step's SDK call sends a strict JSON-only system prompt that aligns the model's behavior with `claude -p`'s built-in scaffolding. Ensures contract validation succeeds reliably.
 
 ---
 

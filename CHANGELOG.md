@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.3.0 — 2026-05-04
+
+Adds a second emitter target (`python`) producing a runnable Python package (Anthropic SDK + Pydantic v2) from the same IR. Validates the "IR is target-independent" architecture claim.
+
+### Compiler
+
+- `python -m clio compile --target python` — new target.
+- Same `.clio` source, same IR; only the emitter differs.
+
+### Emitted Python project
+
+- Layout: `pyproject.toml` + importable package + `python -m <pkg>` CLI entry.
+- Contracts → Pydantic v2 BaseModel classes (with `@field_validator` for `ASSERT`).
+- Exact steps → typed function stubs (`NotImplementedError` body).
+- Judgment steps → full implementations: Anthropic SDK call + Pydantic validation + `CACHE` + full `ON_FAIL` strategy chain.
+- `clio_runtime/cache.py` copied verbatim — same on-disk cache format as the bash target; caches are interchangeable between targets.
+- Dependencies: `anthropic>=0.40`, `pydantic>=2`. Runtime needs only Python 3.12+.
+- Emitted SDK calls include a strict JSON-only system prompt to align behavior with `claude -p`.
+
+### Tests
+
+- Golden tests for: skeleton, contracts, exact stubs, cache wrapping, full strategy chain, fallback resolution.
+- Pydantic round-trip validation tests.
+- SDK monkeypatch tests for retry/escalate/fallback behavior (no network).
+- E2E gated test: real `claude -p`, cache replay verified via SDK monkeypatch on the second run.
+
+### Out of scope (planned for later)
+
+Async / parallel step execution, streaming responses, tool_use, provider-neutral SDK, multi-FLOW per source, persistent state.
+
 ## v0.2.0 — 2026-05-03
 
 Adds reproducibility (`CACHE`) and resilience (`ON_FAIL`) on `judgment` steps.
