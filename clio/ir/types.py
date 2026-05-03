@@ -31,6 +31,8 @@ def types_equal(a: TypeExpr, b: TypeExpr, contracts: dict) -> bool:
         return a.values == b.values
     if isinstance(a, ConstrainedType) and isinstance(b, ConstrainedType):
         return types_equal(a.base, b.base, contracts) and a.constraints == b.constraints
+    if isinstance(a, ContractRef) and isinstance(b, ContractRef):
+        return a.name == b.name
     return False
 
 

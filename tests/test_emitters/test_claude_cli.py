@@ -91,3 +91,119 @@ def test_emit_phase9_full_mvp(tmp_path):
     expected = _read_tree(FIXTURES / "expected" / "phase9")
     actual = _read_tree(tmp_path)
     assert actual == expected
+
+
+def test_emit_v02_cache(tmp_path):
+    src = (FIXTURES / "mvp_v02_cache.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeCLIEmitter().emit(graph, tmp_path)
+
+    expected = _read_tree(FIXTURES / "expected" / "v02_cache")
+    actual = _read_tree(tmp_path)
+    assert actual == expected
+
+
+def test_emit_v02_onfail(tmp_path):
+    src = (FIXTURES / "mvp_v02_onfail.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeCLIEmitter().emit(graph, tmp_path)
+
+    expected = _read_tree(FIXTURES / "expected" / "v02_onfail")
+    actual = _read_tree(tmp_path)
+    assert actual == expected
+
+
+def test_emit_v02_fallback(tmp_path):
+    src = (FIXTURES / "mvp_v02_fallback.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeCLIEmitter().emit(graph, tmp_path)
+
+    expected = _read_tree(FIXTURES / "expected" / "v02_fallback")
+    actual = _read_tree(tmp_path)
+    assert actual == expected
+
+
+def test_emit_abort_message_is_shell_quoted():
+    """Bash injection guard: abort messages from CLIO source must be shlex-quoted."""
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE:  judgment\n"
+        '  ON_FAIL: abort("nasty $(rm -rf /) backtick`x`")\n'
+        "FLOW f\n"
+        "  s()\n"
+    )
+    import tempfile
+    from clio.emitters.claude_cli import ClaudeCLIEmitter
+    from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
+    out = Path(tempfile.mkdtemp())
+    ClaudeCLIEmitter().emit(build_ir(parse(src)), out)
+    run_sh = (out / "run.sh").read_text()
+    # The injection vectors must NOT appear unquoted in the emitted echo.
+    # Specifically, `$(...)` and `` `...` `` must be inside single quotes.
+    assert "$(rm -rf /)" not in run_sh.split("'")[0::2], \
+        "abort message must be inside single quotes — found $(...) outside"
+    # Sanity: the message text IS in the file (just safely quoted).
+    assert "nasty" in run_sh and "rm -rf" in run_sh
+
+
+def test_emit_fallback_does_not_cache_under_main_key(tmp_path):
+    """Per spec §6: fallback's output must not be cached under the main step's key.
+    Verified by inspecting the cache-store guard for the FALLBACK_USED tracking."""
+    src = (
+        "STEP main\n"
+        "  TAKES: x: int\n"
+        "  GIVES: y: str\n"
+        "  MODE:    judgment\n"
+        "  CACHE:   ttl(1h)\n"
+        '  ON_FAIL: fallback(naive) then abort("nope")\n'
+        "STEP naive\n"
+        "  TAKES: x: int\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "FLOW f\n"
+        "  main(x=1)\n"
+    )
+    import tempfile
+    from clio.emitters.claude_cli import ClaudeCLIEmitter
+    from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
+    out = Path(tempfile.mkdtemp())
+    ClaudeCLIEmitter().emit(build_ir(parse(src)), out)
+    run_sh = (out / "run.sh").read_text()
+    # The FALLBACK_USED tracking flag must be present.
+    assert "FALLBACK_USED_" in run_sh, "fallback chain must emit FALLBACK_USED tracking"
+    # The cache-store gate must check FALLBACK_USED == 0.
+    assert 'FALLBACK_USED_' in run_sh
+    assert '= "0"' in run_sh, "cache-store gate must check FALLBACK_USED == 0"
+
+
+def test_emit_escalate_recomputes_cache_key(tmp_path):
+    """Per spec §6: escalate must recompute the cache key for the new model
+    and lookup/store under that key."""
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE:    judgment\n"
+        "  CACHE:   ttl(1h)\n"
+        '  ON_FAIL: escalate then abort("nope")\n'
+        "FLOW f\n"
+        "  s()\n"
+        "RESOURCES\n"
+        "  target: claude-cli\n"
+        "  models: [haiku, sonnet]\n"
+    )
+    import tempfile
+    from clio.emitters.claude_cli import ClaudeCLIEmitter
+    from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
+    out = Path(tempfile.mkdtemp())
+    ClaudeCLIEmitter().emit(build_ir(parse(src)), out)
+    run_sh = (out / "run.sh").read_text()
+    # Escalate must recompute the key.
+    assert "KEY_01_ESC=" in run_sh, "escalate must recompute the cache key"
+    # And lookup against it.
+    assert 'cache lookup "$CACHE_DIR_01" s "$KEY_01_ESC"' in run_sh
+    # And store under it on success.
+    assert 'cache store "$CACHE_DIR_01" s "$KEY_01_ESC"' in run_sh

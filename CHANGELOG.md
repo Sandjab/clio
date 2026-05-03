@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.2.0 — 2026-05-03
+
+Adds reproducibility (`CACHE`) and resilience (`ON_FAIL`) on `judgment` steps.
+
+### Language
+
+- `CACHE: on | off | ttl(<int><s|m|h|d>)` — judgment steps only.
+- `ON_FAIL: <strategy> (then <strategy>)*` — judgment steps only. Strategies:
+  - `retry(N)` — N additional attempts on the current model
+  - `escalate` — one attempt on the next model in `RESOURCES.models`
+  - `fallback(<step_name>)` — run a different STEP with identical TAKES/GIVES; cycles rejected at compile time
+  - `abort("<msg>")` — stop with a clear error
+- Fallback compat is checked structurally at IR build time (TAKES name+type and GIVES name+type must match).
+- Implicit abort if all strategies are exhausted without a terminal `abort`.
+
+### Runtime
+
+- New `clio_runtime/cache.py` (key = SHA256 over step+model+rendered_prompt+inlined_schema). Atomic file writes. Project-local `.cache/` (override via `CLIO_CACHE_DIR`).
+- `run.sh` gains a `_clio_run_attempt` bash helper at the top (one definition per emitted project).
+- Bash variable names are now suffixed with the step index (`PROMPT_02`, `RESPONSE_02`, …) to avoid collision in multi-judgment-step flows.
+
+### Tests
+
+- 12 new unit tests for `cache.py`.
+- Parser, IR, and emitter tests for CACHE, ON_FAIL, and fallback resolution.
+- E2E test now validates that a second run within TTL produces zero `claude -p` invocations (verified via PATH-stub).
+
+### Out of scope (planned for later)
+
+`ON_FAIL` on `MODE: exact`, `CONFIDENCE`, `VALIDATE`, control-flow keywords (`FOR EACH`/`WHILE`/`IF`/`MATCH`), the optimizer, alternative emitter targets, NL → `.clio` frontend.
+
 ## v0.1.0 — 2026-05-03
 
 First runnable slice. Compiles a strict subset of the CLIO language to a Claude Code project that runs end-to-end against `claude -p`.

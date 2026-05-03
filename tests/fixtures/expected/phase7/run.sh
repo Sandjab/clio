@@ -18,6 +18,18 @@ if [ -z "$PYTHON" ]; then
     exit 1
 fi
 
+# Helper: run one judgment attempt against $1=model with $2=prompt and validate against $3=schema_path.
+# Prints the cleaned response on success, nothing on failure. Exit 0 on success, 1 on failure.
+_clio_run_attempt() {
+    local model="$1" prompt="$2" schema_path="$3" raw clean
+    raw="$(printf %s "$prompt" | claude -p --model "$model" --output-format text 2>/dev/null || true)"
+    [ -n "$raw" ] || return 1
+    clean="$(printf %s "$raw" | awk '!/^```/')"
+    printf %s "$clean" | "$PYTHON" -m clio_runtime.validate "$schema_path" - >/dev/null 2>&1 || return 1
+    printf %s "$clean"
+    return 0
+}
+
 echo '{}' > state.json
 
 # Step 1: load_customers (exact)
@@ -25,12 +37,16 @@ echo '{}' > state.json
 
 # Step 2: detect_churn (judgment)
 INLINED_SCHEMA_02='{"type":"array","items":{"type":"object","properties":{"client":{"type":"string"},"risk":{"enum":["low","mid","high"]},"reason":{"type":"string"}},"required":["client","risk","reason"],"additionalProperties":false}}'
-PROMPT="$("$PYTHON" -m clio_runtime.substitute steps/02_detect_churn.prompt state.json)"
-PROMPT="${PROMPT//\$\{schema\}/$INLINED_SCHEMA_02}"
-RAW_RESPONSE="$(printf %s "$PROMPT" | claude -p --model haiku --output-format text)"
-if [ -z "$RAW_RESPONSE" ]; then echo "[clio] empty response from claude -p in step 2 (detect_churn)" >&2; exit 1; fi
-RESPONSE="$(printf %s "$RAW_RESPONSE" | awk '!/^```/')"
-printf %s "$RESPONSE" | "$PYTHON" -m clio_runtime.validate steps/02_detect_churn.schema.json -
-jq --argjson r "$RESPONSE" '.risks = $r' state.json > state.json.tmp && mv state.json.tmp state.json
+PROMPT_02="$("$PYTHON" -m clio_runtime.substitute steps/02_detect_churn.prompt state.json)"
+PROMPT_02="${PROMPT_02//\$\{schema\}/$INLINED_SCHEMA_02}"
+MODELS_02=(haiku)
+MODEL_IDX_02=0
+RESPONSE_02=""
+RESPONSE_02="$(_clio_run_attempt "${MODELS_02[$MODEL_IDX_02]}" "$PROMPT_02" steps/02_detect_churn.schema.json || true)"
+if [ -z "$RESPONSE_02" ]; then
+    echo "[clio] step detect_churn: ON_FAIL strategies exhausted" >&2
+    exit 1
+fi
+jq --argjson r "$RESPONSE_02" '.risks = $r' state.json > state.json.tmp && mv state.json.tmp state.json
 
 echo "[clio] flow retention completed."

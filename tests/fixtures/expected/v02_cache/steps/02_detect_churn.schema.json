@@ -1,0 +1,6 @@
+{
+  "type": "array",
+  "items": {
+    "$ref": "../contracts/customer_risk.schema.json"
+  }
+}

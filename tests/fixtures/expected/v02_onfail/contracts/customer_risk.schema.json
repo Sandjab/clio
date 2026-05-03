@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "properties": {
+    "client": {
+      "type": "string"
+    },
+    "risk": {
+      "enum": [
+        "low",
+        "mid",
+        "high"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "client",
+    "risk",
+    "reason"
+  ],
+  "additionalProperties": false
+}

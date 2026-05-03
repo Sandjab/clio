@@ -18,6 +18,18 @@ if [ -z "$PYTHON" ]; then
     exit 1
 fi
 
+# Helper: run one judgment attempt against $1=model with $2=prompt and validate against $3=schema_path.
+# Prints the cleaned response on success, nothing on failure. Exit 0 on success, 1 on failure.
+_clio_run_attempt() {
+    local model="$1" prompt="$2" schema_path="$3" raw clean
+    raw="$(printf %s "$prompt" | claude -p --model "$model" --output-format text 2>/dev/null || true)"
+    [ -n "$raw" ] || return 1
+    clean="$(printf %s "$raw" | awk '!/^```/')"
+    printf %s "$clean" | "$PYTHON" -m clio_runtime.validate "$schema_path" - >/dev/null 2>&1 || return 1
+    printf %s "$clean"
+    return 0
+}
+
 echo '{}' > state.json
 
 # Step 1: load_customers (exact)

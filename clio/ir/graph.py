@@ -10,11 +10,35 @@ class FieldIR:
 
 
 @dataclass(frozen=True)
+class CacheConfigIR:
+    mode: str               # "on" | "off" | "ttl"
+    ttl_seconds: int | None
+
+
+@dataclass(frozen=True)
+class OnFailStrategyIR:
+    """IR-level strategy. `fallback_step_name` is set by the builder; `fallback_step`
+    is populated in slice G after a resolution pass."""
+    kind: str
+    max_retries: int | None = None
+    fallback_step_name: str | None = None
+    fallback_step: "StepIR | None" = None
+    abort_message: str | None = None
+
+
+@dataclass(frozen=True)
+class OnFailChainIR:
+    strategies: tuple[OnFailStrategyIR, ...]
+
+
+@dataclass(frozen=True)
 class StepIR:
     name: str
     mode: str
     takes: tuple[FieldIR, ...]
     gives: FieldIR | None
+    cache: CacheConfigIR | None
+    on_fail: OnFailChainIR | None
     line: int
 
 

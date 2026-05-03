@@ -162,7 +162,7 @@ class ClaudeCLIEmitter(BaseEmitter):
         src_dir = Path(src_pkg.__file__).parent
         dest = output_dir / "clio_runtime"
         dest.mkdir(exist_ok=True)
-        for name in ("__init__.py", "validate.py", "substitute.py"):
+        for name in ("__init__.py", "validate.py", "substitute.py", "cache.py"):
             src_file = src_dir / name
             if src_file.exists():
                 (dest / name).write_text(src_file.read_text())
@@ -196,17 +196,30 @@ class ClaudeCLIEmitter(BaseEmitter):
             "    exit 1",
             "fi",
             "",
+            "# Helper: run one judgment attempt against $1=model with $2=prompt and validate against $3=schema_path.",
+            "# Prints the cleaned response on success, nothing on failure. Exit 0 on success, 1 on failure.",
+            "_clio_run_attempt() {",
+            "    local model=\"$1\" prompt=\"$2\" schema_path=\"$3\" raw clean",
+            "    raw=\"$(printf %s \"$prompt\" | claude -p --model \"$model\" --output-format text 2>/dev/null || true)\"",
+            "    [ -n \"$raw\" ] || return 1",
+            "    clean=\"$(printf %s \"$raw\" | awk '!/^```/')\"",
+            "    printf %s \"$clean\" | \"$PYTHON\" -m clio_runtime.validate \"$schema_path\" - >/dev/null 2>&1 || return 1",
+            "    printf %s \"$clean\"",
+            "    return 0",
+            "}",
+            "",
             "echo '{}' > state.json",
             "",
         ]
-        model = (
-            graph.resources.models[0]
+        models_list = (
+            graph.resources.models
             if graph.resources is not None and graph.resources.models
-            else "haiku"
+            else ("haiku",)
         )
         contracts_by_name = {c.name: c for c in graph.contracts}
-        for idx, call in enumerate(graph.flow.chain, start=1):
+        for call in graph.flow.chain:
             step = self._step_for_call(graph, call)
+            idx = self._step_index_in_emit(graph, step)
             if step.mode == "exact":
                 args = self._render_kwargs_as_cli(call)
                 script_name = f"steps/{idx:02d}_{step.name}.py"
@@ -214,7 +227,8 @@ class ClaudeCLIEmitter(BaseEmitter):
                 lines.append(f'"$PYTHON" {script_name} {args}')
             else:
                 lines.extend(self._render_judgment_step(
-                    idx, step, call, model=model,
+                    graph, idx, step, call,
+                    models_list=models_list,
                     contracts_by_name=contracts_by_name,
                 ))
             lines.append("")
@@ -223,32 +237,191 @@ class ClaudeCLIEmitter(BaseEmitter):
         run_path.write_text("\n".join(lines) + "\n")
         run_path.chmod(0o755)
 
+    @staticmethod
+    def _step_index_in_emit(graph: FlowGraph, target: "StepIR") -> int:
+        """Index (1-based) of `target` in graph.steps in emission order. The
+        emitter writes step files as `steps/NN_<name>.py` indexed by this order."""
+        for i, s in enumerate(graph.steps, start=1):
+            if s.name == target.name:
+                return i
+        raise KeyError(target.name)
+
     def _render_judgment_step(
         self,
+        graph: FlowGraph,
         idx: int,
         step: StepIR,
         call,
-        model: str,
+        models_list: tuple[str, ...],
         contracts_by_name: dict[str, ContractIR],
     ) -> list[str]:
         prompt_path = f"steps/{idx:02d}_{step.name}.prompt"
         schema_path = f"steps/{idx:02d}_{step.name}.schema.json"
         out_name = step.gives.name if step.gives else "result"
-        # Build the inlined schema (resolved $refs, no x-clio-assert) for the LLM prompt.
-        # The on-disk schema_path keeps the $ref + x-clio-assert form for validate.py.
         inlined = _inline_schema(step.gives.type, contracts_by_name) if step.gives else {}
         inlined_json = json.dumps(inlined, separators=(",", ":"))
-        return [
+
+        cache_active = step.cache is not None and step.cache.mode != "off"
+        ttl_arg = "" if step.cache is None or step.cache.mode == "on" else str(step.cache.ttl_seconds)
+
+        models_array = "(" + " ".join(shlex.quote(m) for m in models_list) + ")"
+        primary_model = models_list[0]
+        first_model_lit = shlex.quote(primary_model)
+
+        strategies = step.on_fail.strategies if step.on_fail is not None else ()
+        has_fallback = any(s.kind == "fallback" for s in strategies)
+
+        out: list[str] = [
             f"# Step {idx}: {step.name} (judgment)",
             f"INLINED_SCHEMA_{idx:02d}={shlex.quote(inlined_json)}",
-            f'PROMPT="$("$PYTHON" -m clio_runtime.substitute {prompt_path} state.json)"',
-            f'PROMPT="${{PROMPT//\\$\\{{schema\\}}/$INLINED_SCHEMA_{idx:02d}}}"',
-            f'RAW_RESPONSE="$(printf %s "$PROMPT" | claude -p --model {model} --output-format text)"',
-            f'if [ -z "$RAW_RESPONSE" ]; then echo "[clio] empty response from claude -p in step {idx} ({step.name})" >&2; exit 1; fi',
-            f"RESPONSE=\"$(printf %s \"$RAW_RESPONSE\" | awk '!/^```/')\"",
-            f'printf %s "$RESPONSE" | "$PYTHON" -m clio_runtime.validate {schema_path} -',
-            f"jq --argjson r \"$RESPONSE\" '.{out_name} = $r' state.json > state.json.tmp && mv state.json.tmp state.json",
+            f'PROMPT_{idx:02d}="$("$PYTHON" -m clio_runtime.substitute {prompt_path} state.json)"',
+            f'PROMPT_{idx:02d}="${{PROMPT_{idx:02d}//\\$\\{{schema\\}}/$INLINED_SCHEMA_{idx:02d}}}"',
+            f"MODELS_{idx:02d}={models_array}",
+            f"MODEL_IDX_{idx:02d}=0",
+            f'RESPONSE_{idx:02d}=""',
         ]
+        if has_fallback:
+            out.append(f"FALLBACK_USED_{idx:02d}=0")
+
+        # Cache lookup against the primary model
+        if cache_active:
+            ttl_str = ttl_arg if ttl_arg else '""'
+            out += [
+                f'CACHE_DIR_{idx:02d}="${{CLIO_CACHE_DIR:-.cache}}"',
+                f'KEY_{idx:02d}="$("$PYTHON" -m clio_runtime.cache key {step.name} {first_model_lit} '
+                f'"$PROMPT_{idx:02d}" "$INLINED_SCHEMA_{idx:02d}")"',
+                f'RESPONSE_{idx:02d}="$("$PYTHON" -m clio_runtime.cache lookup '
+                f'"$CACHE_DIR_{idx:02d}" {step.name} "$KEY_{idx:02d}" {ttl_str} 2>/dev/null || true)"',
+            ]
+
+        # Open the "if no cache hit" guard (only if cache is active).
+        if cache_active:
+            out.append(f'if [ -z "$RESPONSE_{idx:02d}" ]; then')
+            ind = "    "
+        else:
+            ind = ""
+
+        # Initial attempt: counted as part of strategy 1 if it's retry, else standalone.
+        # We always do at least one attempt with the primary model.
+        out += [
+            f'{ind}RESPONSE_{idx:02d}="$(_clio_run_attempt "${{MODELS_{idx:02d}[$MODEL_IDX_{idx:02d}]}}" '
+            f'"$PROMPT_{idx:02d}" {schema_path} || true)"',
+        ]
+
+        for s in strategies:
+            if s.kind == "retry":
+                # Up to N additional attempts on the current model (so total = 1 + N for this clause).
+                n = s.max_retries
+                out += [
+                    f'{ind}if [ -z "$RESPONSE_{idx:02d}" ]; then',
+                    f'{ind}    for _ in $(seq 1 {n}); do',
+                    f'{ind}        RESPONSE_{idx:02d}="$(_clio_run_attempt '
+                    f'"${{MODELS_{idx:02d}[$MODEL_IDX_{idx:02d}]}}" '
+                    f'"$PROMPT_{idx:02d}" {schema_path} || true)"',
+                    f'{ind}        [ -n "$RESPONSE_{idx:02d}" ] && break',
+                    f'{ind}    done',
+                    f'{ind}fi',
+                ]
+            elif s.kind == "escalate":
+                out += [
+                    f'{ind}if [ -z "$RESPONSE_{idx:02d}" ] '
+                    f'&& [ $MODEL_IDX_{idx:02d} -lt $((${{#MODELS_{idx:02d}[@]}} - 1)) ]; then',
+                    f'{ind}    MODEL_IDX_{idx:02d}=$((MODEL_IDX_{idx:02d} + 1))',
+                ]
+                if cache_active:
+                    out += [
+                        f'{ind}    KEY_{idx:02d}_ESC="$("$PYTHON" -m clio_runtime.cache key {step.name} '
+                        f'"${{MODELS_{idx:02d}[$MODEL_IDX_{idx:02d}]}}" '
+                        f'"$PROMPT_{idx:02d}" "$INLINED_SCHEMA_{idx:02d}")"',
+                        f'{ind}    RESPONSE_{idx:02d}="$("$PYTHON" -m clio_runtime.cache lookup '
+                        f'"$CACHE_DIR_{idx:02d}" {step.name} "$KEY_{idx:02d}_ESC" {ttl_str} 2>/dev/null || true)"',
+                        f'{ind}    if [ -z "$RESPONSE_{idx:02d}" ]; then',
+                        f'{ind}        RESPONSE_{idx:02d}="$(_clio_run_attempt '
+                        f'"${{MODELS_{idx:02d}[$MODEL_IDX_{idx:02d}]}}" '
+                        f'"$PROMPT_{idx:02d}" {schema_path} || true)"',
+                        f'{ind}    fi',
+                        f'{ind}    if [ -n "$RESPONSE_{idx:02d}" ]; then',
+                        f'{ind}        "$PYTHON" -m clio_runtime.cache store "$CACHE_DIR_{idx:02d}" '
+                        f'{step.name} "$KEY_{idx:02d}_ESC" '
+                        f'"${{MODELS_{idx:02d}[$MODEL_IDX_{idx:02d}]}}" "$RESPONSE_{idx:02d}"',
+                        f'{ind}    fi',
+                    ]
+                else:
+                    out += [
+                        f'{ind}    RESPONSE_{idx:02d}="$(_clio_run_attempt '
+                        f'"${{MODELS_{idx:02d}[$MODEL_IDX_{idx:02d}]}}" '
+                        f'"$PROMPT_{idx:02d}" {schema_path} || true)"',
+                    ]
+                out += [
+                    f'{ind}fi',
+                ]
+            elif s.kind == "abort":
+                full_msg = f"[clio] step {step.name}: {s.abort_message or ''}"
+                out += [
+                    f'{ind}if [ -z "$RESPONSE_{idx:02d}" ]; then',
+                    f'{ind}    echo {shlex.quote(full_msg)} >&2',
+                    f'{ind}    exit 1',
+                    f'{ind}fi',
+                ]
+            elif s.kind == "fallback":
+                # Run the fallback step. The fallback step's own emitted Python
+                # script reads its TAKES from state.json and writes its GIVES
+                # back, exactly the same way as a regular exact step would.
+                fb_step = s.fallback_step
+                # We need to know the index of the fallback step in graph.steps
+                # to construct its filename. The emitter is stateless re: this,
+                # so we look it up via the helper.
+                fb_idx = self._step_index_in_emit(graph, fb_step)
+                fb_script = f"steps/{fb_idx:02d}_{fb_step.name}.py"
+                # Reconstruct the kwargs from the call's state references —
+                # we use the same kwargs the main step uses, since fallback
+                # has identical TAKES.
+                args = self._render_kwargs_as_cli(call)
+                out += [
+                    f'{ind}if [ -z "$RESPONSE_{idx:02d}" ]; then',
+                    f'{ind}    "$PYTHON" {fb_script} {args}',
+                    f"{ind}    RESPONSE_{idx:02d}=\"$(jq -c .{out_name} state.json)\"",
+                    f"{ind}    FALLBACK_USED_{idx:02d}=1",
+                    f'{ind}fi',
+                ]
+
+        # Implicit abort if no terminal `abort` clause and the response is still empty.
+        terminal = strategies and strategies[-1].kind == "abort"
+        if not terminal:
+            out += [
+                f'{ind}if [ -z "$RESPONSE_{idx:02d}" ]; then',
+                f'{ind}    echo "[clio] step {step.name}: ON_FAIL strategies exhausted" >&2',
+                f'{ind}    exit 1',
+                f'{ind}fi',
+            ]
+
+        # Cache store on success (only when MODEL_IDX is still on the primary model;
+        # other models cache under their own key only if they were hit by lookup later).
+        # Per spec §6: a successful fallback must NOT be cached under the main key.
+        if cache_active:
+            if has_fallback:
+                guard = (
+                    f'{ind}if [ $MODEL_IDX_{idx:02d} -eq 0 ] && [ -n "$RESPONSE_{idx:02d}" ] '
+                    f'&& [ "$FALLBACK_USED_{idx:02d}" = "0" ]; then'
+                )
+            else:
+                guard = (
+                    f'{ind}if [ $MODEL_IDX_{idx:02d} -eq 0 ] && [ -n "$RESPONSE_{idx:02d}" ]; then'
+                )
+            out += [
+                guard,
+                f'{ind}    "$PYTHON" -m clio_runtime.cache store "$CACHE_DIR_{idx:02d}" '
+                f'{step.name} "$KEY_{idx:02d}" {first_model_lit} "$RESPONSE_{idx:02d}"',
+                f'{ind}fi',
+                "fi",  # closes the `if [ -z "$RESPONSE_NN" ]; then` cache-miss guard
+            ]
+
+        # Apply
+        out += [
+            f"jq --argjson r \"$RESPONSE_{idx:02d}\" '.{out_name} = $r' state.json > state.json.tmp "
+            f"&& mv state.json.tmp state.json",
+        ]
+        return out
 
     @staticmethod
     def _render_kwargs_as_cli(call) -> str:
