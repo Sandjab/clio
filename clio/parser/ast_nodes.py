@@ -12,6 +12,21 @@ class PrimitiveType(TypeExpr):
 
 
 @dataclass(frozen=True)
+class ListType(TypeExpr):
+    inner: TypeExpr
+
+
+@dataclass(frozen=True)
+class RecordType(TypeExpr):
+    fields: tuple[tuple[str, TypeExpr], ...]   # ((name, type), ...)
+
+
+@dataclass(frozen=True)
+class EnumType(TypeExpr):
+    values: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Field:
     name: str
     type: TypeExpr
