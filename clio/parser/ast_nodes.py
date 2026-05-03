@@ -66,5 +66,21 @@ class ConstrainedType(TypeExpr):
 
 
 @dataclass(frozen=True)
+class StepCall:
+    name: str                                   # which STEP
+    kwargs: tuple[tuple[str, object], ...]
+    line: int
+    col: int
+
+
+@dataclass(frozen=True)
+class FlowDecl:
+    name: str
+    chain: tuple[StepCall, ...]                 # sequential: [a, b, c] means a -> b -> c
+    line: int
+    col: int
+
+
+@dataclass(frozen=True)
 class Program:
-    decls: tuple[object, ...]    # StepDecl | ContractDecl
+    decls: tuple[object, ...]    # StepDecl | ContractDecl | FlowDecl
