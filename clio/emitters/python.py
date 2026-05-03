@@ -137,6 +137,18 @@ def _json_type_to_python(schema: dict) -> str:
     return "object"
 
 
+def _step_signature(step: StepIR, contracts_by_name: dict[str, "ContractIR"]) -> str:
+    """Return the parameter list portion of a `def name(...)` signature.
+    Empty TAKES → empty (no `*, ` orphan); else → keyword-only args."""
+    if not step.takes:
+        return ""
+    args = ", ".join(
+        f"{_to_field_name(t.name)}: {_type_to_python(t.type, contracts_by_name)}"
+        for t in step.takes
+    )
+    return f"*, {args}"
+
+
 def _first_ident(assert_ast: dict) -> str:
     kind = assert_ast.get("kind")
     if kind == "ident":
@@ -229,16 +241,14 @@ class PythonEmitter(BaseEmitter):
         return "\n".join(lines) + "\n"
 
     def _emit_exact_step(self, step: StepIR, contracts_by_name: dict[str, "ContractIR"]) -> str:
-        sig_args = ", ".join(
-            f"{_to_field_name(t.name)}: {_type_to_python(t.type, contracts_by_name)}"
-            for t in step.takes
-        )
+        params = _step_signature(step, contracts_by_name)
         ret_type = (
             _type_to_python(step.gives.type, contracts_by_name)
             if step.gives is not None else "None"
         )
-        takes_doc = "\n    ".join(
-            f"{t.name}: {_render_type_short(t.type)}" for t in step.takes
+        takes_doc = (
+            "\n    ".join(f"{t.name}: {_render_type_short(t.type)}" for t in step.takes)
+            if step.takes else "(no TAKES)"
         )
         gives_doc = (
             f"{step.gives.name}: {_render_type_short(step.gives.type)}"
@@ -255,7 +265,7 @@ class PythonEmitter(BaseEmitter):
             f'and expects the return value to conform to the GIVES type.\n'
             f'"""\n'
             f'\n\n'
-            f'def {step.name}(*, {sig_args}) -> {ret_type}:\n'
+            f'def {step.name}({params}) -> {ret_type}:\n'
             f'    raise NotImplementedError(\n'
             f'        "Implement steps/{step.name}.py: this is an exact (deterministic) step."\n'
             f'    )\n'

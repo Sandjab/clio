@@ -76,3 +76,26 @@ def test_emit_exact_step_stub_is_callable(tmp_path):
     mod = _load_module("v03_load_customers_test", step_path)
     with pytest.raises(NotImplementedError):
         mod.load_customers(file="x.csv")
+
+
+def test_emit_exact_step_with_no_takes_is_valid_python(tmp_path):
+    """Regression: empty TAKES must not emit `def foo(*, ) ->` (SyntaxError)."""
+    src = (
+        "STEP foo\n"
+        "  GIVES: r: str\n"
+        "  MODE:  exact\n"
+        "FLOW f\n"
+        "  foo()\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    step_path = tmp_path / "f" / "steps" / "foo.py"
+    src_text = step_path.read_text()
+    # Must NOT contain the broken signature.
+    assert "def foo(*, )" not in src_text, "empty TAKES emitted broken signature"
+    # Must compile.
+    import py_compile
+    py_compile.compile(str(step_path), doraise=True)
+    # Must be loadable and raise NotImplementedError when called.
+    mod = _load_module("v03_no_takes_test", step_path)
+    with pytest.raises(NotImplementedError):
+        mod.foo()
