@@ -1,0 +1,4 @@
+STEP echo_str
+  TAKES: input: str
+  GIVES: output: str
+  MODE:  exact

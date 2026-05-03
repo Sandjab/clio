@@ -1,11 +1,28 @@
 from clio.parser.parser import parse
 from clio.ir.builder import build_ir
+from clio.ir.contracts import type_to_json_schema
 
 
 def test_build_ir_from_minimal_step():
     program = parse("STEP foo\n  MODE: exact\n")
     graph = build_ir(program)
     assert len(graph.steps) == 1
+    assert graph.steps[0].name == "foo"
+    assert graph.steps[0].takes == ()
+    assert graph.steps[0].gives is None
+
+
+def test_build_ir_with_primitive_takes_gives():
+    src = "STEP echo_str\n  TAKES: input: str\n  GIVES: output: str\n  MODE: exact\n"
+    graph = build_ir(parse(src))
     step = graph.steps[0]
-    assert step.name == "foo"
-    assert step.mode == "exact"
+    assert [f.name for f in step.takes] == ["input"]
+    assert step.gives.name == "output"
+
+
+def test_primitive_type_to_json_schema():
+    from clio.parser.ast_nodes import PrimitiveType
+    assert type_to_json_schema(PrimitiveType("str")) == {"type": "string"}
+    assert type_to_json_schema(PrimitiveType("int")) == {"type": "integer"}
+    assert type_to_json_schema(PrimitiveType("bool")) == {"type": "boolean"}
+    assert type_to_json_schema(PrimitiveType("float")) == {"type": "number"}
