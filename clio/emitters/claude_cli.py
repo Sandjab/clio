@@ -1,4 +1,5 @@
 import json
+import shlex
 from pathlib import Path
 
 from clio.emitters.base import BaseEmitter
@@ -101,6 +102,49 @@ class ClaudeCLIEmitter(BaseEmitter):
         steps_dir.mkdir(exist_ok=True)
         for idx, step in enumerate(graph.steps, start=1):
             self._emit_step(steps_dir, idx, step)
+
+        if graph.flow is not None and all(
+            self._step_for_call(graph, c).mode == "exact" for c in graph.flow.chain
+        ):
+            self._emit_run_sh_exact_only(graph, output_dir)
+
+    @staticmethod
+    def _step_for_call(graph: FlowGraph, call) -> StepIR:
+        for s in graph.steps:
+            if s.name == call.step_name:
+                return s
+        raise KeyError(call.step_name)
+
+    def _emit_run_sh_exact_only(self, graph: FlowGraph, output_dir: Path) -> None:
+        lines: list[str] = [
+            "#!/usr/bin/env bash",
+            "set -euo pipefail",
+            'cd "$(dirname "$0")"',
+            "echo '{}' > state.json",
+            "",
+        ]
+        for idx, call in enumerate(graph.flow.chain, start=1):
+            step = self._step_for_call(graph, call)
+            args = self._render_kwargs_as_cli(call)
+            lines.append(f"# Step {idx}: {step.name} (exact)")
+            script_name = f"steps/{idx:02d}_{step.name}.py"
+            lines.append(f"python {script_name} {args}")
+            lines.append("")
+        lines.append('echo "[clio] flow ' + graph.flow.name + ' completed."')
+        run_path = output_dir / "run.sh"
+        run_path.write_text("\n".join(lines) + "\n")
+        run_path.chmod(0o755)
+
+    @staticmethod
+    def _render_kwargs_as_cli(call) -> str:
+        parts: list[str] = []
+        for name, value in call.kwargs:
+            if isinstance(value, str) and value.startswith("@"):
+                ref = value[1:]
+                parts.append(f'--{name}="$(jq -r .{ref} state.json)"')
+            else:
+                parts.append(f'--{name}={shlex.quote(str(value))}')
+        return " ".join(parts)
 
     @staticmethod
     def _emit_step(steps_dir: Path, idx: int, step: StepIR) -> None:

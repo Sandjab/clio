@@ -1,0 +1,13 @@
+STEP load_customers
+  TAKES: file:      str
+  GIVES: customers: List<{name: str, revenue: float}>
+  MODE:  exact
+
+STEP summarize
+  TAKES: customers: List<{name: str, revenue: float}>
+  GIVES: report:    str
+  MODE:  exact
+
+FLOW pipeline
+  load_customers(file="customers.csv")
+    -> summarize(customers)
