@@ -22,4 +22,15 @@ def test_compile_unknown_target_rejected_by_argparse(tmp_path, capsys):
 
     import pytest
     with pytest.raises(SystemExit):
-        main(["compile", str(src), "--target", "python", "--output", str(tmp_path / "out")])
+        main(["compile", str(src), "--target", "rust", "--output", str(tmp_path / "out")])
+
+
+def test_cli_compile_python_target(tmp_path):
+    from clio.cli import main
+    fixture = Path(__file__).parent / "fixtures" / "mvp_v03_skeleton.clio"
+    out = tmp_path / "out"
+    rc = main(["compile", str(fixture), "--target", "python", "--output", str(out)])
+    assert rc == 0
+    assert (out / "pyproject.toml").exists()
+    assert (out / "classify" / "__init__.py").exists()
+    assert (out / "classify" / "clio_runtime" / "cache.py").exists()

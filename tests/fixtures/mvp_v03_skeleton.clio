@@ -1,0 +1,7 @@
+STEP detect_topic
+  TAKES: text: str
+  GIVES: topic: str
+  MODE:  judgment
+
+FLOW classify
+  detect_topic(text="hello")
