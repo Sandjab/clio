@@ -78,6 +78,43 @@ def test_emit_exact_step_stub_is_callable(tmp_path):
         mod.load_customers(file="x.csv")
 
 
+def test_emit_judgment_step_runs_with_monkeypatched_sdk(tmp_path, monkeypatch):
+    src = (FIXTURES / "mvp_v03_contracts.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    try:
+        import anthropic
+
+        class FakeMessage:
+            def __init__(self, text):
+                self.content = [type("Block", (), {"text": text})()]
+
+        class FakeMessages:
+            @staticmethod
+            def create(**kw):
+                return FakeMessage(
+                    '[{"client": "Alpha", "risk": "low", "reason": "stable"}]'
+                )
+
+        class FakeClient:
+            def __init__(self, *_a, **_k):
+                self.messages = FakeMessages()
+
+        monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
+
+        from retention.steps import detect_churn as dc_mod
+        result = dc_mod.detect_churn(customers=[{"name": "Alpha", "revenue": 50000}])
+        assert len(result) == 1
+        assert result[0].client == "Alpha"
+        assert result[0].risk == "low"
+    finally:
+        sys.path.remove(str(tmp_path))
+        for k in list(sys.modules):
+            if k.startswith("retention"):
+                del sys.modules[k]
+
+
 def test_emit_exact_step_with_no_takes_is_valid_python(tmp_path):
     """Regression: empty TAKES must not emit `def foo(*, ) ->` (SyntaxError)."""
     src = (

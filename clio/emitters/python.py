@@ -24,6 +24,30 @@ from clio.parser.ast_nodes import (
 _PYTHON_PRIMITIVES = {"int": "int", "float": "float", "str": "str", "bool": "bool"}
 
 
+_MODEL_ID_MAP = {
+    "haiku": "claude-haiku-4-5-20251001",
+    "sonnet": "claude-sonnet-4-6",
+    "opus": "claude-opus-4-7",
+}
+
+
+def _model_id(short_name: str) -> str:
+    return _MODEL_ID_MAP.get(short_name, short_name)
+
+
+def _gives_validator_expr(gives) -> str:
+    """Python expression that, given a parsed-JSON value, returns the validated GIVES."""
+    if gives is None:
+        return "(lambda raw: raw)"
+    t = gives.type
+    if isinstance(t, ContractRef):
+        return f"contracts.{_to_class_name(t.name)}.model_validate"
+    if isinstance(t, ListType) and isinstance(t.inner, ContractRef):
+        cls = _to_class_name(t.inner.name)
+        return f"(lambda raw: [contracts.{cls}.model_validate(item) for item in raw])"
+    return "(lambda raw: raw)"
+
+
 def _to_class_name(name: str) -> str:
     """customer_risk -> CustomerRisk."""
     return "".join(part.capitalize() for part in name.split("_"))
@@ -191,8 +215,9 @@ class PythonEmitter(BaseEmitter):
         for step in graph.steps:
             if step.mode == "exact":
                 body = self._emit_exact_step(step, contracts_by_name)
-                (steps_dir / f"{step.name}.py").write_text(body)
-            # judgment in slice D
+            else:
+                body = self._emit_judgment_step(step, graph, contracts_by_name)
+            (steps_dir / f"{step.name}.py").write_text(body)
 
         (output_dir / "pyproject.toml").write_text(self._pyproject(pkg_name))
         (output_dir / "README.md").write_text(self._readme(pkg_name, graph))
@@ -270,6 +295,94 @@ class PythonEmitter(BaseEmitter):
             f'        "Implement steps/{step.name}.py: this is an exact (deterministic) step."\n'
             f'    )\n'
         )
+
+    def _emit_judgment_step(
+        self,
+        step: StepIR,
+        graph: FlowGraph,
+        contracts_by_name: dict[str, "ContractIR"],
+    ) -> str:
+        from clio.emitters.claude_cli import _inline_schema, _render_prompt
+        import json as _json
+
+        params = _step_signature(step, contracts_by_name)
+        ret_type = (
+            _type_to_python(step.gives.type, contracts_by_name)
+            if step.gives is not None else "None"
+        )
+
+        inlined = (
+            _inline_schema(step.gives.type, contracts_by_name)
+            if step.gives is not None else {}
+        )
+        inlined_json = _json.dumps(inlined, separators=(",", ":"))
+
+        models = (
+            graph.resources.models
+            if graph.resources is not None and graph.resources.models
+            else ("haiku",)
+        )
+        primary = _model_id(models[0])
+
+        prompt_template = _render_prompt(step)
+        result_class = _gives_validator_expr(step.gives)
+
+        sub_lines = [
+            f"    prompt = prompt.replace('${{{t.name}}}', json.dumps({_to_field_name(t.name)}))"
+            for t in step.takes
+        ]
+        sub_lines.append("    prompt = prompt.replace('${schema}', _INLINED_SCHEMA)")
+
+        body = [
+            f'"""STEP {step.name} (judgment).',
+            f'',
+            f'Auto-generated. Do not edit; regenerate via `clio compile`.',
+            f'"""',
+            "from __future__ import annotations",
+            "",
+            "import json",
+            "import sys",
+            "",
+            "from anthropic import Anthropic",
+            "",
+            "from .. import contracts",
+            "",
+            "",
+            f"_PROMPT_TEMPLATE = {prompt_template!r}",
+            f"_INLINED_SCHEMA = {inlined_json!r}",
+            f"_PRIMARY_MODEL = {primary!r}",
+            "",
+            "",
+            "def _attempt(model, prompt):",
+            "    \"\"\"Single attempt: SDK call → markdown strip → Pydantic validation.\"\"\"",
+            "    try:",
+            "        client = Anthropic()",
+            "        msg = client.messages.create(",
+            "            model=model,",
+            "            max_tokens=4096,",
+            "            messages=[{'role': 'user', 'content': prompt}],",
+            "        )",
+            "        raw = msg.content[0].text if msg.content else ''",
+            "        if not raw:",
+            "            return None",
+            "        cleaned = '\\n'.join(line for line in raw.splitlines() if not line.startswith('```'))",
+            f"        return {result_class}(json.loads(cleaned))",
+            "    except Exception:",
+            "        return None",
+            "",
+            "",
+            f"def {step.name}({params}) -> {ret_type}:",
+            "    prompt = _PROMPT_TEMPLATE",
+            *sub_lines,
+            "",
+            "    response = _attempt(_PRIMARY_MODEL, prompt)",
+            "    if response is None:",
+            f"        print('[clio] step {step.name}: ON_FAIL strategies exhausted', file=sys.stderr)",
+            "        raise SystemExit(1)",
+            "    return response",
+            "",
+        ]
+        return "\n".join(body)
 
     @staticmethod
     def _package_name(graph: FlowGraph) -> str:
