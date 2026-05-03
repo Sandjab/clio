@@ -127,9 +127,9 @@ docs/
 
 ## Current status
 
-**v0.1 (current)**: compiler with `target: claude-cli` only. Supports STEP (`exact` and `judgment` modes), CONTRACT (`SHAPE`, `ASSERT`), sequential FLOW (`->`), and a minimal RESOURCES block (`target`, `models`). The MVP example in `examples/mvp.clio` compiles and runs end-to-end against the real `claude -p` CLI; see the v0.1 design at `docs/superpowers/specs/2026-05-03-clio-mvp-v0.1-design.md`.
+**v0.2 (current)**: v0.1 + `CACHE` (`on`, `off`, `ttl(<dur>)`) and `ON_FAIL` (`retry(N)`, `escalate`, `fallback(step)`, `abort("...")` composed with `then`) on judgment steps. Reproducible runs within a TTL window; resilient to LLM non-determinism via retry/escalate; rule-based fallback. The MVP example in `examples/mvp.clio` exercises every feature; verified end-to-end against real `claude -p` and against a cache-replay stub. See the v0.2 design at `docs/superpowers/specs/2026-05-03-clio-v0.2-cache-onfail-design.md`.
 
-**Phase 2** (future): natural language → `.clio` parser, additional emitters (`python`, `docker`), control flow (`FOR EACH`, `WHILE`, `IF`, `MATCH`), CACHE, ON_FAIL, MODE inference, optimizer (batching, model routing, context budget).
+**Phase 2** (future): natural language → `.clio` frontend, additional emitters (`python`, `docker`), control flow (`FOR EACH`, `WHILE`, `IF`, `MATCH`), `MODE: auto` inference, optimizer (batching, model routing, context budget), `CONFIDENCE` thresholds, `VALIDATE` post-conditions.
 
 ## License
 
