@@ -73,3 +73,27 @@ def test_parse_step_rejects_duplicate_mode():
     with pytest.raises(ParseError) as exc:
         parse(src)
     assert "duplicate" in str(exc.value).lower()
+
+
+def test_parse_step_rejects_duplicate_takes():
+    src = (
+        "STEP foo\n"
+        "  TAKES: a: int\n"
+        "  TAKES: b: int\n"
+        "  MODE:  exact\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "duplicate" in str(exc.value).lower()
+
+
+def test_parse_step_rejects_duplicate_gives():
+    src = (
+        "STEP foo\n"
+        "  GIVES: a: int\n"
+        "  GIVES: b: int\n"
+        "  MODE:  exact\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "duplicate" in str(exc.value).lower()
