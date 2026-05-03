@@ -60,5 +60,11 @@ class ContractDecl:
 
 
 @dataclass(frozen=True)
+class ConstrainedType(TypeExpr):
+    base: TypeExpr            # always PrimitiveType("str") in v0.1
+    constraints: tuple[tuple[str, int], ...]   # e.g. (("max", 300),)
+
+
+@dataclass(frozen=True)
 class Program:
     decls: tuple[object, ...]    # StepDecl | ContractDecl

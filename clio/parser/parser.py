@@ -1,4 +1,5 @@
 from clio.parser.ast_nodes import (
+    ConstrainedType,
     ContractDecl,
     ContractRef,
     EnumType,
@@ -180,7 +181,10 @@ class _Parser:
         t = self.peek()
         if t.type == TokenType.KEYWORD and t.value in _PRIMITIVE_TYPES:
             self.advance()
-            return PrimitiveType(name=t.value)
+            base = PrimitiveType(name=t.value)
+            if self.peek().type == TokenType.LPAREN:
+                return self._parse_constraints(base)
+            return base
         if t.type == TokenType.KEYWORD and t.value == "CSV":
             self.advance()
             return PrimitiveType(name="str")    # v0.1 domain-alias: CSV ≡ str
@@ -197,6 +201,40 @@ class _Parser:
             f"expected a type expression, got {t.type.value} {t.value!r}",
             t.line, t.col,
         )
+
+    def _parse_constraints(self, base: PrimitiveType) -> "ConstrainedType":
+        if base.name != "str":
+            t = self.peek()
+            raise ParseError(
+                f"constrained types are only supported on `str` in v0.1, got {base.name!r}",
+                t.line, t.col,
+            )
+        self.expect(TokenType.LPAREN)
+        constraints: list[tuple[str, int]] = []
+        constraints.append(self._parse_one_constraint())
+        while self.peek().type == TokenType.COMMA:
+            self.advance()
+            constraints.append(self._parse_one_constraint())
+        self.expect(TokenType.RPAREN)
+        return ConstrainedType(base=base, constraints=tuple(constraints))
+
+    def _parse_one_constraint(self) -> tuple[str, int]:
+        name_tok = self.expect(TokenType.IDENT)
+        if name_tok.value != "max":
+            raise ParseError(
+                f"only the `max` constraint is supported in v0.1, got {name_tok.value!r}",
+                name_tok.line, name_tok.col,
+            )
+        self.expect(TokenType.EQUALS)
+        num_tok = self.expect(TokenType.NUMBER)
+        try:
+            value = int(num_tok.value)
+        except ValueError:
+            raise ParseError(
+                f"`max` requires an integer, got {num_tok.value!r}",
+                num_tok.line, num_tok.col,
+            )
+        return (name_tok.value, value)
 
     def parse_list_type(self) -> ListType:
         self.expect(TokenType.KEYWORD, "List")

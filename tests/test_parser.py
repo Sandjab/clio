@@ -158,3 +158,14 @@ def test_parse_step_referencing_contract():
     inner = list_t.inner
     assert inner.__class__.__name__ == "ContractRef"
     assert inner.name == "r"
+
+
+def test_parse_str_with_max_constraint():
+    src = "STEP foo\n  GIVES: r: str(max=300)\n  MODE: exact\n"
+    program = parse(src)
+    step = program.decls[0]
+    t = step.gives.type
+    assert t.__class__.__name__ == "ConstrainedType"
+    assert t.base.__class__.__name__ == "PrimitiveType"
+    assert t.base.name == "str"
+    assert t.constraints == (("max", 300),)
