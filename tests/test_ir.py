@@ -85,3 +85,9 @@ def test_build_ir_unresolved_contract_ref_raises():
     with pytest.raises(ValueError) as exc:
         build_ir(parse(src))
     assert "missing" in str(exc.value)
+
+
+def test_constrained_str_to_json_schema():
+    from clio.parser.ast_nodes import ConstrainedType, PrimitiveType
+    t = ConstrainedType(base=PrimitiveType("str"), constraints=(("max", 300),))
+    assert type_to_json_schema(t) == {"type": "string", "maxLength": 300}

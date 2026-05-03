@@ -1,4 +1,5 @@
 from clio.parser.ast_nodes import (
+    ConstrainedType,
     ContractRef,
     EnumType,
     ListType,
@@ -17,6 +18,16 @@ _PRIMITIVE_JSON_TYPES = {
 
 
 def type_to_json_schema(t: TypeExpr) -> dict:
+    if isinstance(t, ConstrainedType):
+        if not isinstance(t.base, PrimitiveType) or t.base.name != "str":
+            raise NotImplementedError("v0.1 only supports str(max=N) constraints")
+        out = type_to_json_schema(t.base)
+        for kind, value in t.constraints:
+            if kind == "max":
+                out["maxLength"] = value
+            else:
+                raise NotImplementedError(f"unknown constraint kind: {kind!r}")
+        return out
     if isinstance(t, PrimitiveType):
         return {"type": _PRIMITIVE_JSON_TYPES[t.name]}
     if isinstance(t, ListType):

@@ -51,6 +51,7 @@ def _build_step(decl: StepDecl) -> StepIR:
 
 
 def _check_refs(t: TypeExpr, contracts: dict[str, ContractIR], line: int, col: int) -> None:
+    from clio.parser.ast_nodes import ConstrainedType
     if isinstance(t, ContractRef):
         if t.name not in contracts:
             raise IRBuildError(
@@ -61,4 +62,6 @@ def _check_refs(t: TypeExpr, contracts: dict[str, ContractIR], line: int, col: i
     elif isinstance(t, RecordType):
         for _, ty in t.fields:
             _check_refs(ty, contracts, line, col)
+    elif isinstance(t, ConstrainedType):
+        _check_refs(t.base, contracts, line, col)
     # Primitive and Enum nodes have no refs to check.
