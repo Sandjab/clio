@@ -1,0 +1,43 @@
+{
+  "type": "object",
+  "properties": {
+    "client": {
+      "type": "string"
+    },
+    "risk": {
+      "enum": [
+        "low",
+        "mid",
+        "high"
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "maxLength": 300
+    }
+  },
+  "required": [
+    "client",
+    "risk",
+    "reason"
+  ],
+  "additionalProperties": false,
+  "x-clio-assert": {
+    "kind": "compare",
+    "op": ">",
+    "left": {
+      "kind": "call",
+      "func": "len",
+      "args": [
+        {
+          "kind": "ident",
+          "name": "reason"
+        }
+      ]
+    },
+    "right": {
+      "kind": "int",
+      "value": 0
+    }
+  }
+}

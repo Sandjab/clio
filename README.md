@@ -127,9 +127,9 @@ docs/
 
 ## Current status
 
-**Phase 1**: building the compiler with `claude-cli` as the first target. The language spec is stable enough to implement. The compiler is a pure function: `.clio` in, project out — it never calls LLMs or executes flows.
+**v0.1 (current)**: compiler with `target: claude-cli` only. Supports STEP (`exact` and `judgment` modes), CONTRACT (`SHAPE`, `ASSERT`), sequential FLOW (`->`), and a minimal RESOURCES block (`target`, `models`). The MVP example in `examples/mvp.clio` compiles and runs end-to-end against the real `claude -p` CLI; see the v0.1 design at `docs/superpowers/specs/2026-05-03-clio-mvp-v0.1-design.md`.
 
-**Phase 2** (future): natural language → `.clio` parser. An LLM infers structure from plain-language intent and emits valid `.clio` source. Same compiler, different frontend.
+**Phase 2** (future): natural language → `.clio` parser, additional emitters (`python`, `docker`), control flow (`FOR EACH`, `WHILE`, `IF`, `MATCH`), CACHE, ON_FAIL, MODE inference, optimizer (batching, model routing, context budget).
 
 ## License
 

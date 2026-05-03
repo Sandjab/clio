@@ -1,0 +1,8 @@
+CONTRACT customer_risk
+  SHAPE:  {client: str, risk: enum(low|mid|high), reason: str(max=300)}
+  ASSERT: len(reason) > 0
+
+STEP detect_churn
+  TAKES: customers: List<{name: str, revenue: float}>
+  GIVES: risks:     List<customer_risk>
+  MODE:  judgment

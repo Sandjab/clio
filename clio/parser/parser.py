@@ -1,0 +1,426 @@
+from clio.parser.ast_nodes import (
+    ConstrainedType,
+    ContractDecl,
+    ContractRef,
+    EnumType,
+    Field,
+    FlowDecl,
+    ListType,
+    PrimitiveType,
+    Program,
+    RecordType,
+    StepCall,
+    StepDecl,
+    TypeExpr,
+)
+from clio.parser.lexer import lex
+from clio.parser.tokens import Token, TokenType
+
+
+class ParseError(Exception):
+    def __init__(self, msg: str, line: int, col: int) -> None:
+        super().__init__(f"line {line}:{col}: {msg}")
+        self.line = line
+        self.col = col
+
+
+_PRIMITIVE_TYPES = {"int", "float", "str", "bool"}
+_VALID_MODES = {"exact", "judgment"}
+
+
+class _Parser:
+    def __init__(self, tokens: list[Token]) -> None:
+        self.tokens = tokens
+        self.pos = 0
+
+    def peek(self) -> Token:
+        return self.tokens[self.pos]
+
+    def advance(self) -> Token:
+        t = self.tokens[self.pos]
+        self.pos += 1
+        return t
+
+    def expect(self, ttype: TokenType, value: str | None = None) -> Token:
+        t = self.peek()
+        if t.type != ttype or (value is not None and t.value != value):
+            want = f"{ttype.value}" + (f" {value!r}" if value else "")
+            raise ParseError(f"expected {want}, got {t.type.value} {t.value!r}", t.line, t.col)
+        return self.advance()
+
+    def skip_newlines(self) -> None:
+        while self.peek().type == TokenType.NEWLINE:
+            self.advance()
+
+    def parse_program(self) -> Program:
+        decls: list[object] = []
+        self.skip_newlines()
+        while self.peek().type != TokenType.EOF:
+            t = self.peek()
+            if t.type == TokenType.KEYWORD and t.value == "STEP":
+                decls.append(self.parse_step())
+            elif t.type == TokenType.KEYWORD and t.value == "CONTRACT":
+                decls.append(self.parse_contract())
+            elif t.type == TokenType.KEYWORD and t.value == "FLOW":
+                decls.append(self.parse_flow())
+            elif t.type == TokenType.KEYWORD and t.value == "RESOURCES":
+                decls.append(self.parse_resources())
+            else:
+                raise ParseError(
+                    f"expected STEP / CONTRACT / FLOW / RESOURCES, got {t.type.value} {t.value!r}",
+                    t.line, t.col,
+                )
+            self.skip_newlines()
+        return Program(tuple(decls))
+
+    def parse_resources(self) -> "ResourcesDecl":
+        from clio.parser.ast_nodes import ResourcesDecl
+        kw = self.expect(TokenType.KEYWORD, "RESOURCES")
+        self.expect(TokenType.NEWLINE)
+        self.expect(TokenType.INDENT)
+
+        target: str | None = None
+        models: tuple[str, ...] = ()
+        while self.peek().type != TokenType.DEDENT:
+            t = self.peek()
+            if t.type == TokenType.KEYWORD and t.value == "target":
+                self.advance()
+                self.expect(TokenType.COLON)
+                value_tok = self.expect(TokenType.KEYWORD)
+                if value_tok.value != "claude-cli":
+                    raise ParseError(
+                        f"target {value_tok.value!r} is not supported in v0.1 (only claude-cli)",
+                        value_tok.line, value_tok.col,
+                    )
+                target = value_tok.value
+                self.expect(TokenType.NEWLINE)
+            elif t.type == TokenType.KEYWORD and t.value == "models":
+                self.advance()
+                self.expect(TokenType.COLON)
+                self.expect(TokenType.LBRACKET)
+                vals: list[str] = []
+                vals.append(self.expect(TokenType.KEYWORD).value)
+                while self.peek().type == TokenType.COMMA:
+                    self.advance()
+                    vals.append(self.expect(TokenType.KEYWORD).value)
+                self.expect(TokenType.RBRACKET)
+                models = tuple(vals)
+                self.expect(TokenType.NEWLINE)
+            elif t.type == TokenType.KEYWORD and t.value in {"budget", "prefer", "strategy"}:
+                raise ParseError(
+                    f"RESOURCES field {t.value!r} is not supported in v0.1 "
+                    f"(planned for a later milestone)",
+                    t.line, t.col,
+                )
+            else:
+                raise ParseError(
+                    f"unexpected RESOURCES field {t.value!r}",
+                    t.line, t.col,
+                )
+        self.expect(TokenType.DEDENT)
+
+        if target is None:
+            raise ParseError("RESOURCES is missing required `target` field", kw.line, kw.col)
+        if not models:
+            raise ParseError("RESOURCES is missing required `models` field", kw.line, kw.col)
+
+        return ResourcesDecl(target=target, models=models, line=kw.line, col=kw.col)
+
+    def parse_step(self) -> StepDecl:
+        kw = self.expect(TokenType.KEYWORD, "STEP")
+        ident = self.expect(TokenType.IDENT)
+        self.expect(TokenType.NEWLINE)
+        # Detect missing-MODE early (Phase 1 deviation kept).
+        if self.peek().type != TokenType.INDENT:
+            raise ParseError(
+                f"STEP {ident.value} is missing required MODE field",
+                kw.line, kw.col,
+            )
+        self.expect(TokenType.INDENT)
+
+        takes: tuple[Field, ...] = ()
+        gives: Field | None = None
+        mode: str | None = None
+
+        while self.peek().type != TokenType.DEDENT:
+            t = self.peek()
+            if t.type != TokenType.KEYWORD:
+                raise ParseError(f"unexpected {t.type.value} {t.value!r}", t.line, t.col)
+
+            if t.value == "TAKES":
+                if takes:
+                    raise ParseError(
+                        f"STEP {ident.value} has duplicate TAKES field",
+                        t.line, t.col,
+                    )
+                self.advance()
+                self.expect(TokenType.COLON)
+                takes = self.parse_field_list()
+                self.expect(TokenType.NEWLINE)
+            elif t.value == "GIVES":
+                if gives is not None:
+                    raise ParseError(
+                        f"STEP {ident.value} has duplicate GIVES field",
+                        t.line, t.col,
+                    )
+                self.advance()
+                self.expect(TokenType.COLON)
+                fields = self.parse_field_list()
+                if len(fields) != 1:
+                    raise ParseError("GIVES must declare exactly one field", t.line, t.col)
+                gives = fields[0]
+                self.expect(TokenType.NEWLINE)
+            elif t.value == "MODE":
+                if mode is not None:
+                    raise ParseError(
+                        f"STEP {ident.value} has duplicate MODE field",
+                        t.line, t.col,
+                    )
+                self.advance()
+                self.expect(TokenType.COLON)
+                value_tok = self.expect(TokenType.KEYWORD)
+                if value_tok.value not in _VALID_MODES:
+                    raise ParseError(
+                        f"unknown MODE {value_tok.value!r}, expected one of {sorted(_VALID_MODES)}",
+                        value_tok.line, value_tok.col,
+                    )
+                mode = value_tok.value
+                self.expect(TokenType.NEWLINE)
+            else:
+                raise ParseError(f"unexpected step field {t.value!r}", t.line, t.col)
+
+        self.expect(TokenType.DEDENT)
+        if mode is None:
+            raise ParseError(f"STEP {ident.value} is missing required MODE field", kw.line, kw.col)
+
+        return StepDecl(name=ident.value, mode=mode, takes=takes, gives=gives, line=kw.line, col=kw.col)
+
+    def parse_contract(self) -> "ContractDecl":
+        from clio.parser.expressions import parse_expression
+        kw = self.expect(TokenType.KEYWORD, "CONTRACT")
+        ident = self.expect(TokenType.IDENT)
+        self.expect(TokenType.NEWLINE)
+        self.expect(TokenType.INDENT)
+
+        shape: TypeExpr | None = None
+        assert_expr = None
+        while self.peek().type != TokenType.DEDENT:
+            t = self.peek()
+            if t.type == TokenType.KEYWORD and t.value == "SHAPE":
+                self.advance()
+                self.expect(TokenType.COLON)
+                shape = self.parse_type_expr()
+                self.expect(TokenType.NEWLINE)
+            elif t.type == TokenType.KEYWORD and t.value == "ASSERT":
+                self.advance()
+                self.expect(TokenType.COLON)
+                start = self.pos
+                while self.tokens[self.pos].type != TokenType.NEWLINE:
+                    self.pos += 1
+                expr_tokens = self.tokens[start:self.pos]
+                expr, consumed = parse_expression(expr_tokens)
+                if consumed != len(expr_tokens):
+                    leftover = expr_tokens[consumed]
+                    raise ParseError(
+                        f"unexpected token {leftover.value!r} after ASSERT expression",
+                        leftover.line, leftover.col,
+                    )
+                assert_expr = expr
+                self.expect(TokenType.NEWLINE)
+            else:
+                raise ParseError(
+                    f"unsupported contract field {t.value!r} (v0.1: SHAPE, ASSERT)",
+                    t.line, t.col,
+                )
+        self.expect(TokenType.DEDENT)
+
+        if shape is None:
+            raise ParseError(
+                f"CONTRACT {ident.value} is missing required SHAPE field",
+                kw.line, kw.col,
+            )
+        return ContractDecl(
+            name=ident.value,
+            shape=shape,
+            assert_expr=assert_expr,
+            line=kw.line,
+            col=kw.col,
+        )
+
+    def parse_field_list(self) -> tuple[Field, ...]:
+        fields = [self.parse_field()]
+        while self.peek().type == TokenType.COMMA:
+            self.advance()
+            fields.append(self.parse_field())
+        return tuple(fields)
+
+    def parse_field(self) -> Field:
+        name_tok = self.expect(TokenType.IDENT)
+        self.expect(TokenType.COLON)
+        type_expr = self.parse_type_expr()
+        return Field(name=name_tok.value, type=type_expr, line=name_tok.line, col=name_tok.col)
+
+    def parse_type_expr(self) -> TypeExpr:
+        t = self.peek()
+        if t.type == TokenType.KEYWORD and t.value in _PRIMITIVE_TYPES:
+            self.advance()
+            base = PrimitiveType(name=t.value)
+            if self.peek().type == TokenType.LPAREN:
+                return self._parse_constraints(base)
+            return base
+        if t.type == TokenType.KEYWORD and t.value == "CSV":
+            self.advance()
+            return PrimitiveType(name="str")    # v0.1 domain-alias: CSV ≡ str
+        if t.type == TokenType.KEYWORD and t.value == "List":
+            return self.parse_list_type()
+        if t.type == TokenType.KEYWORD and t.value == "enum":
+            return self.parse_enum_type()
+        if t.type == TokenType.LBRACE:
+            return self.parse_record_type()
+        if t.type == TokenType.IDENT:
+            self.advance()
+            return ContractRef(name=t.value, line=t.line, col=t.col)
+        raise ParseError(
+            f"expected a type expression, got {t.type.value} {t.value!r}",
+            t.line, t.col,
+        )
+
+    def _parse_constraints(self, base: PrimitiveType) -> "ConstrainedType":
+        if base.name != "str":
+            t = self.peek()
+            raise ParseError(
+                f"constrained types are only supported on `str` in v0.1, got {base.name!r}",
+                t.line, t.col,
+            )
+        self.expect(TokenType.LPAREN)
+        constraints: list[tuple[str, int]] = []
+        constraints.append(self._parse_one_constraint())
+        while self.peek().type == TokenType.COMMA:
+            self.advance()
+            constraints.append(self._parse_one_constraint())
+        self.expect(TokenType.RPAREN)
+        return ConstrainedType(base=base, constraints=tuple(constraints))
+
+    def _parse_one_constraint(self) -> tuple[str, int]:
+        name_tok = self.expect(TokenType.IDENT)
+        if name_tok.value != "max":
+            raise ParseError(
+                f"only the `max` constraint is supported in v0.1, got {name_tok.value!r}",
+                name_tok.line, name_tok.col,
+            )
+        self.expect(TokenType.EQUALS)
+        num_tok = self.expect(TokenType.NUMBER)
+        try:
+            value = int(num_tok.value)
+        except ValueError:
+            raise ParseError(
+                f"`max` requires an integer, got {num_tok.value!r}",
+                num_tok.line, num_tok.col,
+            )
+        return (name_tok.value, value)
+
+    def parse_list_type(self) -> ListType:
+        self.expect(TokenType.KEYWORD, "List")
+        self.expect(TokenType.LANGLE)
+        inner = self.parse_type_expr()
+        self.expect(TokenType.RANGLE)
+        return ListType(inner=inner)
+
+    def parse_record_type(self) -> RecordType:
+        self.expect(TokenType.LBRACE)
+        fields: list[tuple[str, TypeExpr]] = []
+        fields.append(self._parse_record_field())
+        while self.peek().type == TokenType.COMMA:
+            self.advance()
+            fields.append(self._parse_record_field())
+        self.expect(TokenType.RBRACE)
+        return RecordType(fields=tuple(fields))
+
+    def _parse_record_field(self) -> tuple[str, TypeExpr]:
+        name_tok = self.expect(TokenType.IDENT)
+        self.expect(TokenType.COLON)
+        type_expr = self.parse_type_expr()
+        return (name_tok.value, type_expr)
+
+    def parse_enum_type(self) -> EnumType:
+        self.expect(TokenType.KEYWORD, "enum")
+        self.expect(TokenType.LPAREN)
+        values: list[str] = []
+        first = self.expect(TokenType.IDENT)
+        values.append(first.value)
+        while self.peek().type == TokenType.PIPE:
+            self.advance()
+            tok = self.expect(TokenType.IDENT)
+            values.append(tok.value)
+        self.expect(TokenType.RPAREN)
+        return EnumType(values=tuple(values))
+
+    def parse_flow(self) -> FlowDecl:
+        kw = self.expect(TokenType.KEYWORD, "FLOW")
+        ident = self.expect(TokenType.IDENT)
+        self.expect(TokenType.NEWLINE)
+        self.expect(TokenType.INDENT)
+
+        chain: list[StepCall] = [self.parse_step_call()]
+        # Skip newlines and indent/dedent changes between chain elements,
+        # then look for ARROW. The -> may appear on a more-indented continuation line.
+        while True:
+            while self.peek().type in (TokenType.NEWLINE, TokenType.INDENT):
+                self.advance()
+            if self.peek().type == TokenType.ARROW:
+                self.advance()
+                chain.append(self.parse_step_call())
+            else:
+                break
+
+        # Consume any remaining newlines and dedents to close the FLOW block
+        while self.peek().type in (TokenType.NEWLINE, TokenType.DEDENT):
+            self.advance()
+
+        return FlowDecl(name=ident.value, chain=tuple(chain), line=kw.line, col=kw.col)
+
+    def parse_step_call(self) -> StepCall:
+        name_tok = self.expect(TokenType.IDENT)
+        self.expect(TokenType.LPAREN)
+        kwargs: list[tuple[str, object]] = []
+        if self.peek().type != TokenType.RPAREN:
+            kwargs.append(self._parse_call_arg())
+            while self.peek().type == TokenType.COMMA:
+                self.advance()
+                kwargs.append(self._parse_call_arg())
+        self.expect(TokenType.RPAREN)
+        return StepCall(
+            name=name_tok.value,
+            kwargs=tuple(kwargs),
+            line=name_tok.line,
+            col=name_tok.col,
+        )
+
+    def _parse_call_arg(self) -> tuple[str, object]:
+        first = self.peek()
+        if first.type == TokenType.IDENT and self.tokens[self.pos + 1].type == TokenType.EQUALS:
+            name_tok = self.advance()
+            self.expect(TokenType.EQUALS)
+            value_tok = self.peek()
+            if value_tok.type == TokenType.STRING:
+                self.advance()
+                return (name_tok.value, value_tok.value)
+            if value_tok.type == TokenType.NUMBER:
+                self.advance()
+                txt = value_tok.value
+                return (name_tok.value, float(txt) if "." in txt else int(txt))
+            raise ParseError(
+                f"expected literal value for kwarg, got {value_tok.type.value}",
+                value_tok.line, value_tok.col,
+            )
+        if first.type == TokenType.IDENT:
+            self.advance()
+            return (first.value, f"@{first.value}")
+        raise ParseError(
+            f"expected call argument, got {first.type.value} {first.value!r}",
+            first.line, first.col,
+        )
+
+
+def parse(source: str) -> Program:
+    return _Parser(lex(source)).parse_program()
