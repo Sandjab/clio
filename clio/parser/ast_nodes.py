@@ -84,3 +84,41 @@ class FlowDecl:
 @dataclass(frozen=True)
 class Program:
     decls: tuple[object, ...]    # StepDecl | ContractDecl | FlowDecl
+
+
+@dataclass(frozen=True)
+class ExprNode:
+    """Base for ASSERT expression AST nodes."""
+
+
+@dataclass(frozen=True)
+class IdentExpr(ExprNode):
+    name: str
+
+
+@dataclass(frozen=True)
+class IntExpr(ExprNode):
+    value: int
+
+
+@dataclass(frozen=True)
+class FloatExpr(ExprNode):
+    value: float
+
+
+@dataclass(frozen=True)
+class StrExpr(ExprNode):
+    value: str
+
+
+@dataclass(frozen=True)
+class CallExpr(ExprNode):
+    func: str                       # only "len" allowed in v0.1
+    args: tuple["ExprNode", ...]
+
+
+@dataclass(frozen=True)
+class CompareExpr(ExprNode):
+    left: "ExprNode"
+    op: str                         # one of: ==, !=, >=, <=, >, <
+    right: "ExprNode"
