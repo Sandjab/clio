@@ -314,9 +314,32 @@ class ClaudeCLIEmitter(BaseEmitter):
                     f'{ind}if [ -z "$RESPONSE_{idx:02d}" ] '
                     f'&& [ $MODEL_IDX_{idx:02d} -lt $((${{#MODELS_{idx:02d}[@]}} - 1)) ]; then',
                     f'{ind}    MODEL_IDX_{idx:02d}=$((MODEL_IDX_{idx:02d} + 1))',
-                    f'{ind}    RESPONSE_{idx:02d}="$(_clio_run_attempt '
-                    f'"${{MODELS_{idx:02d}[$MODEL_IDX_{idx:02d}]}}" '
-                    f'"$PROMPT_{idx:02d}" {schema_path} || true)"',
+                ]
+                if cache_active:
+                    out += [
+                        f'{ind}    KEY_{idx:02d}_ESC="$("$PYTHON" -m clio_runtime.cache key {step.name} '
+                        f'"${{MODELS_{idx:02d}[$MODEL_IDX_{idx:02d}]}}" '
+                        f'"$PROMPT_{idx:02d}" "$INLINED_SCHEMA_{idx:02d}")"',
+                        f'{ind}    RESPONSE_{idx:02d}="$("$PYTHON" -m clio_runtime.cache lookup '
+                        f'"$CACHE_DIR_{idx:02d}" {step.name} "$KEY_{idx:02d}_ESC" {ttl_str} 2>/dev/null || true)"',
+                        f'{ind}    if [ -z "$RESPONSE_{idx:02d}" ]; then',
+                        f'{ind}        RESPONSE_{idx:02d}="$(_clio_run_attempt '
+                        f'"${{MODELS_{idx:02d}[$MODEL_IDX_{idx:02d}]}}" '
+                        f'"$PROMPT_{idx:02d}" {schema_path} || true)"',
+                        f'{ind}    fi',
+                        f'{ind}    if [ -n "$RESPONSE_{idx:02d}" ]; then',
+                        f'{ind}        "$PYTHON" -m clio_runtime.cache store "$CACHE_DIR_{idx:02d}" '
+                        f'{step.name} "$KEY_{idx:02d}_ESC" '
+                        f'"${{MODELS_{idx:02d}[$MODEL_IDX_{idx:02d}]}}" "$RESPONSE_{idx:02d}"',
+                        f'{ind}    fi',
+                    ]
+                else:
+                    out += [
+                        f'{ind}    RESPONSE_{idx:02d}="$(_clio_run_attempt '
+                        f'"${{MODELS_{idx:02d}[$MODEL_IDX_{idx:02d}]}}" '
+                        f'"$PROMPT_{idx:02d}" {schema_path} || true)"',
+                    ]
+                out += [
                     f'{ind}fi',
                 ]
             elif s.kind == "abort":

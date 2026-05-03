@@ -55,7 +55,14 @@ if [ -z "$RESPONSE_02" ]; then
     fi
     if [ -z "$RESPONSE_02" ] && [ $MODEL_IDX_02 -lt $((${#MODELS_02[@]} - 1)) ]; then
         MODEL_IDX_02=$((MODEL_IDX_02 + 1))
-        RESPONSE_02="$(_clio_run_attempt "${MODELS_02[$MODEL_IDX_02]}" "$PROMPT_02" steps/02_detect_churn.schema.json || true)"
+        KEY_02_ESC="$("$PYTHON" -m clio_runtime.cache key detect_churn "${MODELS_02[$MODEL_IDX_02]}" "$PROMPT_02" "$INLINED_SCHEMA_02")"
+        RESPONSE_02="$("$PYTHON" -m clio_runtime.cache lookup "$CACHE_DIR_02" detect_churn "$KEY_02_ESC" 86400 2>/dev/null || true)"
+        if [ -z "$RESPONSE_02" ]; then
+            RESPONSE_02="$(_clio_run_attempt "${MODELS_02[$MODEL_IDX_02]}" "$PROMPT_02" steps/02_detect_churn.schema.json || true)"
+        fi
+        if [ -n "$RESPONSE_02" ]; then
+            "$PYTHON" -m clio_runtime.cache store "$CACHE_DIR_02" detect_churn "$KEY_02_ESC" "${MODELS_02[$MODEL_IDX_02]}" "$RESPONSE_02"
+        fi
     fi
     if [ -z "$RESPONSE_02" ]; then
         echo '[clio] step detect_churn: churn detection failed' >&2

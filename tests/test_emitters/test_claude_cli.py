@@ -136,3 +136,33 @@ def test_emit_abort_message_is_shell_quoted():
         "abort message must be inside single quotes — found $(...) outside"
     # Sanity: the message text IS in the file (just safely quoted).
     assert "nasty" in run_sh and "rm -rf" in run_sh
+
+
+def test_emit_escalate_recomputes_cache_key(tmp_path):
+    """Per spec §6: escalate must recompute the cache key for the new model
+    and lookup/store under that key."""
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE:    judgment\n"
+        "  CACHE:   ttl(1h)\n"
+        '  ON_FAIL: escalate then abort("nope")\n'
+        "FLOW f\n"
+        "  s()\n"
+        "RESOURCES\n"
+        "  target: claude-cli\n"
+        "  models: [haiku, sonnet]\n"
+    )
+    import tempfile
+    from clio.emitters.claude_cli import ClaudeCLIEmitter
+    from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
+    out = Path(tempfile.mkdtemp())
+    ClaudeCLIEmitter().emit(build_ir(parse(src)), out)
+    run_sh = (out / "run.sh").read_text()
+    # Escalate must recompute the key.
+    assert "KEY_01_ESC=" in run_sh, "escalate must recompute the cache key"
+    # And lookup against it.
+    assert 'cache lookup "$CACHE_DIR_01" s "$KEY_01_ESC"' in run_sh
+    # And store under it on success.
+    assert 'cache store "$CACHE_DIR_01" s "$KEY_01_ESC"' in run_sh
