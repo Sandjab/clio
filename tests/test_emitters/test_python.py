@@ -67,3 +67,12 @@ def test_emit_contracts_pydantic_validates(tmp_path):
         CustomerRisk.model_validate({"client": "X", "risk": "low", "reason": ""})
     with pytest.raises(Exception):
         CustomerRisk.model_validate({"client": "X", "risk": "ZZZ", "reason": "ok"})
+
+
+def test_emit_exact_step_stub_is_callable(tmp_path):
+    src = (FIXTURES / "mvp_v03_contracts.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    step_path = tmp_path / "retention" / "steps" / "load_customers.py"
+    mod = _load_module("v03_load_customers_test", step_path)
+    with pytest.raises(NotImplementedError):
+        mod.load_customers(file="x.csv")

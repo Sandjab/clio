@@ -55,6 +55,24 @@ def _type_to_python(t: TypeExpr, contracts: dict[str, "ContractIR"]) -> str:
     raise ValueError(f"unhandled type for Python emit: {type(t).__name__}")
 
 
+def _render_type_short(t: TypeExpr) -> str:
+    """Human-readable type rendering for docstrings."""
+    if isinstance(t, PrimitiveType):
+        return t.name
+    if isinstance(t, ListType):
+        return f"List<{_render_type_short(t.inner)}>"
+    if isinstance(t, EnumType):
+        return f"enum({'|'.join(t.values)})"
+    if isinstance(t, ConstrainedType):
+        cs = ", ".join(f"{k}={v}" for k, v in t.constraints)
+        return f"{_render_type_short(t.base)}({cs})"
+    if isinstance(t, ContractRef):
+        return t.name
+    if isinstance(t, RecordType):
+        return "{" + ", ".join(f"{n}: {_render_type_short(ty)}" for n, ty in t.fields) + "}"
+    return type(t).__name__
+
+
 def _ast_to_python(node: dict) -> str:
     """Render a clio assert AST node as a Python expression string.
 
@@ -157,6 +175,13 @@ class PythonEmitter(BaseEmitter):
 
         (pkg_dir / "contracts.py").write_text(self._emit_contracts(graph))
 
+        contracts_by_name = {c.name: c for c in graph.contracts}
+        for step in graph.steps:
+            if step.mode == "exact":
+                body = self._emit_exact_step(step, contracts_by_name)
+                (steps_dir / f"{step.name}.py").write_text(body)
+            # judgment in slice D
+
         (output_dir / "pyproject.toml").write_text(self._pyproject(pkg_name))
         (output_dir / "README.md").write_text(self._readme(pkg_name, graph))
 
@@ -202,6 +227,39 @@ class PythonEmitter(BaseEmitter):
             lines.append("")
 
         return "\n".join(lines) + "\n"
+
+    def _emit_exact_step(self, step: StepIR, contracts_by_name: dict[str, "ContractIR"]) -> str:
+        sig_args = ", ".join(
+            f"{_to_field_name(t.name)}: {_type_to_python(t.type, contracts_by_name)}"
+            for t in step.takes
+        )
+        ret_type = (
+            _type_to_python(step.gives.type, contracts_by_name)
+            if step.gives is not None else "None"
+        )
+        takes_doc = "\n    ".join(
+            f"{t.name}: {_render_type_short(t.type)}" for t in step.takes
+        )
+        gives_doc = (
+            f"{step.gives.name}: {_render_type_short(step.gives.type)}"
+            if step.gives is not None else "(no GIVES)"
+        )
+
+        return (
+            f'"""STEP {step.name} (exact)\n'
+            f'TAKES:\n'
+            f'    {takes_doc}\n'
+            f'GIVES:\n'
+            f'    {gives_doc}\n\n'
+            f'Implement the body below. The orchestrator passes arguments by keyword\n'
+            f'and expects the return value to conform to the GIVES type.\n'
+            f'"""\n'
+            f'\n\n'
+            f'def {step.name}(*, {sig_args}) -> {ret_type}:\n'
+            f'    raise NotImplementedError(\n'
+            f'        "Implement steps/{step.name}.py: this is an exact (deterministic) step."\n'
+            f'    )\n'
+        )
 
     @staticmethod
     def _package_name(graph: FlowGraph) -> str:
