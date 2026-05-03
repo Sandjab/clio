@@ -69,3 +69,12 @@ def test_lex_enum():
     assert any(t.type == TokenType.PIPE for t in tokens)
     assert any(t.type == TokenType.LPAREN for t in tokens)
     assert any(t.type == TokenType.RPAREN for t in tokens)
+
+
+def test_lex_number_and_string():
+    extra = lex('A 42 "hello world"\n')
+    types = [t.type for t in extra]
+    assert TokenType.NUMBER in types
+    assert TokenType.STRING in types
+    string_tok = [t for t in extra if t.type == TokenType.STRING][0]
+    assert string_tok.value == "hello world"

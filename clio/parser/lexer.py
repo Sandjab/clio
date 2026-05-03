@@ -14,6 +14,7 @@ _SINGLE_CHAR_TOKENS = {
     "(": TokenType.LPAREN,
     ")": TokenType.RPAREN,
     "|": TokenType.PIPE,
+    "=": TokenType.EQUALS,
 }
 
 
@@ -45,6 +46,27 @@ def lex(source: str) -> list[Token]:
             if ch == " ":
                 i += 1
                 col += 1
+                continue
+            if ch.isdigit():
+                j = i
+                saw_dot = False
+                while j < len(stripped) and (stripped[j].isdigit() or (stripped[j] == "." and not saw_dot)):
+                    if stripped[j] == ".":
+                        saw_dot = True
+                    j += 1
+                tokens.append(Token(TokenType.NUMBER, stripped[i:j], lineno, col))
+                col += j - i
+                i = j
+                continue
+            if ch == '"':
+                j = i + 1
+                while j < len(stripped) and stripped[j] != '"':
+                    j += 1
+                if j >= len(stripped):
+                    raise LexError("unterminated string literal", lineno, col)
+                tokens.append(Token(TokenType.STRING, stripped[i + 1:j], lineno, col))
+                col += (j - i) + 1
+                i = j + 1
                 continue
             single = _SINGLE_CHAR_TOKENS.get(ch)
             if single is not None:
