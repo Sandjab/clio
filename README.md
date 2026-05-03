@@ -137,9 +137,9 @@ docs/
 
 ## Current status
 
-**v0.2 (current)**: v0.1 + `CACHE` (`on`, `off`, `ttl(<dur>)`) and `ON_FAIL` (`retry(N)`, `escalate`, `fallback(step)`, `abort("...")` composed with `then`) on judgment steps. Reproducible runs within a TTL window; resilient to LLM non-determinism via retry/escalate; rule-based fallback. The MVP example in `examples/mvp.clio` exercises every feature; verified end-to-end against real `claude -p` and against a cache-replay stub. See the v0.2 design at `docs/superpowers/specs/2026-05-03-clio-v0.2-cache-onfail-design.md`.
+**v0.3 (current)**: v0.2 + `target: python` emitter. The same `.clio` source compiles to either a Claude Code project (bash + claude-cli) or a runnable Python package (Anthropic SDK + Pydantic). Both targets implement identical CACHE + ON_FAIL semantics; their `.cache/` layouts are interchangeable. See the v0.3 design at `docs/superpowers/specs/2026-05-03-clio-v0.3-python-emitter-design.md`.
 
-**Phase 2** (future): natural language → `.clio` frontend, additional emitters (`python`, `docker`), control flow (`FOR EACH`, `WHILE`, `IF`, `MATCH`), `MODE: auto` inference, optimizer (batching, model routing, context budget), `CONFIDENCE` thresholds, `VALIDATE` post-conditions.
+**Phase 2** (future): natural language → `.clio` frontend, additional emitters (`docker`, OpenAI-flavored Python), control flow (`FOR EACH`, `WHILE`, `IF`, `MATCH`), `MODE: auto` inference, optimizer (batching, model routing, context budget), `CONFIDENCE` thresholds, `VALIDATE` post-conditions, async step execution.
 
 ## License
 
