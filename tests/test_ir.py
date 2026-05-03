@@ -91,3 +91,30 @@ def test_constrained_str_to_json_schema():
     from clio.parser.ast_nodes import ConstrainedType, PrimitiveType
     t = ConstrainedType(base=PrimitiveType("str"), constraints=(("max", 300),))
     assert type_to_json_schema(t) == {"type": "string", "maxLength": 300}
+
+
+def test_flow_typecheck_passes_for_compatible_chain():
+    src = (
+        "STEP a\n  TAKES: file: str\n  GIVES: items: List<{n: str}>\n  MODE: exact\n"
+        "STEP b\n  TAKES: items: List<{n: str}>\n  GIVES: out: str\n  MODE: exact\n"
+        "FLOW f\n"
+        '  a(file="x.csv")\n'
+        "    -> b(items)\n"
+    )
+    graph = build_ir(parse(src))
+    assert graph.flow is not None
+    assert [c.step_name for c in graph.flow.chain] == ["a", "b"]
+
+
+def test_flow_typecheck_fails_for_incompatible_chain():
+    import pytest
+    src = (
+        "STEP a\n  GIVES: items: List<{n: str}>\n  MODE: exact\n"
+        "STEP b\n  TAKES: items: List<{n: int}>\n  GIVES: out: str\n  MODE: exact\n"
+        "FLOW f\n  a()\n    -> b(items)\n"
+    )
+    with pytest.raises(ValueError) as exc:
+        build_ir(parse(src))
+    msg = str(exc.value)
+    assert "type mismatch" in msg
+    assert "items" in msg

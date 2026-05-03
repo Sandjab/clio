@@ -26,6 +26,21 @@ class ContractIR:
 
 
 @dataclass(frozen=True)
+class CallIR:
+    step_name: str
+    kwargs: tuple[tuple[str, object], ...]
+    line: int
+
+
+@dataclass(frozen=True)
+class FlowIR:
+    name: str
+    chain: tuple[CallIR, ...]
+    line: int
+
+
+@dataclass(frozen=True)
 class FlowGraph:
     steps: tuple[StepIR, ...]
     contracts: tuple[ContractIR, ...] = ()
+    flow: FlowIR | None = None
