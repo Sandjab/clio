@@ -6,11 +6,15 @@ class TokenType(str, Enum):
     KEYWORD = "KEYWORD"
     IDENT = "IDENT"
     NUMBER = "NUMBER"
-    STRING = "STRING"      # added now to avoid a second pass at Phase 6
+    STRING = "STRING"
     EQUALS = "EQUALS"
+    OP_EQ = "OP_EQ"        # ==
+    OP_NE = "OP_NE"        # !=
+    OP_GE = "OP_GE"        # >=
+    OP_LE = "OP_LE"        # <=
     COLON = "COLON"
     COMMA = "COMMA"
-    ARROW = "ARROW"      # ->
+    ARROW = "ARROW"
     LANGLE = "LANGLE"
     RANGLE = "RANGLE"
     LBRACE = "LBRACE"

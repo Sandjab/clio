@@ -22,3 +22,4 @@ class Keyword(str, Enum):
     SHAPE = "SHAPE"
     CSV = "CSV"
     FLOW = "FLOW"
+    ASSERT = "ASSERT"

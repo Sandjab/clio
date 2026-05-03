@@ -73,6 +73,27 @@ def lex(source: str) -> list[Token]:
                 i += 2
                 col += 2
                 continue
+            two = stripped[i:i + 2]
+            if two == "==":
+                tokens.append(Token(TokenType.OP_EQ, "==", lineno, col))
+                i += 2
+                col += 2
+                continue
+            if two == "!=":
+                tokens.append(Token(TokenType.OP_NE, "!=", lineno, col))
+                i += 2
+                col += 2
+                continue
+            if two == ">=":
+                tokens.append(Token(TokenType.OP_GE, ">=", lineno, col))
+                i += 2
+                col += 2
+                continue
+            if two == "<=":
+                tokens.append(Token(TokenType.OP_LE, "<=", lineno, col))
+                i += 2
+                col += 2
+                continue
             single = _SINGLE_CHAR_TOKENS.get(ch)
             if single is not None:
                 tokens.append(Token(single, ch, lineno, col))

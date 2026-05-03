@@ -84,3 +84,12 @@ def test_lex_arrow():
     src = "FLOW f\n  a -> b\n"
     tokens = lex(src)
     assert any(t.type == TokenType.ARROW for t in tokens)
+
+
+def test_lex_comparison_operators():
+    tokens = lex("a == b\nc != d\ne >= f\ng <= h\n")
+    types = {t.type for t in tokens}
+    assert TokenType.OP_EQ in types
+    assert TokenType.OP_NE in types
+    assert TokenType.OP_GE in types
+    assert TokenType.OP_LE in types
