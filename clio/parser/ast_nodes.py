@@ -40,6 +40,7 @@ class StepDecl:
     mode: str
     takes: tuple[Field, ...]
     gives: Field | None
+    cache: "CacheConfig | None"
     line: int
     col: int
 
@@ -129,5 +130,15 @@ class CompareExpr(ExprNode):
 class ResourcesDecl:
     target: str
     models: tuple[str, ...]
+    line: int
+    col: int
+
+
+@dataclass(frozen=True)
+class CacheConfig:
+    """Cache directive on a STEP. Mode is one of 'on', 'off', 'ttl'.
+    For 'ttl', `ttl_seconds` is the parsed duration in seconds; for 'on' / 'off' it is None."""
+    mode: str           # "on" | "off" | "ttl"
+    ttl_seconds: int | None
     line: int
     col: int

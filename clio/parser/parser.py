@@ -1,4 +1,5 @@
 from clio.parser.ast_nodes import (
+    CacheConfig,
     ConstrainedType,
     ContractDecl,
     ContractRef,
@@ -130,7 +131,6 @@ class _Parser:
         kw = self.expect(TokenType.KEYWORD, "STEP")
         ident = self.expect(TokenType.IDENT)
         self.expect(TokenType.NEWLINE)
-        # Detect missing-MODE early (Phase 1 deviation kept).
         if self.peek().type != TokenType.INDENT:
             raise ParseError(
                 f"STEP {ident.value} is missing required MODE field",
@@ -141,6 +141,7 @@ class _Parser:
         takes: tuple[Field, ...] = ()
         gives: Field | None = None
         mode: str | None = None
+        cache: CacheConfig | None = None
 
         while self.peek().type != TokenType.DEDENT:
             t = self.peek()
@@ -150,8 +151,7 @@ class _Parser:
             if t.value == "TAKES":
                 if takes:
                     raise ParseError(
-                        f"STEP {ident.value} has duplicate TAKES field",
-                        t.line, t.col,
+                        f"STEP {ident.value} has duplicate TAKES field", t.line, t.col,
                     )
                 self.advance()
                 self.expect(TokenType.COLON)
@@ -160,8 +160,7 @@ class _Parser:
             elif t.value == "GIVES":
                 if gives is not None:
                     raise ParseError(
-                        f"STEP {ident.value} has duplicate GIVES field",
-                        t.line, t.col,
+                        f"STEP {ident.value} has duplicate GIVES field", t.line, t.col,
                     )
                 self.advance()
                 self.expect(TokenType.COLON)
@@ -173,8 +172,7 @@ class _Parser:
             elif t.value == "MODE":
                 if mode is not None:
                     raise ParseError(
-                        f"STEP {ident.value} has duplicate MODE field",
-                        t.line, t.col,
+                        f"STEP {ident.value} has duplicate MODE field", t.line, t.col,
                     )
                 self.advance()
                 self.expect(TokenType.COLON)
@@ -186,14 +184,58 @@ class _Parser:
                     )
                 mode = value_tok.value
                 self.expect(TokenType.NEWLINE)
+            elif t.value == "CACHE":
+                if cache is not None:
+                    raise ParseError(
+                        f"STEP {ident.value} has duplicate CACHE field", t.line, t.col,
+                    )
+                cache = self.parse_cache(t.line, t.col)
             else:
                 raise ParseError(f"unexpected step field {t.value!r}", t.line, t.col)
 
         self.expect(TokenType.DEDENT)
         if mode is None:
-            raise ParseError(f"STEP {ident.value} is missing required MODE field", kw.line, kw.col)
+            raise ParseError(
+                f"STEP {ident.value} is missing required MODE field", kw.line, kw.col,
+            )
+        if cache is not None and mode != "judgment":
+            raise ParseError(
+                f"'CACHE' is only supported on judgment steps in v0.2 (got mode {mode!r})",
+                cache.line, cache.col,
+            )
 
-        return StepDecl(name=ident.value, mode=mode, takes=takes, gives=gives, line=kw.line, col=kw.col)
+        return StepDecl(
+            name=ident.value, mode=mode, takes=takes, gives=gives,
+            cache=cache, line=kw.line, col=kw.col,
+        )
+
+    def parse_cache(self, line: int, col: int) -> CacheConfig:
+        self.expect(TokenType.KEYWORD, "CACHE")
+        self.expect(TokenType.COLON)
+        t = self.peek()
+        if t.type == TokenType.KEYWORD and t.value == "on":
+            self.advance()
+            self.expect(TokenType.NEWLINE)
+            return CacheConfig(mode="on", ttl_seconds=None, line=line, col=col)
+        if t.type == TokenType.KEYWORD and t.value == "off":
+            self.advance()
+            self.expect(TokenType.NEWLINE)
+            return CacheConfig(mode="off", ttl_seconds=None, line=line, col=col)
+        if t.type == TokenType.KEYWORD and t.value == "ttl":
+            self.advance()
+            self.expect(TokenType.LPAREN)
+            dur_tok = self.expect(TokenType.DURATION)
+            self.expect(TokenType.RPAREN)
+            self.expect(TokenType.NEWLINE)
+            return CacheConfig(
+                mode="ttl",
+                ttl_seconds=_duration_to_seconds(dur_tok.value),
+                line=line, col=col,
+            )
+        raise ParseError(
+            f"expected CACHE value (on | off | ttl(<dur>)), got {t.type.value} {t.value!r}",
+            t.line, t.col,
+        )
 
     def parse_contract(self) -> "ContractDecl":
         from clio.parser.expressions import parse_expression
@@ -424,3 +466,12 @@ class _Parser:
 
 def parse(source: str) -> Program:
     return _Parser(lex(source)).parse_program()
+
+
+_DURATION_FACTORS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def _duration_to_seconds(dur: str) -> int:
+    """`24h` → 86400. The lexer guarantees the format `\\d+[smhd]`."""
+    suffix = dur[-1]
+    return int(dur[:-1]) * _DURATION_FACTORS[suffix]

@@ -232,3 +232,44 @@ def test_parse_resources_unsupported_field_raises():
         parse(src)
     assert "budget" in str(exc.value)
     assert "v0.1" in str(exc.value)
+
+
+def test_parse_step_with_cache_off():
+    src = "STEP s\n  GIVES: r: str\n  MODE: judgment\n  CACHE: off\n"
+    program = parse(src)
+    step = program.decls[0]
+    assert step.cache is not None
+    assert step.cache.mode == "off"
+    assert step.cache.ttl_seconds is None
+
+
+def test_parse_step_with_cache_on():
+    src = "STEP s\n  GIVES: r: str\n  MODE: judgment\n  CACHE: on\n"
+    step = parse(src).decls[0]
+    assert step.cache.mode == "on"
+    assert step.cache.ttl_seconds is None
+
+
+def test_parse_step_with_cache_ttl():
+    cases = {"30s": 30, "5m": 300, "24h": 86400, "7d": 604800}
+    for dur, expected in cases.items():
+        src = f"STEP s\n  GIVES: r: str\n  MODE: judgment\n  CACHE: ttl({dur})\n"
+        step = parse(src).decls[0]
+        assert step.cache.mode == "ttl"
+        assert step.cache.ttl_seconds == expected, dur
+
+
+def test_parse_cache_on_exact_step_raises():
+    src = "STEP s\n  GIVES: r: str\n  MODE: exact\n  CACHE: on\n"
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    msg = str(exc.value)
+    assert "CACHE" in msg
+    assert "judgment" in msg
+
+
+def test_parse_cache_duplicate_raises():
+    src = "STEP s\n  GIVES: r: str\n  MODE: judgment\n  CACHE: on\n  CACHE: off\n"
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "duplicate" in str(exc.value).lower()
