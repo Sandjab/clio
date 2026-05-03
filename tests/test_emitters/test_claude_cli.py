@@ -148,6 +148,37 @@ def test_emit_abort_message_is_shell_quoted():
     assert "nasty" in run_sh and "rm -rf" in run_sh
 
 
+def test_emit_fallback_does_not_cache_under_main_key(tmp_path):
+    """Per spec §6: fallback's output must not be cached under the main step's key.
+    Verified by inspecting the cache-store guard for the FALLBACK_USED tracking."""
+    src = (
+        "STEP main\n"
+        "  TAKES: x: int\n"
+        "  GIVES: y: str\n"
+        "  MODE:    judgment\n"
+        "  CACHE:   ttl(1h)\n"
+        '  ON_FAIL: fallback(naive) then abort("nope")\n'
+        "STEP naive\n"
+        "  TAKES: x: int\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "FLOW f\n"
+        "  main(x=1)\n"
+    )
+    import tempfile
+    from clio.emitters.claude_cli import ClaudeCLIEmitter
+    from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
+    out = Path(tempfile.mkdtemp())
+    ClaudeCLIEmitter().emit(build_ir(parse(src)), out)
+    run_sh = (out / "run.sh").read_text()
+    # The FALLBACK_USED tracking flag must be present.
+    assert "FALLBACK_USED_" in run_sh, "fallback chain must emit FALLBACK_USED tracking"
+    # The cache-store gate must check FALLBACK_USED == 0.
+    assert 'FALLBACK_USED_' in run_sh
+    assert '= "0"' in run_sh, "cache-store gate must check FALLBACK_USED == 0"
+
+
 def test_emit_escalate_recomputes_cache_key(tmp_path):
     """Per spec §6: escalate must recompute the cache key for the new model
     and lookup/store under that key."""

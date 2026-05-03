@@ -268,6 +268,9 @@ class ClaudeCLIEmitter(BaseEmitter):
         primary_model = models_list[0]
         first_model_lit = shlex.quote(primary_model)
 
+        strategies = step.on_fail.strategies if step.on_fail is not None else ()
+        has_fallback = any(s.kind == "fallback" for s in strategies)
+
         out: list[str] = [
             f"# Step {idx}: {step.name} (judgment)",
             f"INLINED_SCHEMA_{idx:02d}={shlex.quote(inlined_json)}",
@@ -277,6 +280,8 @@ class ClaudeCLIEmitter(BaseEmitter):
             f"MODEL_IDX_{idx:02d}=0",
             f'RESPONSE_{idx:02d}=""',
         ]
+        if has_fallback:
+            out.append(f"FALLBACK_USED_{idx:02d}=0")
 
         # Cache lookup against the primary model
         if cache_active:
@@ -288,9 +293,6 @@ class ClaudeCLIEmitter(BaseEmitter):
                 f'RESPONSE_{idx:02d}="$("$PYTHON" -m clio_runtime.cache lookup '
                 f'"$CACHE_DIR_{idx:02d}" {step.name} "$KEY_{idx:02d}" {ttl_str} 2>/dev/null || true)"',
             ]
-
-        # Determine the strategy chain (default to a single attempt + implicit abort if no on_fail).
-        strategies = step.on_fail.strategies if step.on_fail is not None else ()
 
         # Open the "if no cache hit" guard (only if cache is active).
         if cache_active:
@@ -379,6 +381,7 @@ class ClaudeCLIEmitter(BaseEmitter):
                     f'{ind}if [ -z "$RESPONSE_{idx:02d}" ]; then',
                     f'{ind}    "$PYTHON" {fb_script} {args}',
                     f"{ind}    RESPONSE_{idx:02d}=\"$(jq -c .{out_name} state.json)\"",
+                    f"{ind}    FALLBACK_USED_{idx:02d}=1",
                     f'{ind}fi',
                 ]
 
@@ -394,9 +397,19 @@ class ClaudeCLIEmitter(BaseEmitter):
 
         # Cache store on success (only when MODEL_IDX is still on the primary model;
         # other models cache under their own key only if they were hit by lookup later).
+        # Per spec §6: a successful fallback must NOT be cached under the main key.
         if cache_active:
+            if has_fallback:
+                guard = (
+                    f'{ind}if [ $MODEL_IDX_{idx:02d} -eq 0 ] && [ -n "$RESPONSE_{idx:02d}" ] '
+                    f'&& [ "$FALLBACK_USED_{idx:02d}" = "0" ]; then'
+                )
+            else:
+                guard = (
+                    f'{ind}if [ $MODEL_IDX_{idx:02d} -eq 0 ] && [ -n "$RESPONSE_{idx:02d}" ]; then'
+                )
             out += [
-                f'{ind}if [ $MODEL_IDX_{idx:02d} -eq 0 ] && [ -n "$RESPONSE_{idx:02d}" ]; then',
+                guard,
                 f'{ind}    "$PYTHON" -m clio_runtime.cache store "$CACHE_DIR_{idx:02d}" '
                 f'{step.name} "$KEY_{idx:02d}" {first_model_lit} "$RESPONSE_{idx:02d}"',
                 f'{ind}fi',

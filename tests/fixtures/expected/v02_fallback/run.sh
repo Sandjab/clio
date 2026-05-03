@@ -42,6 +42,7 @@ PROMPT_03="${PROMPT_03//\$\{schema\}/$INLINED_SCHEMA_03}"
 MODELS_03=(haiku sonnet opus)
 MODEL_IDX_03=0
 RESPONSE_03=""
+FALLBACK_USED_03=0
 CACHE_DIR_03="${CLIO_CACHE_DIR:-.cache}"
 KEY_03="$("$PYTHON" -m clio_runtime.cache key detect_churn haiku "$PROMPT_03" "$INLINED_SCHEMA_03")"
 RESPONSE_03="$("$PYTHON" -m clio_runtime.cache lookup "$CACHE_DIR_03" detect_churn "$KEY_03" 86400 2>/dev/null || true)"
@@ -67,12 +68,13 @@ if [ -z "$RESPONSE_03" ]; then
     if [ -z "$RESPONSE_03" ]; then
         "$PYTHON" steps/02_detect_churn_naive.py --customers="$(jq -r .customers state.json)"
         RESPONSE_03="$(jq -c .risks state.json)"
+        FALLBACK_USED_03=1
     fi
     if [ -z "$RESPONSE_03" ]; then
         echo '[clio] step detect_churn: churn detection exhausted' >&2
         exit 1
     fi
-    if [ $MODEL_IDX_03 -eq 0 ] && [ -n "$RESPONSE_03" ]; then
+    if [ $MODEL_IDX_03 -eq 0 ] && [ -n "$RESPONSE_03" ] && [ "$FALLBACK_USED_03" = "0" ]; then
         "$PYTHON" -m clio_runtime.cache store "$CACHE_DIR_03" detect_churn "$KEY_03" haiku "$RESPONSE_03"
     fi
 fi
