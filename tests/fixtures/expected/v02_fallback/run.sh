@@ -35,47 +35,47 @@ echo '{}' > state.json
 # Step 1: load_customers (exact)
 "$PYTHON" steps/01_load_customers.py --file=customers.csv
 
-# Step 2: detect_churn (judgment)
-INLINED_SCHEMA_02='{"type":"array","items":{"type":"object","properties":{"client":{"type":"string"},"risk":{"enum":["low","mid","high"]},"reason":{"type":"string"}},"required":["client","risk","reason"],"additionalProperties":false}}'
-PROMPT_02="$("$PYTHON" -m clio_runtime.substitute steps/02_detect_churn.prompt state.json)"
-PROMPT_02="${PROMPT_02//\$\{schema\}/$INLINED_SCHEMA_02}"
-MODELS_02=(haiku sonnet opus)
-MODEL_IDX_02=0
-RESPONSE_02=""
-CACHE_DIR_02="${CLIO_CACHE_DIR:-.cache}"
-KEY_02="$("$PYTHON" -m clio_runtime.cache key detect_churn haiku "$PROMPT_02" "$INLINED_SCHEMA_02")"
-RESPONSE_02="$("$PYTHON" -m clio_runtime.cache lookup "$CACHE_DIR_02" detect_churn "$KEY_02" 86400 2>/dev/null || true)"
-if [ -z "$RESPONSE_02" ]; then
-    RESPONSE_02="$(_clio_run_attempt "${MODELS_02[$MODEL_IDX_02]}" "$PROMPT_02" steps/02_detect_churn.schema.json || true)"
-    if [ -z "$RESPONSE_02" ]; then
+# Step 3: detect_churn (judgment)
+INLINED_SCHEMA_03='{"type":"array","items":{"type":"object","properties":{"client":{"type":"string"},"risk":{"enum":["low","mid","high"]},"reason":{"type":"string"}},"required":["client","risk","reason"],"additionalProperties":false}}'
+PROMPT_03="$("$PYTHON" -m clio_runtime.substitute steps/03_detect_churn.prompt state.json)"
+PROMPT_03="${PROMPT_03//\$\{schema\}/$INLINED_SCHEMA_03}"
+MODELS_03=(haiku sonnet opus)
+MODEL_IDX_03=0
+RESPONSE_03=""
+CACHE_DIR_03="${CLIO_CACHE_DIR:-.cache}"
+KEY_03="$("$PYTHON" -m clio_runtime.cache key detect_churn haiku "$PROMPT_03" "$INLINED_SCHEMA_03")"
+RESPONSE_03="$("$PYTHON" -m clio_runtime.cache lookup "$CACHE_DIR_03" detect_churn "$KEY_03" 86400 2>/dev/null || true)"
+if [ -z "$RESPONSE_03" ]; then
+    RESPONSE_03="$(_clio_run_attempt "${MODELS_03[$MODEL_IDX_03]}" "$PROMPT_03" steps/03_detect_churn.schema.json || true)"
+    if [ -z "$RESPONSE_03" ]; then
         for _ in $(seq 1 3); do
-            RESPONSE_02="$(_clio_run_attempt "${MODELS_02[$MODEL_IDX_02]}" "$PROMPT_02" steps/02_detect_churn.schema.json || true)"
-            [ -n "$RESPONSE_02" ] && break
+            RESPONSE_03="$(_clio_run_attempt "${MODELS_03[$MODEL_IDX_03]}" "$PROMPT_03" steps/03_detect_churn.schema.json || true)"
+            [ -n "$RESPONSE_03" ] && break
         done
     fi
-    if [ -z "$RESPONSE_02" ] && [ $MODEL_IDX_02 -lt $((${#MODELS_02[@]} - 1)) ]; then
-        MODEL_IDX_02=$((MODEL_IDX_02 + 1))
-        KEY_02_ESC="$("$PYTHON" -m clio_runtime.cache key detect_churn "${MODELS_02[$MODEL_IDX_02]}" "$PROMPT_02" "$INLINED_SCHEMA_02")"
-        RESPONSE_02="$("$PYTHON" -m clio_runtime.cache lookup "$CACHE_DIR_02" detect_churn "$KEY_02_ESC" 86400 2>/dev/null || true)"
-        if [ -z "$RESPONSE_02" ]; then
-            RESPONSE_02="$(_clio_run_attempt "${MODELS_02[$MODEL_IDX_02]}" "$PROMPT_02" steps/02_detect_churn.schema.json || true)"
+    if [ -z "$RESPONSE_03" ] && [ $MODEL_IDX_03 -lt $((${#MODELS_03[@]} - 1)) ]; then
+        MODEL_IDX_03=$((MODEL_IDX_03 + 1))
+        KEY_03_ESC="$("$PYTHON" -m clio_runtime.cache key detect_churn "${MODELS_03[$MODEL_IDX_03]}" "$PROMPT_03" "$INLINED_SCHEMA_03")"
+        RESPONSE_03="$("$PYTHON" -m clio_runtime.cache lookup "$CACHE_DIR_03" detect_churn "$KEY_03_ESC" 86400 2>/dev/null || true)"
+        if [ -z "$RESPONSE_03" ]; then
+            RESPONSE_03="$(_clio_run_attempt "${MODELS_03[$MODEL_IDX_03]}" "$PROMPT_03" steps/03_detect_churn.schema.json || true)"
         fi
-        if [ -n "$RESPONSE_02" ]; then
-            "$PYTHON" -m clio_runtime.cache store "$CACHE_DIR_02" detect_churn "$KEY_02_ESC" "${MODELS_02[$MODEL_IDX_02]}" "$RESPONSE_02"
+        if [ -n "$RESPONSE_03" ]; then
+            "$PYTHON" -m clio_runtime.cache store "$CACHE_DIR_03" detect_churn "$KEY_03_ESC" "${MODELS_03[$MODEL_IDX_03]}" "$RESPONSE_03"
         fi
     fi
-    if [ -z "$RESPONSE_02" ]; then
+    if [ -z "$RESPONSE_03" ]; then
         "$PYTHON" steps/02_detect_churn_naive.py --customers="$(jq -r .customers state.json)"
-        RESPONSE_02="$(jq -c .risks state.json)"
+        RESPONSE_03="$(jq -c .risks state.json)"
     fi
-    if [ -z "$RESPONSE_02" ]; then
+    if [ -z "$RESPONSE_03" ]; then
         echo '[clio] step detect_churn: churn detection exhausted' >&2
         exit 1
     fi
-    if [ $MODEL_IDX_02 -eq 0 ] && [ -n "$RESPONSE_02" ]; then
-        "$PYTHON" -m clio_runtime.cache store "$CACHE_DIR_02" detect_churn "$KEY_02" haiku "$RESPONSE_02"
+    if [ $MODEL_IDX_03 -eq 0 ] && [ -n "$RESPONSE_03" ]; then
+        "$PYTHON" -m clio_runtime.cache store "$CACHE_DIR_03" detect_churn "$KEY_03" haiku "$RESPONSE_03"
     fi
 fi
-jq --argjson r "$RESPONSE_02" '.risks = $r' state.json > state.json.tmp && mv state.json.tmp state.json
+jq --argjson r "$RESPONSE_03" '.risks = $r' state.json > state.json.tmp && mv state.json.tmp state.json
 
 echo "[clio] flow retention completed."

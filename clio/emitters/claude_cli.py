@@ -217,8 +217,9 @@ class ClaudeCLIEmitter(BaseEmitter):
             else ("haiku",)
         )
         contracts_by_name = {c.name: c for c in graph.contracts}
-        for idx, call in enumerate(graph.flow.chain, start=1):
+        for call in graph.flow.chain:
             step = self._step_for_call(graph, call)
+            idx = self._step_index_in_emit(graph, step)
             if step.mode == "exact":
                 args = self._render_kwargs_as_cli(call)
                 script_name = f"steps/{idx:02d}_{step.name}.py"
