@@ -1,4 +1,6 @@
 from clio.parser.ast_nodes import (
+    ContractDecl,
+    ContractRef,
     EnumType,
     Field,
     ListType,
@@ -48,10 +50,19 @@ class _Parser:
             self.advance()
 
     def parse_program(self) -> Program:
-        decls: list[StepDecl] = []
+        decls: list[object] = []
         self.skip_newlines()
         while self.peek().type != TokenType.EOF:
-            decls.append(self.parse_step())
+            t = self.peek()
+            if t.type == TokenType.KEYWORD and t.value == "STEP":
+                decls.append(self.parse_step())
+            elif t.type == TokenType.KEYWORD and t.value == "CONTRACT":
+                decls.append(self.parse_contract())
+            else:
+                raise ParseError(
+                    f"expected STEP or CONTRACT, got {t.type.value} {t.value!r}",
+                    t.line, t.col,
+                )
             self.skip_newlines()
         return Program(tuple(decls))
 
@@ -124,6 +135,34 @@ class _Parser:
 
         return StepDecl(name=ident.value, mode=mode, takes=takes, gives=gives, line=kw.line, col=kw.col)
 
+    def parse_contract(self) -> "ContractDecl":
+        kw = self.expect(TokenType.KEYWORD, "CONTRACT")
+        ident = self.expect(TokenType.IDENT)
+        self.expect(TokenType.NEWLINE)
+        self.expect(TokenType.INDENT)
+
+        shape: TypeExpr | None = None
+        while self.peek().type != TokenType.DEDENT:
+            t = self.peek()
+            if t.type == TokenType.KEYWORD and t.value == "SHAPE":
+                self.advance()
+                self.expect(TokenType.COLON)
+                shape = self.parse_type_expr()
+                self.expect(TokenType.NEWLINE)
+            else:
+                raise ParseError(
+                    f"unsupported contract field {t.value!r} (v0.1: SHAPE only)",
+                    t.line, t.col,
+                )
+        self.expect(TokenType.DEDENT)
+
+        if shape is None:
+            raise ParseError(
+                f"CONTRACT {ident.value} is missing required SHAPE field",
+                kw.line, kw.col,
+            )
+        return ContractDecl(name=ident.value, shape=shape, line=kw.line, col=kw.col)
+
     def parse_field_list(self) -> tuple[Field, ...]:
         fields = [self.parse_field()]
         while self.peek().type == TokenType.COMMA:
@@ -142,12 +181,18 @@ class _Parser:
         if t.type == TokenType.KEYWORD and t.value in _PRIMITIVE_TYPES:
             self.advance()
             return PrimitiveType(name=t.value)
+        if t.type == TokenType.KEYWORD and t.value == "CSV":
+            self.advance()
+            return PrimitiveType(name="str")    # v0.1 domain-alias: CSV ≡ str
         if t.type == TokenType.KEYWORD and t.value == "List":
             return self.parse_list_type()
         if t.type == TokenType.KEYWORD and t.value == "enum":
             return self.parse_enum_type()
         if t.type == TokenType.LBRACE:
             return self.parse_record_type()
+        if t.type == TokenType.IDENT:
+            self.advance()
+            return ContractRef(name=t.value, line=t.line, col=t.col)
         raise ParseError(
             f"expected a type expression, got {t.type.value} {t.value!r}",
             t.line, t.col,

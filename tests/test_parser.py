@@ -58,8 +58,9 @@ def test_parse_step_with_multiple_takes():
     assert all(f.type.name == "int" for f in step.takes)
 
 
-def test_parse_step_with_unknown_primitive_type_raises():
-    src = "STEP foo\n  TAKES: x: bogus\n  MODE: exact\n"
+def test_parse_step_with_invalid_type_token_raises():
+    # A colon is not a valid start of a type expression.
+    src = "STEP foo\n  TAKES: x: :int\n  MODE: exact\n"
     with pytest.raises(ParseError):
         parse(src)
 
@@ -127,3 +128,33 @@ def test_parse_unbalanced_brace_raises():
     src = "STEP foo\n  GIVES: x: {name: str\n  MODE: exact\n"
     with pytest.raises(ParseError):
         parse(src)
+
+
+def test_parse_contract_with_record_shape():
+    src = (
+        "CONTRACT customer_risk\n"
+        "  SHAPE: {client: str, risk: enum(low|mid|high), reason: str}\n"
+    )
+    program = parse(src)
+    assert len(program.decls) == 1
+    c = program.decls[0]
+    assert c.__class__.__name__ == "ContractDecl"
+    assert c.name == "customer_risk"
+    assert c.shape.__class__.__name__ == "RecordType"
+
+
+def test_parse_step_referencing_contract():
+    src = (
+        "CONTRACT r\n"
+        "  SHAPE: {x: int}\n"
+        "STEP s\n"
+        "  GIVES: out: List<r>\n"
+        "  MODE:  judgment\n"
+    )
+    program = parse(src)
+    step = [d for d in program.decls if d.__class__.__name__ == "StepDecl"][0]
+    list_t = step.gives.type
+    assert list_t.__class__.__name__ == "ListType"
+    inner = list_t.inner
+    assert inner.__class__.__name__ == "ContractRef"
+    assert inner.name == "r"
