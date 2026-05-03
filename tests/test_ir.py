@@ -129,3 +129,23 @@ def test_build_ir_carries_resources():
     assert graph.resources is not None
     assert graph.resources.target == "claude-cli"
     assert graph.resources.models == ("haiku",)
+
+
+def test_build_ir_carries_cache_ttl():
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE: judgment\n"
+        "  CACHE: ttl(24h)\n"
+    )
+    graph = build_ir(parse(src))
+    step = graph.steps[0]
+    assert step.cache is not None
+    assert step.cache.mode == "ttl"
+    assert step.cache.ttl_seconds == 86400
+
+
+def test_build_ir_no_cache_means_none():
+    src = "STEP s\n  GIVES: r: str\n  MODE: judgment\n"
+    step = build_ir(parse(src)).steps[0]
+    assert step.cache is None

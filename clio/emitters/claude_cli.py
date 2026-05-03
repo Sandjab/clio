@@ -162,7 +162,7 @@ class ClaudeCLIEmitter(BaseEmitter):
         src_dir = Path(src_pkg.__file__).parent
         dest = output_dir / "clio_runtime"
         dest.mkdir(exist_ok=True)
-        for name in ("__init__.py", "validate.py", "substitute.py"):
+        for name in ("__init__.py", "validate.py", "substitute.py", "cache.py"):
             src_file = src_dir / name
             if src_file.exists():
                 (dest / name).write_text(src_file.read_text())
@@ -234,21 +234,57 @@ class ClaudeCLIEmitter(BaseEmitter):
         prompt_path = f"steps/{idx:02d}_{step.name}.prompt"
         schema_path = f"steps/{idx:02d}_{step.name}.schema.json"
         out_name = step.gives.name if step.gives else "result"
-        # Build the inlined schema (resolved $refs, no x-clio-assert) for the LLM prompt.
-        # The on-disk schema_path keeps the $ref + x-clio-assert form for validate.py.
         inlined = _inline_schema(step.gives.type, contracts_by_name) if step.gives else {}
         inlined_json = json.dumps(inlined, separators=(",", ":"))
-        return [
+
+        cache_active = step.cache is not None and step.cache.mode != "off"
+        ttl_arg = "" if step.cache is None or step.cache.mode == "on" else str(step.cache.ttl_seconds)
+
+        lines: list[str] = [
             f"# Step {idx}: {step.name} (judgment)",
             f"INLINED_SCHEMA_{idx:02d}={shlex.quote(inlined_json)}",
-            f'PROMPT="$("$PYTHON" -m clio_runtime.substitute {prompt_path} state.json)"',
-            f'PROMPT="${{PROMPT//\\$\\{{schema\\}}/$INLINED_SCHEMA_{idx:02d}}}"',
-            f'RAW_RESPONSE="$(printf %s "$PROMPT" | claude -p --model {model} --output-format text)"',
-            f'if [ -z "$RAW_RESPONSE" ]; then echo "[clio] empty response from claude -p in step {idx} ({step.name})" >&2; exit 1; fi',
-            f"RESPONSE=\"$(printf %s \"$RAW_RESPONSE\" | awk '!/^```/')\"",
-            f'printf %s "$RESPONSE" | "$PYTHON" -m clio_runtime.validate {schema_path} -',
-            f"jq --argjson r \"$RESPONSE\" '.{out_name} = $r' state.json > state.json.tmp && mv state.json.tmp state.json",
+            f'PROMPT_{idx:02d}="$("$PYTHON" -m clio_runtime.substitute {prompt_path} state.json)"',
+            f'PROMPT_{idx:02d}="${{PROMPT_{idx:02d}//\\$\\{{schema\\}}/$INLINED_SCHEMA_{idx:02d}}}"',
         ]
+
+        if cache_active:
+            ttl_str = f'"{ttl_arg}"' if ttl_arg else '""'
+            lines += [
+                f'CACHE_DIR_{idx:02d}="${{CLIO_CACHE_DIR:-.cache}}"',
+                f'KEY_{idx:02d}="$("$PYTHON" -m clio_runtime.cache key {step.name} {model} '
+                f'"$PROMPT_{idx:02d}" "$INLINED_SCHEMA_{idx:02d}")"',
+                f'RESPONSE_{idx:02d}="$("$PYTHON" -m clio_runtime.cache lookup '
+                f'"$CACHE_DIR_{idx:02d}" {step.name} "$KEY_{idx:02d}" {ttl_str} 2>/dev/null || true)"',
+                f'if [ -z "$RESPONSE_{idx:02d}" ]; then',
+            ]
+            indent = "    "
+        else:
+            lines += [f'RESPONSE_{idx:02d}=""']
+            indent = ""
+
+        # Inner attempt (single-call form; the strategy chain comes in slice F).
+        lines += [
+            f'{indent}RAW_RESPONSE_{idx:02d}="$(printf %s "$PROMPT_{idx:02d}" | claude -p '
+            f'--model {model} --output-format text)"',
+            f'{indent}if [ -z "$RAW_RESPONSE_{idx:02d}" ]; then '
+            f'echo "[clio] empty response from claude -p in step {idx} ({step.name})" >&2; exit 1; fi',
+            f'{indent}RESPONSE_{idx:02d}="$(printf %s "$RAW_RESPONSE_{idx:02d}" | awk \'!/^```/\')"',
+            f'{indent}printf %s "$RESPONSE_{idx:02d}" | "$PYTHON" -m clio_runtime.validate '
+            f'{schema_path} -',
+        ]
+
+        if cache_active:
+            lines += [
+                f'{indent}"$PYTHON" -m clio_runtime.cache store "$CACHE_DIR_{idx:02d}" '
+                f'{step.name} "$KEY_{idx:02d}" {model} "$RESPONSE_{idx:02d}"',
+                "fi",
+            ]
+
+        lines += [
+            f"jq --argjson r \"$RESPONSE_{idx:02d}\" '.{out_name} = $r' state.json > state.json.tmp "
+            f"&& mv state.json.tmp state.json",
+        ]
+        return lines
 
     @staticmethod
     def _render_kwargs_as_cli(call) -> str:

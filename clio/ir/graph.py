@@ -10,11 +10,18 @@ class FieldIR:
 
 
 @dataclass(frozen=True)
+class CacheConfigIR:
+    mode: str               # "on" | "off" | "ttl"
+    ttl_seconds: int | None
+
+
+@dataclass(frozen=True)
 class StepIR:
     name: str
     mode: str
     takes: tuple[FieldIR, ...]
     gives: FieldIR | None
+    cache: CacheConfigIR | None
     line: int
 
 

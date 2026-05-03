@@ -25,12 +25,13 @@ echo '{}' > state.json
 
 # Step 2: detect_churn (judgment)
 INLINED_SCHEMA_02='{"type":"array","items":{"type":"object","properties":{"client":{"type":"string"},"risk":{"enum":["low","mid","high"]},"reason":{"type":"string","maxLength":300}},"required":["client","risk","reason"],"additionalProperties":false}}'
-PROMPT="$("$PYTHON" -m clio_runtime.substitute steps/02_detect_churn.prompt state.json)"
-PROMPT="${PROMPT//\$\{schema\}/$INLINED_SCHEMA_02}"
-RAW_RESPONSE="$(printf %s "$PROMPT" | claude -p --model haiku --output-format text)"
-if [ -z "$RAW_RESPONSE" ]; then echo "[clio] empty response from claude -p in step 2 (detect_churn)" >&2; exit 1; fi
-RESPONSE="$(printf %s "$RAW_RESPONSE" | awk '!/^```/')"
-printf %s "$RESPONSE" | "$PYTHON" -m clio_runtime.validate steps/02_detect_churn.schema.json -
-jq --argjson r "$RESPONSE" '.risks = $r' state.json > state.json.tmp && mv state.json.tmp state.json
+PROMPT_02="$("$PYTHON" -m clio_runtime.substitute steps/02_detect_churn.prompt state.json)"
+PROMPT_02="${PROMPT_02//\$\{schema\}/$INLINED_SCHEMA_02}"
+RESPONSE_02=""
+RAW_RESPONSE_02="$(printf %s "$PROMPT_02" | claude -p --model haiku --output-format text)"
+if [ -z "$RAW_RESPONSE_02" ]; then echo "[clio] empty response from claude -p in step 2 (detect_churn)" >&2; exit 1; fi
+RESPONSE_02="$(printf %s "$RAW_RESPONSE_02" | awk '!/^```/')"
+printf %s "$RESPONSE_02" | "$PYTHON" -m clio_runtime.validate steps/02_detect_churn.schema.json -
+jq --argjson r "$RESPONSE_02" '.risks = $r' state.json > state.json.tmp && mv state.json.tmp state.json
 
 echo "[clio] flow customer_retention completed."

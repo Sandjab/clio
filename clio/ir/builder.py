@@ -1,5 +1,6 @@
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
+    CacheConfigIR,
     CallIR,
     ContractIR,
     FieldIR,
@@ -83,11 +84,16 @@ def build_ir(program: Program) -> FlowGraph:
 
 
 def _build_step(decl: StepDecl) -> StepIR:
+    cache_ir = (
+        CacheConfigIR(mode=decl.cache.mode, ttl_seconds=decl.cache.ttl_seconds)
+        if decl.cache is not None else None
+    )
     return StepIR(
         name=decl.name,
         mode=decl.mode,
         takes=tuple(FieldIR(name=f.name, type=f.type) for f in decl.takes),
         gives=FieldIR(name=decl.gives.name, type=decl.gives.type) if decl.gives else None,
+        cache=cache_ir,
         line=decl.line,
     )
 
