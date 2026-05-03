@@ -1,4 +1,13 @@
-from clio.parser.ast_nodes import Field, PrimitiveType, Program, StepDecl, TypeExpr
+from clio.parser.ast_nodes import (
+    EnumType,
+    Field,
+    ListType,
+    PrimitiveType,
+    Program,
+    RecordType,
+    StepDecl,
+    TypeExpr,
+)
 from clio.parser.lexer import lex
 from clio.parser.tokens import Token, TokenType
 
@@ -133,10 +142,52 @@ class _Parser:
         if t.type == TokenType.KEYWORD and t.value in _PRIMITIVE_TYPES:
             self.advance()
             return PrimitiveType(name=t.value)
+        if t.type == TokenType.KEYWORD and t.value == "List":
+            return self.parse_list_type()
+        if t.type == TokenType.KEYWORD and t.value == "enum":
+            return self.parse_enum_type()
+        if t.type == TokenType.LBRACE:
+            return self.parse_record_type()
         raise ParseError(
             f"expected a type expression, got {t.type.value} {t.value!r}",
             t.line, t.col,
         )
+
+    def parse_list_type(self) -> ListType:
+        self.expect(TokenType.KEYWORD, "List")
+        self.expect(TokenType.LANGLE)
+        inner = self.parse_type_expr()
+        self.expect(TokenType.RANGLE)
+        return ListType(inner=inner)
+
+    def parse_record_type(self) -> RecordType:
+        self.expect(TokenType.LBRACE)
+        fields: list[tuple[str, TypeExpr]] = []
+        fields.append(self._parse_record_field())
+        while self.peek().type == TokenType.COMMA:
+            self.advance()
+            fields.append(self._parse_record_field())
+        self.expect(TokenType.RBRACE)
+        return RecordType(fields=tuple(fields))
+
+    def _parse_record_field(self) -> tuple[str, TypeExpr]:
+        name_tok = self.expect(TokenType.IDENT)
+        self.expect(TokenType.COLON)
+        type_expr = self.parse_type_expr()
+        return (name_tok.value, type_expr)
+
+    def parse_enum_type(self) -> EnumType:
+        self.expect(TokenType.KEYWORD, "enum")
+        self.expect(TokenType.LPAREN)
+        values: list[str] = []
+        first = self.expect(TokenType.IDENT)
+        values.append(first.value)
+        while self.peek().type == TokenType.PIPE:
+            self.advance()
+            tok = self.expect(TokenType.IDENT)
+            values.append(tok.value)
+        self.expect(TokenType.RPAREN)
+        return EnumType(values=tuple(values))
 
 
 def parse(source: str) -> Program:

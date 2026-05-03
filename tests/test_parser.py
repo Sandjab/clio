@@ -97,3 +97,33 @@ def test_parse_step_rejects_duplicate_gives():
     with pytest.raises(ParseError) as exc:
         parse(src)
     assert "duplicate" in str(exc.value).lower()
+
+
+def test_parse_list_of_record():
+    src = (
+        "STEP load\n"
+        "  GIVES: items: List<{name: str, age: int}>\n"
+        "  MODE:  exact\n"
+    )
+    program = parse(src)
+    step = program.decls[0]
+    t = step.gives.type
+    assert t.__class__.__name__ == "ListType"
+    inner = t.inner
+    assert inner.__class__.__name__ == "RecordType"
+    assert [name for name, _ in inner.fields] == ["name", "age"]
+
+
+def test_parse_enum_type():
+    src = "STEP foo\n  TAKES: s: enum(low|mid|high)\n  MODE: exact\n"
+    program = parse(src)
+    step = program.decls[0]
+    t = step.takes[0].type
+    assert t.__class__.__name__ == "EnumType"
+    assert t.values == ("low", "mid", "high")
+
+
+def test_parse_unbalanced_brace_raises():
+    src = "STEP foo\n  GIVES: x: {name: str\n  MODE: exact\n"
+    with pytest.raises(ParseError):
+        parse(src)
