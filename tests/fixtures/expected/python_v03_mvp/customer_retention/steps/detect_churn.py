@@ -18,6 +18,11 @@ from .. import contracts
 
 _PROMPT_TEMPLATE = 'You are executing the CLIO step `detect_churn`.\n\nInput:\n  customers: ${customers}\n\nProduce a JSON value that EXACTLY matches this schema:\n${schema}\n\nRules — these are non-negotiable:\n1. Use EXACTLY the property names listed in the schema. Do NOT invent new fields.\n2. Every required property must be present in every item.\n3. For enum properties, use ONLY values from the listed enum.\n4. Respect every constraint (maxLength, etc.).\n5. Output the raw JSON value only. No markdown code fences. No prose. No explanation.\n'
 _INLINED_SCHEMA = '{"type":"array","items":{"type":"object","properties":{"client":{"type":"string"},"risk":{"enum":["low","mid","high"]},"reason":{"type":"string","maxLength":300}},"required":["client","risk","reason"],"additionalProperties":false}}'
+_SYSTEM_PROMPT = (
+    'You are a strict JSON-only API. Output exactly one JSON document matching '
+    'the requested schema, with no prose, no markdown code fences, no commentary, '
+    'and no leading or trailing whitespace beyond the JSON itself.'
+)
 _MODELS = ('claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7')
 
 
@@ -28,6 +33,7 @@ def _attempt(model, prompt):
         msg = client.messages.create(
             model=model,
             max_tokens=4096,
+            system=_SYSTEM_PROMPT,
             messages=[{'role': 'user', 'content': prompt}],
         )
         raw = msg.content[0].text if msg.content else ''
