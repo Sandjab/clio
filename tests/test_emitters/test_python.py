@@ -276,6 +276,15 @@ def test_emit_orchestrator_runs_full_flow(tmp_path, monkeypatch):
                 del sys.modules[k]
 
 
+def test_emit_examples_mvp_python(tmp_path):
+    src = (Path(__file__).parent.parent.parent / "examples" / "mvp.clio").read_text()
+    graph = build_ir(parse(src))
+    PythonEmitter().emit(graph, tmp_path)
+    expected = _read_tree(Path(__file__).parent.parent / "fixtures" / "expected" / "python_v03_mvp")
+    actual = _read_tree(tmp_path)
+    assert actual == expected
+
+
 def test_emit_judgment_cache_hit_skips_sdk(tmp_path, monkeypatch):
     src = (FIXTURES / "mvp_v03_cache.clio").read_text()
     PythonEmitter().emit(build_ir(parse(src)), tmp_path)

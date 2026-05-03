@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "customer_retention"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.40",
+    "pydantic>=2",
+]
+
+[project.scripts]
+customer_retention = "customer_retention.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["customer_retention*"]
