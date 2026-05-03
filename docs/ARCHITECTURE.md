@@ -2,8 +2,17 @@
 
 ## Pipeline
 
-```
-.clio source → Lexer → Token stream → Parser → AST → IR Builder → IR Graph → Optimizer → Emitter → Target project
+```mermaid
+flowchart LR
+    src[".clio source"] --> lex["Lexer<br/><sub>parser/lexer.py</sub>"]
+    lex --> tok["Token stream"]
+    tok --> psr["Parser<br/><sub>parser/parser.py</sub>"]
+    psr --> ast["AST<br/><sub>parser/ast_nodes.py</sub>"]
+    ast --> bld["IR Builder<br/><sub>ir/builder.py</sub>"]
+    bld --> ir["IR Graph<br/><sub>ir/graph.py</sub>"]
+    ir --> opt["Optimizer<br/><sub>ir/optimizer.py (future)</sub>"]
+    opt --> emt["Emitter<br/><sub>emitters/claude_cli.py</sub>"]
+    emt --> out["Target project<br/><sub>run.sh + steps/ + clio_runtime/</sub>"]
 ```
 
 ### Layer 1: Parser (source → AST)
@@ -34,6 +43,18 @@ The IR Builder transforms the AST into a directed graph of steps with typed edge
 - **Batching**: merges consecutive `judgment` steps without interleaving `exact` steps into a single LLM call
 - **Context budgeting**: estimates token cost per step, inserts summarize steps if needed
 - **Model routing**: assigns a model tier to each `judgment` step based on complexity heuristics
+
+The IR build is itself a multi-pass process. Since v0.2 (`fallback(step)` resolution), `build_ir` runs four passes in order:
+
+```mermaid
+flowchart TD
+    p1["Pass 1<br/>build StepIRs<br/><sub>cache + on_fail captured;<br/>fallback_step = None</sub>"] --> p2
+    p2["Pass 2<br/>_resolve_fallbacks<br/><sub>name → StepIR ref;<br/>TAKES/GIVES compat check</sub>"] --> p3
+    p3["Pass 3<br/>_detect_fallback_cycles<br/><sub>DFS white/gray/black</sub>"] --> p4
+    p4["Pass 4<br/>build flow + resources<br/><sub>type-check inter-step edges</sub>"]
+```
+
+Each pass either succeeds or raises `IRBuildError` with a `<file>:<line>:<col>` message; later passes never see a partial graph.
 
 ### Layer 3: Emitters (IR → target project)
 

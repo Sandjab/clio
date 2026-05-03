@@ -30,6 +30,16 @@ Three primitives:
 
 A compiler parses `.clio` files into an intermediate representation, optimizes it (batching, context budgeting, model routing), and emits a runnable project for a chosen target.
 
+```mermaid
+flowchart LR
+    src[".clio source"] --> parse["Parser → AST"]
+    parse --> ir["IR Builder<br/><sub>resolve contracts, fallbacks,<br/>type-check edges</sub>"]
+    ir --> emit["Emitter<br/><sub>per target</sub>"]
+    emit --> proj["Runnable project<br/><sub>bash / Python / Docker / ...</sub>"]
+```
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full pipeline and IR build passes.
+
 ## Compilation targets
 
 The same `.clio` source compiles to different targets:
