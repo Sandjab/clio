@@ -9,7 +9,7 @@ import sys
 import os
 from pathlib import Path
 
-from anthropic import Anthropic
+import anthropic
 
 from ..clio_runtime import cache as _cache
 
@@ -29,7 +29,7 @@ _MODELS = ('claude-haiku-4-5-20251001',)
 def _attempt(model, prompt):
     """Single attempt: SDK call → markdown strip → Pydantic validation."""
     try:
-        client = Anthropic()
+        client = anthropic.Anthropic()
         msg = client.messages.create(
             model=model,
             max_tokens=4096,

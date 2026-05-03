@@ -369,7 +369,7 @@ class PythonEmitter(BaseEmitter):
             ]
         header += [
             "",
-            "from anthropic import Anthropic",
+            "import anthropic",
             "",
         ]
         if cache_active:
@@ -391,7 +391,7 @@ class PythonEmitter(BaseEmitter):
             "def _attempt(model, prompt):",
             "    \"\"\"Single attempt: SDK call → markdown strip → Pydantic validation.\"\"\"",
             "    try:",
-            "        client = Anthropic()",
+            "        client = anthropic.Anthropic()",
             "        msg = client.messages.create(",
             "            model=model,",
             "            max_tokens=4096,",

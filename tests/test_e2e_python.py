@@ -82,11 +82,8 @@ def test_python_real_claude_then_cache_hit(tmp_path, monkeypatch):
 
         assert isinstance(state1.get("risks"), list) and state1["risks"]
 
-        # Reload to clear module-level cached state.
-        for k in list(sys.modules):
-            if k.startswith("customer_retention"):
-                del sys.modules[k]
-
+        # Run 2: monkeypatch the SDK to record calls (and raise if called).
+        # Cache should short-circuit before any call.
         import anthropic
         call_log = []
 
@@ -103,8 +100,9 @@ def test_python_real_claude_then_cache_hit(tmp_path, monkeypatch):
         monkeypatch.setattr(anthropic, "Anthropic", BoomClient)
 
         os.chdir(out)
-        from customer_retention.flow import run as run2
-        state2 = run2(file="customers.csv")
+        # No need to reload customer_retention — `import anthropic` +
+        # `anthropic.Anthropic()` at call-time picks up the monkeypatch.
+        state2 = run(file="customers.csv")
         os.chdir(old_cwd)
 
         assert call_log == [], f"expected zero SDK calls on cache hit, got {len(call_log)}"
