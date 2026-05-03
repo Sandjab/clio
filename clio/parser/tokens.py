@@ -3,18 +3,19 @@ from enum import Enum
 
 
 class TokenType(str, Enum):
-    KEYWORD = "KEYWORD"          # STEP, MODE, exact, etc. (closed set, see Keyword enum)
-    IDENT = "IDENT"              # bare identifier, e.g. foo
-    COLON = "COLON"              # :
-    NEWLINE = "NEWLINE"          # logical end-of-line (one or more \n)
-    INDENT = "INDENT"            # increase in indentation
-    DEDENT = "DEDENT"            # decrease in indentation
-    EOF = "EOF"                  # end of file
+    KEYWORD = "KEYWORD"
+    IDENT = "IDENT"
+    COLON = "COLON"
+    COMMA = "COMMA"
+    NEWLINE = "NEWLINE"
+    INDENT = "INDENT"
+    DEDENT = "DEDENT"
+    EOF = "EOF"
 
 
 @dataclass(frozen=True)
 class Token:
     type: TokenType
     value: str
-    line: int     # 1-based
-    col: int      # 1-based
+    line: int
+    col: int

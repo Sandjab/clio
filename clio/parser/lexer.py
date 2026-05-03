@@ -39,6 +39,11 @@ def lex(source: str) -> list[Token]:
                 i += 1
                 col += 1
                 continue
+            if ch == ",":
+                tokens.append(Token(TokenType.COMMA, ",", lineno, col))
+                i += 1
+                col += 1
+                continue
             if ch.isalpha() or ch == "_":
                 j = i
                 while j < len(stripped) and (stripped[j].isalnum() or stripped[j] == "_"):

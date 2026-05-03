@@ -24,3 +24,52 @@ def test_parse_step_with_unknown_mode_raises():
     with pytest.raises(ParseError) as exc:
         parse(src)
     assert "bogus" in str(exc.value)
+
+
+def test_parse_step_with_takes_and_gives_primitives():
+    src = (
+        "STEP echo_str\n"
+        "  TAKES: input: str\n"
+        "  GIVES: output: str\n"
+        "  MODE:  exact\n"
+    )
+    program = parse(src)
+    step = program.decls[0]
+    assert step.name == "echo_str"
+    assert len(step.takes) == 1
+    assert step.takes[0].name == "input"
+    assert step.takes[0].type.__class__.__name__ == "PrimitiveType"
+    assert step.takes[0].type.name == "str"
+    assert step.gives is not None
+    assert step.gives.name == "output"
+    assert step.gives.type.name == "str"
+
+
+def test_parse_step_with_multiple_takes():
+    src = (
+        "STEP add\n"
+        "  TAKES: a: int, b: int\n"
+        "  GIVES: sum: int\n"
+        "  MODE:  exact\n"
+    )
+    program = parse(src)
+    step = program.decls[0]
+    assert [f.name for f in step.takes] == ["a", "b"]
+    assert all(f.type.name == "int" for f in step.takes)
+
+
+def test_parse_step_with_unknown_primitive_type_raises():
+    src = "STEP foo\n  TAKES: x: bogus\n  MODE: exact\n"
+    with pytest.raises(ParseError):
+        parse(src)
+
+
+def test_parse_step_rejects_duplicate_mode():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  MODE: judgment\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "duplicate" in str(exc.value).lower()
