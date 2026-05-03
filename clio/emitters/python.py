@@ -327,13 +327,19 @@ class PythonEmitter(BaseEmitter):
         prompt_template = _render_prompt(step)
         result_class = _gives_validator_expr(step.gives)
 
+        cache_active = step.cache is not None and step.cache.mode != "off"
+        ttl_repr = (
+            "None" if step.cache is None or step.cache.mode == "on"
+            else str(step.cache.ttl_seconds)
+        )
+
         sub_lines = [
             f"    prompt = prompt.replace('${{{t.name}}}', json.dumps({_to_field_name(t.name)}))"
             for t in step.takes
         ]
         sub_lines.append("    prompt = prompt.replace('${schema}', _INLINED_SCHEMA)")
 
-        body = [
+        header = [
             f'"""STEP {step.name} (judgment).',
             f'',
             f'Auto-generated. Do not edit; regenerate via `clio compile`.',
@@ -342,9 +348,20 @@ class PythonEmitter(BaseEmitter):
             "",
             "import json",
             "import sys",
+        ]
+        if cache_active:
+            header += [
+                "import os",
+                "from pathlib import Path",
+            ]
+        header += [
             "",
             "from anthropic import Anthropic",
             "",
+        ]
+        if cache_active:
+            header += ["from ..clio_runtime import cache as _cache", ""]
+        header += [
             "from .. import contracts",
             "",
             "",
@@ -371,14 +388,48 @@ class PythonEmitter(BaseEmitter):
             "        return None",
             "",
             "",
-            f"def {step.name}({params}) -> {ret_type}:",
-            "    prompt = _PROMPT_TEMPLATE",
-            *sub_lines,
-            "",
+        ]
+
+        if cache_active:
+            header += [
+                "def _serialize(response):",
+                '    """Re-serialize a validated response for cache storage."""',
+                "    if isinstance(response, list):",
+                "        return json.dumps([(item.model_dump() if hasattr(item, 'model_dump') else item) for item in response])",
+                "    if hasattr(response, 'model_dump'):",
+                "        return json.dumps(response.model_dump())",
+                "    return json.dumps(response)",
+                "",
+                "",
+            ]
+
+        body = list(header)
+        body.append(f"def {step.name}({params}) -> {ret_type}:")
+        body.append("    prompt = _PROMPT_TEMPLATE")
+        body += sub_lines
+        body.append("")
+
+        if cache_active:
+            body += [
+                "    cache_dir = Path(os.environ.get('CLIO_CACHE_DIR', '.cache'))",
+                f"    primary_key = _cache.cache_key({step.name!r}, _PRIMARY_MODEL, prompt, _INLINED_SCHEMA)",
+                f"    hit = _cache.cache_lookup(cache_dir, {step.name!r}, primary_key, {ttl_repr})",
+                "    if hit is not None:",
+                f"        return {result_class}(json.loads(hit))",
+                "",
+            ]
+
+        body += [
             "    response = _attempt(_PRIMARY_MODEL, prompt)",
             "    if response is None:",
             f"        print('[clio] step {step.name}: ON_FAIL strategies exhausted', file=sys.stderr)",
             "        raise SystemExit(1)",
+        ]
+        if cache_active:
+            body.append(
+                f"    _cache.cache_store(cache_dir, {step.name!r}, primary_key, _PRIMARY_MODEL, _serialize(response))"
+            )
+        body += [
             "    return response",
             "",
         ]

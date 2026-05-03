@@ -136,3 +136,46 @@ def test_emit_exact_step_with_no_takes_is_valid_python(tmp_path):
     mod = _load_module("v03_no_takes_test", step_path)
     with pytest.raises(NotImplementedError):
         mod.foo()
+
+
+def test_emit_v03_cache(tmp_path):
+    src = (FIXTURES / "mvp_v03_cache.clio").read_text()
+    graph = build_ir(parse(src))
+    PythonEmitter().emit(graph, tmp_path)
+    expected = _read_tree(FIXTURES / "expected" / "v03_cache")
+    actual = _read_tree(tmp_path)
+    assert actual == expected
+
+
+def test_emit_judgment_cache_hit_skips_sdk(tmp_path, monkeypatch):
+    src = (FIXTURES / "mvp_v03_cache.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    import sys, json
+    sys.path.insert(0, str(tmp_path))
+    try:
+        cache_dir = tmp_path / ".cache"
+        monkeypatch.setenv("CLIO_CACHE_DIR", str(cache_dir))
+
+        from retention.clio_runtime import cache as _cache
+        from retention.steps import detect_churn as dc_mod
+
+        prompt = dc_mod._PROMPT_TEMPLATE
+        prompt = prompt.replace("${customers}", json.dumps([{"name": "X", "revenue": 1.0}]))
+        prompt = prompt.replace("${schema}", dc_mod._INLINED_SCHEMA)
+        key = _cache.cache_key("detect_churn", dc_mod._PRIMARY_MODEL, prompt, dc_mod._INLINED_SCHEMA)
+        cached_payload = json.dumps([{"client": "Cached", "risk": "low", "reason": "from cache"}])
+        _cache.cache_store(cache_dir, "detect_churn", key, dc_mod._PRIMARY_MODEL, cached_payload)
+
+        import anthropic
+        def boom(*a, **kw):
+            raise AssertionError("SDK must not be called on cache hit")
+        monkeypatch.setattr(anthropic, "Anthropic", boom)
+
+        result = dc_mod.detect_churn(customers=[{"name": "X", "revenue": 1.0}])
+        assert len(result) == 1
+        assert result[0].client == "Cached"
+    finally:
+        sys.path.remove(str(tmp_path))
+        for k in list(sys.modules):
+            if k.startswith("retention"):
+                del sys.modules[k]
