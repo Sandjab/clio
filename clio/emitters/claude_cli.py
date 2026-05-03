@@ -103,10 +103,13 @@ class ClaudeCLIEmitter(BaseEmitter):
         for idx, step in enumerate(graph.steps, start=1):
             self._emit_step(steps_dir, idx, step)
 
-        if graph.flow is not None and all(
-            self._step_for_call(graph, c).mode == "exact" for c in graph.flow.chain
-        ):
-            self._emit_run_sh_exact_only(graph, output_dir)
+        if graph.flow is not None:
+            self._emit_run_sh(graph, output_dir)
+            if any(
+                self._step_for_call(graph, c).mode == "judgment"
+                for c in graph.flow.chain
+            ):
+                self._copy_runtime(output_dir)
 
     def _copy_runtime(self, output_dir: Path) -> None:
         """Copy `clio.runtime.*` into the output as a top-level `clio_runtime/` package."""
@@ -126,7 +129,7 @@ class ClaudeCLIEmitter(BaseEmitter):
                 return s
         raise KeyError(call.step_name)
 
-    def _emit_run_sh_exact_only(self, graph: FlowGraph, output_dir: Path) -> None:
+    def _emit_run_sh(self, graph: FlowGraph, output_dir: Path) -> None:
         lines: list[str] = [
             "#!/usr/bin/env bash",
             "set -euo pipefail",
@@ -136,15 +139,31 @@ class ClaudeCLIEmitter(BaseEmitter):
         ]
         for idx, call in enumerate(graph.flow.chain, start=1):
             step = self._step_for_call(graph, call)
-            args = self._render_kwargs_as_cli(call)
-            lines.append(f"# Step {idx}: {step.name} (exact)")
-            script_name = f"steps/{idx:02d}_{step.name}.py"
-            lines.append(f"python {script_name} {args}")
+            if step.mode == "exact":
+                args = self._render_kwargs_as_cli(call)
+                script_name = f"steps/{idx:02d}_{step.name}.py"
+                lines.append(f"# Step {idx}: {step.name} (exact)")
+                lines.append(f"python {script_name} {args}")
+            else:
+                lines.extend(self._render_judgment_step(idx, step, call, model="haiku"))
             lines.append("")
         lines.append('echo "[clio] flow ' + graph.flow.name + ' completed."')
         run_path = output_dir / "run.sh"
         run_path.write_text("\n".join(lines) + "\n")
         run_path.chmod(0o755)
+
+    def _render_judgment_step(self, idx: int, step: StepIR, call, model: str) -> list[str]:
+        prompt_path = f"steps/{idx:02d}_{step.name}.prompt"
+        schema_path = f"steps/{idx:02d}_{step.name}.schema.json"
+        out_name = step.gives.name if step.gives else "result"
+        return [
+            f"# Step {idx}: {step.name} (judgment)",
+            f'PROMPT="$(python -m clio_runtime.substitute {prompt_path} state.json)"',
+            f'PROMPT="${{PROMPT//\\$\\{{schema\\}}/$(cat {schema_path})}}"',
+            f'RESPONSE="$(printf %s "$PROMPT" | claude -p --model {model} --output-format text)"',
+            f'printf %s "$RESPONSE" | python -m clio_runtime.validate {schema_path} -',
+            f"jq --argjson r \"$RESPONSE\" '.{out_name} = $r' state.json > state.json.tmp && mv state.json.tmp state.json",
+        ]
 
     @staticmethod
     def _render_kwargs_as_cli(call) -> str:
