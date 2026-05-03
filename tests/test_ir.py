@@ -118,3 +118,14 @@ def test_flow_typecheck_fails_for_incompatible_chain():
     msg = str(exc.value)
     assert "type mismatch" in msg
     assert "items" in msg
+
+
+def test_build_ir_carries_resources():
+    src = (
+        "STEP foo\n  MODE: exact\n"
+        "RESOURCES\n  target: claude-cli\n  models: [haiku]\n"
+    )
+    graph = build_ir(parse(src))
+    assert graph.resources is not None
+    assert graph.resources.target == "claude-cli"
+    assert graph.resources.models == ("haiku",)

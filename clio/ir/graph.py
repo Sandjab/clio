@@ -41,7 +41,14 @@ class FlowIR:
 
 
 @dataclass(frozen=True)
+class ResourcesIR:
+    target: str
+    models: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class FlowGraph:
     steps: tuple[StepIR, ...]
     contracts: tuple[ContractIR, ...] = ()
     flow: FlowIR | None = None
+    resources: ResourcesIR | None = None

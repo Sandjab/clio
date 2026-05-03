@@ -5,6 +5,7 @@ from clio.ir.graph import (
     FieldIR,
     FlowGraph,
     FlowIR,
+    ResourcesIR,
     StepIR,
 )
 from clio.ir.types import names_equal, types_equal
@@ -18,6 +19,7 @@ from clio.parser.ast_nodes import (
     PrimitiveType,
     Program,
     RecordType,
+    ResourcesDecl,
     StepDecl,
     TypeExpr,
 )
@@ -63,10 +65,20 @@ def build_ir(program: Program) -> FlowGraph:
                 )
             flow_ir = _build_flow(d, steps_by_name, contracts)
 
+    resources_ir: ResourcesIR | None = None
+    for d in program.decls:
+        if isinstance(d, ResourcesDecl):
+            if resources_ir is not None:
+                raise IRBuildError(
+                    f"line {d.line}:{d.col}: only one RESOURCES declaration is allowed"
+                )
+            resources_ir = ResourcesIR(target=d.target, models=d.models)
+
     return FlowGraph(
         steps=tuple(steps_by_name.values()),
         contracts=tuple(contracts.values()),
         flow=flow_ir,
+        resources=resources_ir,
     )
 
 
