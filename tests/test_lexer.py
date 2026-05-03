@@ -36,3 +36,14 @@ def test_lex_ignores_blank_and_comment_lines():
     # First non-trivial token must still be STEP
     assert tokens[0].type == TokenType.KEYWORD
     assert tokens[0].value == "STEP"
+
+
+def test_lex_takes_gives_with_primitive():
+    src = "STEP echo_str\n  TAKES: input: str\n  GIVES: output: str\n  MODE: exact\n"
+    tokens = lex(src)
+    types = _types(tokens)
+    keyword_values = [t.value for t in tokens if t.type == TokenType.KEYWORD]
+    assert "TAKES" in keyword_values
+    assert "GIVES" in keyword_values
+    assert "str" in keyword_values
+    assert types.count(TokenType.COLON) == 5  # TAKES:, input:, GIVES:, output:, MODE:
