@@ -2,9 +2,29 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class TypeExpr:
+    """Base class for type expression nodes."""
+
+
+@dataclass(frozen=True)
+class PrimitiveType(TypeExpr):
+    name: str       # one of: int, float, str, bool
+
+
+@dataclass(frozen=True)
+class Field:
+    name: str
+    type: TypeExpr
+    line: int
+    col: int
+
+
+@dataclass(frozen=True)
 class StepDecl:
     name: str
-    mode: str               # "exact" or "judgment"
+    mode: str
+    takes: tuple[Field, ...]
+    gives: Field | None
     line: int
     col: int
 
