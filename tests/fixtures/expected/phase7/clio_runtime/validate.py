@@ -10,6 +10,9 @@ Public surface:
 no interpreter or string-compilation involved. The walker accepts only the
 node kinds emitted by the v0.1 parser: ident, int, float, str, call(len, ...),
 and compare(==,!=,<,>,<=,>=). Any other node raises ValueError.
+
+Uses the `referencing` library (jsonschema 4.18+ replacement for RefResolver)
+to resolve relative `$ref`s against the schema's filesystem location.
 """
 
 import json
@@ -17,18 +20,34 @@ import sys
 from pathlib import Path
 
 import jsonschema
-from jsonschema import RefResolver
+from referencing import Registry, Resource
+from referencing.jsonschema import DRAFT202012
 
 
-def validate(schema_path: Path, instance: object, base_uri: str | None = None) -> None:
+def validate(schema_path: Path, instance: object) -> None:
     schema = json.loads(schema_path.read_text())
-    resolver_uri = base_uri or schema_path.resolve().parent.as_uri() + "/"
-    resolver = RefResolver(base_uri=resolver_uri, referrer=schema)
-    jsonschema.validate(instance=instance, schema=schema, resolver=resolver)
-    _check_assert(schema, instance, resolver)
+    base_dir = schema_path.resolve().parent
+    registry = _build_registry(base_dir)
+    validator = jsonschema.Draft202012Validator(schema, registry=registry)
+    validator.validate(instance)
+    _check_assert(schema, instance, base_dir)
 
 
-def _check_assert(schema: dict, instance: object, resolver: RefResolver) -> None:
+def _build_registry(base_dir: Path) -> Registry:
+    """Registry with a retrieve callback that loads schemas from disk relative to base_dir."""
+    def retrieve(uri: str):
+        if uri.startswith("file://"):
+            path = Path(uri[len("file://"):])
+        else:
+            path = Path(uri)
+        if not path.is_absolute():
+            path = base_dir / uri
+        contents = json.loads(path.read_text())
+        return Resource.from_contents(contents, default_specification=DRAFT202012)
+    return Registry(retrieve=retrieve)
+
+
+def _check_assert(schema: dict, instance: object, base_dir: Path) -> None:
     expr = schema.get("x-clio-assert")
     if expr is not None and isinstance(instance, dict):
         if not _walk(expr, instance):
@@ -39,7 +58,7 @@ def _check_assert(schema: dict, instance: object, resolver: RefResolver) -> None
         if isinstance(items, dict):
             target_schema = items
             if "$ref" in items:
-                _, target_schema = resolver.resolve(items["$ref"])
+                target_schema = json.loads((base_dir / items["$ref"]).read_text())
             inner_expr = target_schema.get("x-clio-assert")
             if inner_expr is not None:
                 for item in instance:
