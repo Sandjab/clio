@@ -226,7 +226,7 @@ class ClaudeCLIEmitter(BaseEmitter):
                 lines.append(f'"$PYTHON" {script_name} {args}')
             else:
                 lines.extend(self._render_judgment_step(
-                    idx, step, call,
+                    graph, idx, step, call,
                     models_list=models_list,
                     contracts_by_name=contracts_by_name,
                 ))
@@ -236,8 +236,18 @@ class ClaudeCLIEmitter(BaseEmitter):
         run_path.write_text("\n".join(lines) + "\n")
         run_path.chmod(0o755)
 
+    @staticmethod
+    def _step_index_in_emit(graph: FlowGraph, target: "StepIR") -> int:
+        """Index (1-based) of `target` in graph.steps in emission order. The
+        emitter writes step files as `steps/NN_<name>.py` indexed by this order."""
+        for i, s in enumerate(graph.steps, start=1):
+            if s.name == target.name:
+                return i
+        raise KeyError(target.name)
+
     def _render_judgment_step(
         self,
+        graph: FlowGraph,
         idx: int,
         step: StepIR,
         call,
@@ -351,11 +361,25 @@ class ClaudeCLIEmitter(BaseEmitter):
                     f'{ind}fi',
                 ]
             elif s.kind == "fallback":
-                # Slice G fills this in. In slice F, fixtures don't use fallback.
-                raise NotImplementedError(
-                    f"fallback strategy not yet supported in this build "
-                    f"(step {step.name}, fallback to {s.fallback_step.name if s.fallback_step else '?'})"
-                )
+                # Run the fallback step. The fallback step's own emitted Python
+                # script reads its TAKES from state.json and writes its GIVES
+                # back, exactly the same way as a regular exact step would.
+                fb_step = s.fallback_step
+                # We need to know the index of the fallback step in graph.steps
+                # to construct its filename. The emitter is stateless re: this,
+                # so we look it up via the helper.
+                fb_idx = self._step_index_in_emit(graph, fb_step)
+                fb_script = f"steps/{fb_idx:02d}_{fb_step.name}.py"
+                # Reconstruct the kwargs from the call's state references —
+                # we use the same kwargs the main step uses, since fallback
+                # has identical TAKES.
+                args = self._render_kwargs_as_cli(call)
+                out += [
+                    f'{ind}if [ -z "$RESPONSE_{idx:02d}" ]; then',
+                    f'{ind}    "$PYTHON" {fb_script} {args}',
+                    f"{ind}    RESPONSE_{idx:02d}=\"$(jq -c .{out_name} state.json)\"",
+                    f'{ind}fi',
+                ]
 
         # Implicit abort if no terminal `abort` clause and the response is still empty.
         terminal = strategies and strategies[-1].kind == "abort"

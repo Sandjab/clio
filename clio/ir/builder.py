@@ -50,6 +50,7 @@ def build_ir(program: Program) -> FlowGraph:
                 line=d.line,
             )
 
+    # Pass 1: build StepIRs with fallback placeholders.
     steps_by_name: dict[str, StepIR] = {}
     for d in program.decls:
         if isinstance(d, StepDecl):
@@ -58,6 +59,12 @@ def build_ir(program: Program) -> FlowGraph:
             if d.gives is not None:
                 _check_refs(d.gives.type, contracts, d.gives.line, d.gives.col)
             steps_by_name[d.name] = _build_step(d)
+
+    # Pass 2: resolve fallback step refs and check compat.
+    steps_by_name = _resolve_fallbacks(steps_by_name, contracts)
+
+    # Pass 3: detect cycles in the fallback graph.
+    _detect_fallback_cycles(steps_by_name)
 
     flow_ir: FlowIR | None = None
     for d in program.decls:
@@ -83,6 +90,106 @@ def build_ir(program: Program) -> FlowGraph:
         flow=flow_ir,
         resources=resources_ir,
     )
+
+
+def _resolve_fallbacks(
+    steps_by_name: dict[str, StepIR],
+    contracts: dict[str, ContractIR],
+) -> dict[str, StepIR]:
+    """For each step that has on_fail.strategies containing fallback clauses,
+    replace the OnFailChainIR with one where each fallback strategy has its
+    fallback_step pointing to the resolved StepIR. Validates compat."""
+    new_steps: dict[str, StepIR] = {}
+    for name, step in steps_by_name.items():
+        if step.on_fail is None:
+            new_steps[name] = step
+            continue
+        new_strategies: list[OnFailStrategyIR] = []
+        for s in step.on_fail.strategies:
+            if s.kind != "fallback":
+                new_strategies.append(s)
+                continue
+            target_name = s.fallback_step_name
+            if target_name not in steps_by_name:
+                raise IRBuildError(
+                    f"line {step.line}:0: ON_FAIL fallback target {target_name!r} does not exist"
+                )
+            target = steps_by_name[target_name]
+            _check_fallback_compat(step, target, contracts)
+            new_strategies.append(OnFailStrategyIR(
+                kind="fallback",
+                fallback_step_name=target_name,
+                fallback_step=target,
+                abort_message=None,
+                max_retries=None,
+            ))
+        new_steps[name] = StepIR(
+            name=step.name, mode=step.mode, takes=step.takes, gives=step.gives,
+            cache=step.cache,
+            on_fail=OnFailChainIR(strategies=tuple(new_strategies)),
+            line=step.line,
+        )
+    return new_steps
+
+
+def _check_fallback_compat(
+    main: StepIR, fb: StepIR, contracts: dict[str, ContractIR]
+) -> None:
+    if len(main.takes) != len(fb.takes):
+        raise IRBuildError(
+            f"line {main.line}:0: ON_FAIL fallback {fb.name!r} has incompatible TAKES "
+            f"(arity mismatch)"
+        )
+    for mt, ft in zip(main.takes, fb.takes):
+        if mt.name != ft.name or not (
+            types_equal(mt.type, ft.type, contracts) or names_equal(mt.type, ft.type)
+        ):
+            raise IRBuildError(
+                f"line {main.line}:0: ON_FAIL fallback {fb.name!r} has incompatible TAKES "
+                f"(expected {mt.name}: {_render(mt.type)}, got {ft.name}: {_render(ft.type)})"
+            )
+    main_gives = main.gives
+    fb_gives = fb.gives
+    if (main_gives is None) != (fb_gives is None):
+        raise IRBuildError(
+            f"line {main.line}:0: ON_FAIL fallback {fb.name!r} has incompatible GIVES "
+            f"(one is None, the other is not)"
+        )
+    if main_gives is not None and fb_gives is not None:
+        if main_gives.name != fb_gives.name or not (
+            types_equal(main_gives.type, fb_gives.type, contracts)
+            or names_equal(main_gives.type, fb_gives.type)
+        ):
+            raise IRBuildError(
+                f"line {main.line}:0: ON_FAIL fallback {fb.name!r} has incompatible GIVES "
+                f"(expected {main_gives.name}: {_render(main_gives.type)}, "
+                f"got {fb_gives.name}: {_render(fb_gives.type)})"
+            )
+
+
+def _detect_fallback_cycles(steps_by_name: dict[str, StepIR]) -> None:
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color: dict[str, int] = {n: WHITE for n in steps_by_name}
+
+    def visit(name: str, path: list[str]) -> None:
+        if color[name] == GRAY:
+            raise IRBuildError(
+                f"line {steps_by_name[name].line}:0: ON_FAIL fallback creates a cycle: "
+                + " -> ".join(path + [name])
+            )
+        if color[name] == BLACK:
+            return
+        color[name] = GRAY
+        step = steps_by_name[name]
+        if step.on_fail is not None:
+            for s in step.on_fail.strategies:
+                if s.kind == "fallback" and s.fallback_step is not None:
+                    visit(s.fallback_step.name, path + [name])
+        color[name] = BLACK
+
+    for n in steps_by_name:
+        if color[n] == WHITE:
+            visit(n, [])
 
 
 def _build_step(decl: StepDecl) -> StepIR:

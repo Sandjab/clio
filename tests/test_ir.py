@@ -1,3 +1,5 @@
+import pytest
+
 from clio.parser.parser import parse
 from clio.ir.builder import build_ir
 from clio.ir.contracts import type_to_json_schema
@@ -163,3 +165,93 @@ def test_build_ir_carries_on_fail():
     assert kinds == ["retry", "escalate", "abort"]
     assert of.strategies[0].max_retries == 3
     assert of.strategies[2].abort_message == "done"
+
+
+def test_build_ir_resolves_fallback_step():
+    src = (
+        "STEP main\n"
+        "  TAKES: x: int\n"
+        "  GIVES: y: str\n"
+        "  MODE:  judgment\n"
+        "  ON_FAIL: fallback(naive)\n"
+        "STEP naive\n"
+        "  TAKES: x: int\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+    )
+    graph = build_ir(parse(src))
+    main_step = next(s for s in graph.steps if s.name == "main")
+    fb = main_step.on_fail.strategies[0]
+    assert fb.kind == "fallback"
+    assert fb.fallback_step is not None
+    assert fb.fallback_step.name == "naive"
+
+
+def test_build_ir_fallback_unknown_step_raises():
+    src = (
+        "STEP main\n"
+        "  TAKES: x: int\n"
+        "  GIVES: y: str\n"
+        "  MODE:  judgment\n"
+        "  ON_FAIL: fallback(missing)\n"
+    )
+    with pytest.raises(ValueError) as exc:
+        build_ir(parse(src))
+    assert "missing" in str(exc.value)
+
+
+def test_build_ir_fallback_takes_mismatch_raises():
+    src = (
+        "STEP main\n"
+        "  TAKES: x: int\n"
+        "  GIVES: y: str\n"
+        "  MODE:  judgment\n"
+        "  ON_FAIL: fallback(naive)\n"
+        "STEP naive\n"
+        "  TAKES: x: str\n"          # different type
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+    )
+    import pytest as _pt
+    with _pt.raises(ValueError) as exc:
+        build_ir(parse(src))
+    msg = str(exc.value)
+    assert "incompatible" in msg.lower()
+    assert "TAKES" in msg
+
+
+def test_build_ir_fallback_gives_mismatch_raises():
+    src = (
+        "STEP main\n"
+        "  TAKES: x: int\n"
+        "  GIVES: y: str\n"
+        "  MODE:  judgment\n"
+        "  ON_FAIL: fallback(naive)\n"
+        "STEP naive\n"
+        "  TAKES: x: int\n"
+        "  GIVES: y: int\n"          # different type
+        "  MODE:  exact\n"
+    )
+    with pytest.raises(ValueError) as exc:
+        build_ir(parse(src))
+    msg = str(exc.value)
+    assert "incompatible" in msg.lower()
+    assert "GIVES" in msg
+
+
+def test_build_ir_fallback_cycle_raises():
+    src = (
+        "STEP a\n"
+        "  TAKES: x: int\n"
+        "  GIVES: y: str\n"
+        "  MODE:  judgment\n"
+        "  ON_FAIL: fallback(b)\n"
+        "STEP b\n"
+        "  TAKES: x: int\n"
+        "  GIVES: y: str\n"
+        "  MODE:  judgment\n"
+        "  ON_FAIL: fallback(a)\n"
+    )
+    with pytest.raises(ValueError) as exc:
+        build_ir(parse(src))
+    assert "cycle" in str(exc.value).lower()

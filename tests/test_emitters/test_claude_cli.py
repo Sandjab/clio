@@ -113,6 +113,16 @@ def test_emit_v02_onfail(tmp_path):
     assert actual == expected
 
 
+def test_emit_v02_fallback(tmp_path):
+    src = (FIXTURES / "mvp_v02_fallback.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeCLIEmitter().emit(graph, tmp_path)
+
+    expected = _read_tree(FIXTURES / "expected" / "v02_fallback")
+    actual = _read_tree(tmp_path)
+    assert actual == expected
+
+
 def test_emit_abort_message_is_shell_quoted():
     """Bash injection guard: abort messages from CLIO source must be shlex-quoted."""
     src = (
