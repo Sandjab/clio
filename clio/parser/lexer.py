@@ -56,6 +56,13 @@ def lex(source: str) -> list[Token]:
                     if stripped[j] == ".":
                         saw_dot = True
                     j += 1
+                # Duration suffix: int followed by [smhd] becomes a single DURATION token.
+                if not saw_dot and j < len(stripped) and stripped[j] in "smhd":
+                    suffix_end = j + 1
+                    tokens.append(Token(TokenType.DURATION, stripped[i:suffix_end], lineno, col))
+                    col += suffix_end - i
+                    i = suffix_end
+                    continue
                 tokens.append(Token(TokenType.NUMBER, stripped[i:j], lineno, col))
                 col += j - i
                 i = j

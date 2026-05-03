@@ -7,6 +7,7 @@ class TokenType(str, Enum):
     IDENT = "IDENT"
     NUMBER = "NUMBER"
     STRING = "STRING"
+    DURATION = "DURATION"
     EQUALS = "EQUALS"
     OP_EQ = "OP_EQ"        # ==
     OP_NE = "OP_NE"        # !=

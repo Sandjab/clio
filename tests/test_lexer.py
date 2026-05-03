@@ -93,3 +93,28 @@ def test_lex_comparison_operators():
     assert TokenType.OP_NE in types
     assert TokenType.OP_GE in types
     assert TokenType.OP_LE in types
+
+
+def test_lex_duration():
+    tokens = lex("a 24h 7d 30s 5m\n")
+    durations = [t for t in tokens if t.type == TokenType.DURATION]
+    assert [t.value for t in durations] == ["24h", "7d", "30s", "5m"]
+
+
+def test_lex_int_without_suffix_is_number():
+    tokens = lex("a 42 3.14\n")
+    nums = [t for t in tokens if t.type == TokenType.NUMBER]
+    assert [t.value for t in nums] == ["42", "3.14"]
+
+
+def test_lex_new_keywords():
+    src = (
+        "STEP s\n"
+        "  CACHE: ttl(24h)\n"
+        "  ON_FAIL: retry(3) then escalate then fallback(other) then abort(\"x\")\n"
+        "  MODE: judgment\n"
+    )
+    tokens = lex(src)
+    keyword_values = {t.value for t in tokens if t.type == TokenType.KEYWORD}
+    for k in ("CACHE", "ttl", "ON_FAIL", "retry", "then", "escalate", "fallback", "abort"):
+        assert k in keyword_values, f"missing keyword {k!r}"
