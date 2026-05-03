@@ -10,6 +10,7 @@ class TokenType(str, Enum):
     EQUALS = "EQUALS"
     COLON = "COLON"
     COMMA = "COMMA"
+    ARROW = "ARROW"      # ->
     LANGLE = "LANGLE"
     RANGLE = "RANGLE"
     LBRACE = "LBRACE"

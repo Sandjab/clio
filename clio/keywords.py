@@ -21,3 +21,4 @@ class Keyword(str, Enum):
     CONTRACT = "CONTRACT"
     SHAPE = "SHAPE"
     CSV = "CSV"
+    FLOW = "FLOW"

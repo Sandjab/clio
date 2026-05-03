@@ -78,3 +78,9 @@ def test_lex_number_and_string():
     assert TokenType.STRING in types
     string_tok = [t for t in extra if t.type == TokenType.STRING][0]
     assert string_tok.value == "hello world"
+
+
+def test_lex_arrow():
+    src = "FLOW f\n  a -> b\n"
+    tokens = lex(src)
+    assert any(t.type == TokenType.ARROW for t in tokens)

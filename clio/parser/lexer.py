@@ -68,6 +68,11 @@ def lex(source: str) -> list[Token]:
                 col += (j - i) + 1
                 i = j + 1
                 continue
+            if ch == "-" and i + 1 < len(stripped) and stripped[i + 1] == ">":
+                tokens.append(Token(TokenType.ARROW, "->", lineno, col))
+                i += 2
+                col += 2
+                continue
             single = _SINGLE_CHAR_TOKENS.get(ch)
             if single is not None:
                 tokens.append(Token(single, ch, lineno, col))
