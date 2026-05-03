@@ -55,6 +55,7 @@ class ContractRef(TypeExpr):
 class ContractDecl:
     name: str
     shape: TypeExpr    # always a RecordType in v0.1
+    assert_expr: "ExprNode | None"
     line: int
     col: int
 

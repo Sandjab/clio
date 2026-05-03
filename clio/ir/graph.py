@@ -22,6 +22,7 @@ class StepIR:
 class ContractIR:
     name: str
     json_schema: dict
+    assert_json_ast: "dict | None"
     line: int
 
 

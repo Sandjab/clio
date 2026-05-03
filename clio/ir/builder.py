@@ -31,9 +31,17 @@ def build_ir(program: Program) -> FlowGraph:
     contracts: dict[str, ContractIR] = {}
     for d in program.decls:
         if isinstance(d, ContractDecl):
+            from clio.parser.expressions import expr_to_json_ast
+            assert_ast = (
+                expr_to_json_ast(d.assert_expr) if d.assert_expr is not None else None
+            )
+            schema = type_to_json_schema(d.shape)
+            if assert_ast is not None:
+                schema["x-clio-assert"] = assert_ast
             contracts[d.name] = ContractIR(
                 name=d.name,
-                json_schema=type_to_json_schema(d.shape),
+                json_schema=schema,
+                assert_json_ast=assert_ast,
                 line=d.line,
             )
 

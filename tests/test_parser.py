@@ -198,3 +198,14 @@ def test_parse_flow_arrow_required_between_calls():
     )
     with pytest.raises(ParseError):
         parse(src)
+
+
+def test_parse_contract_with_assert():
+    src = (
+        "CONTRACT r\n"
+        "  SHAPE:  {x: int, name: str}\n"
+        "  ASSERT: len(name) > 0\n"
+    )
+    program = parse(src)
+    c = program.decls[0]
+    assert c.assert_expr is not None

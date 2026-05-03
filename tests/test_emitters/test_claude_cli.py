@@ -71,3 +71,13 @@ def test_emit_phase7_run_sh_is_executable(tmp_path):
     graph = build_ir(parse(src))
     ClaudeCLIEmitter().emit(graph, tmp_path)
     assert (tmp_path / "run.sh").stat().st_mode & 0o111
+
+
+def test_emit_phase8(tmp_path):
+    src = (FIXTURES / "mvp_phase8.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeCLIEmitter().emit(graph, tmp_path)
+
+    expected = _read_tree(FIXTURES / "expected" / "phase8")
+    actual = _read_tree(tmp_path)
+    assert actual == expected

@@ -141,12 +141,14 @@ class _Parser:
         return StepDecl(name=ident.value, mode=mode, takes=takes, gives=gives, line=kw.line, col=kw.col)
 
     def parse_contract(self) -> "ContractDecl":
+        from clio.parser.expressions import parse_expression
         kw = self.expect(TokenType.KEYWORD, "CONTRACT")
         ident = self.expect(TokenType.IDENT)
         self.expect(TokenType.NEWLINE)
         self.expect(TokenType.INDENT)
 
         shape: TypeExpr | None = None
+        assert_expr = None
         while self.peek().type != TokenType.DEDENT:
             t = self.peek()
             if t.type == TokenType.KEYWORD and t.value == "SHAPE":
@@ -154,9 +156,25 @@ class _Parser:
                 self.expect(TokenType.COLON)
                 shape = self.parse_type_expr()
                 self.expect(TokenType.NEWLINE)
+            elif t.type == TokenType.KEYWORD and t.value == "ASSERT":
+                self.advance()
+                self.expect(TokenType.COLON)
+                start = self.pos
+                while self.tokens[self.pos].type != TokenType.NEWLINE:
+                    self.pos += 1
+                expr_tokens = self.tokens[start:self.pos]
+                expr, consumed = parse_expression(expr_tokens)
+                if consumed != len(expr_tokens):
+                    leftover = expr_tokens[consumed]
+                    raise ParseError(
+                        f"unexpected token {leftover.value!r} after ASSERT expression",
+                        leftover.line, leftover.col,
+                    )
+                assert_expr = expr
+                self.expect(TokenType.NEWLINE)
             else:
                 raise ParseError(
-                    f"unsupported contract field {t.value!r} (v0.1: SHAPE only)",
+                    f"unsupported contract field {t.value!r} (v0.1: SHAPE, ASSERT)",
                     t.line, t.col,
                 )
         self.expect(TokenType.DEDENT)
@@ -166,7 +184,13 @@ class _Parser:
                 f"CONTRACT {ident.value} is missing required SHAPE field",
                 kw.line, kw.col,
             )
-        return ContractDecl(name=ident.value, shape=shape, line=kw.line, col=kw.col)
+        return ContractDecl(
+            name=ident.value,
+            shape=shape,
+            assert_expr=assert_expr,
+            line=kw.line,
+            col=kw.col,
+        )
 
     def parse_field_list(self) -> tuple[Field, ...]:
         fields = [self.parse_field()]
