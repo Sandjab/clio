@@ -108,6 +108,17 @@ class ClaudeCLIEmitter(BaseEmitter):
         ):
             self._emit_run_sh_exact_only(graph, output_dir)
 
+    def _copy_runtime(self, output_dir: Path) -> None:
+        """Copy `clio.runtime.*` into the output as a top-level `clio_runtime/` package."""
+        from clio import runtime as src_pkg
+        src_dir = Path(src_pkg.__file__).parent
+        dest = output_dir / "clio_runtime"
+        dest.mkdir(exist_ok=True)
+        for name in ("__init__.py", "validate.py", "substitute.py"):
+            src_file = src_dir / name
+            if src_file.exists():
+                (dest / name).write_text(src_file.read_text())
+
     @staticmethod
     def _step_for_call(graph: FlowGraph, call) -> StepIR:
         for s in graph.steps:
