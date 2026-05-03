@@ -273,3 +273,58 @@ def test_parse_cache_duplicate_raises():
     with pytest.raises(ParseError) as exc:
         parse(src)
     assert "duplicate" in str(exc.value).lower()
+
+
+def test_parse_on_fail_retry_only():
+    src = "STEP s\n  GIVES: r: str\n  MODE: judgment\n  ON_FAIL: retry(3)\n"
+    step = parse(src).decls[0]
+    assert step.on_fail is not None
+    assert len(step.on_fail.strategies) == 1
+    s = step.on_fail.strategies[0]
+    assert s.kind == "retry"
+    assert s.max_retries == 3
+
+
+def test_parse_on_fail_chain():
+    src = (
+        "STEP s\n  GIVES: r: str\n  MODE: judgment\n"
+        '  ON_FAIL: retry(3) then escalate then abort("nope")\n'
+    )
+    step = parse(src).decls[0]
+    kinds = [s.kind for s in step.on_fail.strategies]
+    assert kinds == ["retry", "escalate", "abort"]
+    assert step.on_fail.strategies[0].max_retries == 3
+    assert step.on_fail.strategies[2].abort_message == "nope"
+
+
+def test_parse_on_fail_fallback_clause_lexes():
+    # Resolution + compat check is in slice G; in slice E the parser only stores the name.
+    src = (
+        "STEP s\n  GIVES: r: str\n  MODE: judgment\n"
+        "  ON_FAIL: retry(2) then fallback(other_step)\n"
+    )
+    step = parse(src).decls[0]
+    fb = step.on_fail.strategies[1]
+    assert fb.kind == "fallback"
+    assert fb.fallback_step_name == "other_step"
+
+
+def test_parse_on_fail_on_exact_step_raises():
+    src = (
+        "STEP s\n  GIVES: r: str\n  MODE: exact\n  ON_FAIL: retry(3)\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "ON_FAIL" in str(exc.value)
+    assert "judgment" in str(exc.value)
+
+
+def test_parse_on_fail_duplicate_raises():
+    src = (
+        "STEP s\n  GIVES: r: str\n  MODE: judgment\n"
+        "  ON_FAIL: retry(2)\n"
+        "  ON_FAIL: abort(\"x\")\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "duplicate" in str(exc.value).lower()

@@ -7,6 +7,8 @@ from clio.parser.ast_nodes import (
     Field,
     FlowDecl,
     ListType,
+    OnFailChain,
+    OnFailStrategy,
     PrimitiveType,
     Program,
     RecordType,
@@ -142,6 +144,7 @@ class _Parser:
         gives: Field | None = None
         mode: str | None = None
         cache: CacheConfig | None = None
+        on_fail: OnFailChain | None = None
 
         while self.peek().type != TokenType.DEDENT:
             t = self.peek()
@@ -190,6 +193,12 @@ class _Parser:
                         f"STEP {ident.value} has duplicate CACHE field", t.line, t.col,
                     )
                 cache = self.parse_cache(t.line, t.col)
+            elif t.value == "ON_FAIL":
+                if on_fail is not None:
+                    raise ParseError(
+                        f"STEP {ident.value} has duplicate ON_FAIL field", t.line, t.col,
+                    )
+                on_fail = self.parse_on_fail(t.line, t.col)
             else:
                 raise ParseError(f"unexpected step field {t.value!r}", t.line, t.col)
 
@@ -203,10 +212,15 @@ class _Parser:
                 f"'CACHE' is only supported on judgment steps in v0.2 (got mode {mode!r})",
                 cache.line, cache.col,
             )
+        if on_fail is not None and mode != "judgment":
+            raise ParseError(
+                f"'ON_FAIL' is only supported on judgment steps in v0.2 (got mode {mode!r})",
+                on_fail.line, on_fail.col,
+            )
 
         return StepDecl(
             name=ident.value, mode=mode, takes=takes, gives=gives,
-            cache=cache, line=kw.line, col=kw.col,
+            cache=cache, on_fail=on_fail, line=kw.line, col=kw.col,
         )
 
     def parse_cache(self, line: int, col: int) -> CacheConfig:
@@ -234,6 +248,50 @@ class _Parser:
             )
         raise ParseError(
             f"expected CACHE value (on | off | ttl(<dur>)), got {t.type.value} {t.value!r}",
+            t.line, t.col,
+        )
+
+    def parse_on_fail(self, line: int, col: int) -> OnFailChain:
+        self.expect(TokenType.KEYWORD, "ON_FAIL")
+        self.expect(TokenType.COLON)
+        strategies = [self.parse_strategy()]
+        while self.peek().type == TokenType.KEYWORD and self.peek().value == "then":
+            self.advance()
+            strategies.append(self.parse_strategy())
+        self.expect(TokenType.NEWLINE)
+        return OnFailChain(strategies=tuple(strategies), line=line, col=col)
+
+    def parse_strategy(self) -> OnFailStrategy:
+        t = self.expect(TokenType.KEYWORD)
+        if t.value == "retry":
+            self.expect(TokenType.LPAREN)
+            n_tok = self.expect(TokenType.NUMBER)
+            self.expect(TokenType.RPAREN)
+            return OnFailStrategy(
+                kind="retry", max_retries=int(n_tok.value),
+                line=t.line, col=t.col,
+            )
+        if t.value == "escalate":
+            return OnFailStrategy(kind="escalate", line=t.line, col=t.col)
+        if t.value == "fallback":
+            self.expect(TokenType.LPAREN)
+            name_tok = self.expect(TokenType.IDENT)
+            self.expect(TokenType.RPAREN)
+            return OnFailStrategy(
+                kind="fallback", fallback_step_name=name_tok.value,
+                line=t.line, col=t.col,
+            )
+        if t.value == "abort":
+            self.expect(TokenType.LPAREN)
+            msg_tok = self.expect(TokenType.STRING)
+            self.expect(TokenType.RPAREN)
+            return OnFailStrategy(
+                kind="abort", abort_message=msg_tok.value,
+                line=t.line, col=t.col,
+            )
+        raise ParseError(
+            f"unknown ON_FAIL strategy {t.value!r} "
+            f"(expected retry / escalate / fallback / abort)",
             t.line, t.col,
         )
 

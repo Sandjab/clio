@@ -41,6 +41,7 @@ class StepDecl:
     takes: tuple[Field, ...]
     gives: Field | None
     cache: "CacheConfig | None"
+    on_fail: "OnFailChain | None"
     line: int
     col: int
 
@@ -140,5 +141,28 @@ class CacheConfig:
     For 'ttl', `ttl_seconds` is the parsed duration in seconds; for 'on' / 'off' it is None."""
     mode: str           # "on" | "off" | "ttl"
     ttl_seconds: int | None
+    line: int
+    col: int
+
+
+@dataclass(frozen=True)
+class OnFailStrategy:
+    """One clause in an ON_FAIL chain. `kind` is one of:
+       'retry'    → max_retries: int
+       'escalate' → no extra fields
+       'fallback' → fallback_step_name: str    (resolved in slice G)
+       'abort'    → abort_message: str
+    """
+    kind: str
+    max_retries: int | None = None
+    fallback_step_name: str | None = None
+    abort_message: str | None = None
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class OnFailChain:
+    strategies: tuple[OnFailStrategy, ...]
     line: int
     col: int
