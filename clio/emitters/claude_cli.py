@@ -1,7 +1,10 @@
+import json
 from pathlib import Path
 
 from clio.emitters.base import BaseEmitter
-from clio.ir.graph import FieldIR, FlowGraph, StepIR
+from clio.ir.contracts import type_to_json_schema
+from clio.ir.graph import ContractIR, FieldIR, FlowGraph, StepIR
+from clio.parser.ast_nodes import PrimitiveType
 
 
 _CLAUDE_MD = """# CLIO-emitted project
@@ -31,7 +34,7 @@ if __name__ == "__main__":
 '''
 
 
-_STEP_WITH_FIELDS = '''"""Step: {name} (mode={mode})
+_EXACT_STEP_TEMPLATE = '''"""Step: {name} (mode={mode})
 
 {io_doc}
 
@@ -65,6 +68,18 @@ if __name__ == "__main__":
 '''
 
 
+_JUDGMENT_PROMPT_TEMPLATE = """You are executing the CLIO step `{name}`.
+
+Input:
+{input_block}
+
+Produce a JSON value that matches this schema:
+${{schema}}
+
+Respond with ONLY the JSON value, no prose.
+"""
+
+
 class ClaudeCLIEmitter(BaseEmitter):
     def emit(self, graph: FlowGraph, output_dir: Path) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -74,6 +89,14 @@ class ClaudeCLIEmitter(BaseEmitter):
         claude_dir.mkdir(exist_ok=True)
         (claude_dir / "hooks.json").write_text("{}")
 
+        if graph.contracts:
+            contracts_dir = output_dir / "contracts"
+            contracts_dir.mkdir(exist_ok=True)
+            for c in graph.contracts:
+                (contracts_dir / f"{c.name}.schema.json").write_text(
+                    json.dumps(c.json_schema, indent=2) + "\n"
+                )
+
         steps_dir = output_dir / "steps"
         steps_dir.mkdir(exist_ok=True)
         for idx, step in enumerate(graph.steps, start=1):
@@ -81,8 +104,17 @@ class ClaudeCLIEmitter(BaseEmitter):
 
     @staticmethod
     def _emit_step(steps_dir: Path, idx: int, step: StepIR) -> None:
-        filename = f"{idx:02d}_{step.name}.py"
+        prefix = f"{idx:02d}_{step.name}"
+        if step.mode == "judgment":
+            (steps_dir / f"{prefix}.prompt").write_text(_render_prompt(step))
+            if step.gives is not None:
+                schema = type_to_json_schema(step.gives.type)
+                (steps_dir / f"{prefix}.schema.json").write_text(
+                    json.dumps(schema, indent=2) + "\n"
+                )
+            return
 
+        # exact step
         if not step.takes and step.gives is None:
             body = _STEP_NO_FIELDS.format(name=step.name, mode=step.mode)
         else:
@@ -96,7 +128,7 @@ class ClaudeCLIEmitter(BaseEmitter):
             out_name = step.gives.name if step.gives else "result"
             assigned_from = step.takes[0].name if step.takes else '""'
             assignment = f"{out_name} = args.{assigned_from}  # echo: TODO replace with real logic"
-            body = _STEP_WITH_FIELDS.format(
+            body = _EXACT_STEP_TEMPLATE.format(
                 name=step.name,
                 mode=step.mode,
                 io_doc=io_doc,
@@ -104,7 +136,12 @@ class ClaudeCLIEmitter(BaseEmitter):
                 body=assignment,
                 out_name=out_name,
             )
-        (steps_dir / filename).write_text(body)
+        (steps_dir / f"{prefix}.py").write_text(body)
+
+
+def _render_prompt(step: StepIR) -> str:
+    input_block = "\n".join(f"  {f.name}: ${{{f.name}}}" for f in step.takes) or "  (no inputs)"
+    return _JUDGMENT_PROMPT_TEMPLATE.format(name=step.name, input_block=input_block)
 
 
 def _field_doc(f: FieldIR) -> str:
@@ -112,7 +149,6 @@ def _field_doc(f: FieldIR) -> str:
 
 
 def _render_type(t) -> str:
-    from clio.parser.ast_nodes import PrimitiveType
     if isinstance(t, PrimitiveType):
         return t.name
-    return repr(t)
+    return type(t).__name__
