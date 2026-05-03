@@ -101,3 +101,13 @@ def test_emit_v02_cache(tmp_path):
     expected = _read_tree(FIXTURES / "expected" / "v02_cache")
     actual = _read_tree(tmp_path)
     assert actual == expected
+
+
+def test_emit_v02_onfail(tmp_path):
+    src = (FIXTURES / "mvp_v02_onfail.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeCLIEmitter().emit(graph, tmp_path)
+
+    expected = _read_tree(FIXTURES / "expected" / "v02_onfail")
+    actual = _read_tree(tmp_path)
+    assert actual == expected

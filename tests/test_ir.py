@@ -149,3 +149,17 @@ def test_build_ir_no_cache_means_none():
     src = "STEP s\n  GIVES: r: str\n  MODE: judgment\n"
     step = build_ir(parse(src)).steps[0]
     assert step.cache is None
+
+
+def test_build_ir_carries_on_fail():
+    src = (
+        "STEP s\n  GIVES: r: str\n  MODE: judgment\n"
+        '  ON_FAIL: retry(3) then escalate then abort("done")\n'
+    )
+    graph = build_ir(parse(src))
+    of = graph.steps[0].on_fail
+    assert of is not None
+    kinds = [s.kind for s in of.strategies]
+    assert kinds == ["retry", "escalate", "abort"]
+    assert of.strategies[0].max_retries == 3
+    assert of.strategies[2].abort_message == "done"

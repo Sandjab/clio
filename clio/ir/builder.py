@@ -6,6 +6,8 @@ from clio.ir.graph import (
     FieldIR,
     FlowGraph,
     FlowIR,
+    OnFailChainIR,
+    OnFailStrategyIR,
     ResourcesIR,
     StepIR,
 )
@@ -88,14 +90,29 @@ def _build_step(decl: StepDecl) -> StepIR:
         CacheConfigIR(mode=decl.cache.mode, ttl_seconds=decl.cache.ttl_seconds)
         if decl.cache is not None else None
     )
+    on_fail_ir = _build_on_fail(decl.on_fail) if decl.on_fail is not None else None
     return StepIR(
         name=decl.name,
         mode=decl.mode,
         takes=tuple(FieldIR(name=f.name, type=f.type) for f in decl.takes),
         gives=FieldIR(name=decl.gives.name, type=decl.gives.type) if decl.gives else None,
         cache=cache_ir,
+        on_fail=on_fail_ir,
         line=decl.line,
     )
+
+
+def _build_on_fail(chain) -> OnFailChainIR:
+    out: list[OnFailStrategyIR] = []
+    for s in chain.strategies:
+        out.append(OnFailStrategyIR(
+            kind=s.kind,
+            max_retries=s.max_retries,
+            fallback_step_name=s.fallback_step_name,   # capture the name now
+            fallback_step=None,                        # resolved in slice G
+            abort_message=s.abort_message,
+        ))
+    return OnFailChainIR(strategies=tuple(out))
 
 
 def _build_flow(

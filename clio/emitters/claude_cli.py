@@ -196,13 +196,25 @@ class ClaudeCLIEmitter(BaseEmitter):
             "    exit 1",
             "fi",
             "",
+            "# Helper: run one judgment attempt against $1=model with $2=prompt and validate against $3=schema_path.",
+            "# Prints the cleaned response on success, nothing on failure. Exit 0 on success, 1 on failure.",
+            "_clio_run_attempt() {",
+            "    local model=\"$1\" prompt=\"$2\" schema_path=\"$3\" raw clean",
+            "    raw=\"$(printf %s \"$prompt\" | claude -p --model \"$model\" --output-format text 2>/dev/null || true)\"",
+            "    [ -n \"$raw\" ] || return 1",
+            "    clean=\"$(printf %s \"$raw\" | awk '!/^```/')\"",
+            "    printf %s \"$clean\" | \"$PYTHON\" -m clio_runtime.validate \"$schema_path\" - >/dev/null 2>&1 || return 1",
+            "    printf %s \"$clean\"",
+            "    return 0",
+            "}",
+            "",
             "echo '{}' > state.json",
             "",
         ]
-        model = (
-            graph.resources.models[0]
+        models_list = (
+            graph.resources.models
             if graph.resources is not None and graph.resources.models
-            else "haiku"
+            else ("haiku",)
         )
         contracts_by_name = {c.name: c for c in graph.contracts}
         for idx, call in enumerate(graph.flow.chain, start=1):
@@ -214,7 +226,8 @@ class ClaudeCLIEmitter(BaseEmitter):
                 lines.append(f'"$PYTHON" {script_name} {args}')
             else:
                 lines.extend(self._render_judgment_step(
-                    idx, step, call, model=model,
+                    idx, step, call,
+                    models_list=models_list,
                     contracts_by_name=contracts_by_name,
                 ))
             lines.append("")
@@ -228,7 +241,7 @@ class ClaudeCLIEmitter(BaseEmitter):
         idx: int,
         step: StepIR,
         call,
-        model: str,
+        models_list: tuple[str, ...],
         contracts_by_name: dict[str, ContractIR],
     ) -> list[str]:
         prompt_path = f"steps/{idx:02d}_{step.name}.prompt"
@@ -240,51 +253,114 @@ class ClaudeCLIEmitter(BaseEmitter):
         cache_active = step.cache is not None and step.cache.mode != "off"
         ttl_arg = "" if step.cache is None or step.cache.mode == "on" else str(step.cache.ttl_seconds)
 
-        lines: list[str] = [
+        models_array = "(" + " ".join(shlex.quote(m) for m in models_list) + ")"
+        primary_model = models_list[0]
+        first_model_lit = shlex.quote(primary_model)
+
+        out: list[str] = [
             f"# Step {idx}: {step.name} (judgment)",
             f"INLINED_SCHEMA_{idx:02d}={shlex.quote(inlined_json)}",
             f'PROMPT_{idx:02d}="$("$PYTHON" -m clio_runtime.substitute {prompt_path} state.json)"',
             f'PROMPT_{idx:02d}="${{PROMPT_{idx:02d}//\\$\\{{schema\\}}/$INLINED_SCHEMA_{idx:02d}}}"',
+            f"MODELS_{idx:02d}={models_array}",
+            f"MODEL_IDX_{idx:02d}=0",
+            f'RESPONSE_{idx:02d}=""',
         ]
 
+        # Cache lookup against the primary model
         if cache_active:
-            ttl_str = f'"{ttl_arg}"' if ttl_arg else '""'
-            lines += [
+            ttl_str = ttl_arg if ttl_arg else '""'
+            out += [
                 f'CACHE_DIR_{idx:02d}="${{CLIO_CACHE_DIR:-.cache}}"',
-                f'KEY_{idx:02d}="$("$PYTHON" -m clio_runtime.cache key {step.name} {model} '
+                f'KEY_{idx:02d}="$("$PYTHON" -m clio_runtime.cache key {step.name} {first_model_lit} '
                 f'"$PROMPT_{idx:02d}" "$INLINED_SCHEMA_{idx:02d}")"',
                 f'RESPONSE_{idx:02d}="$("$PYTHON" -m clio_runtime.cache lookup '
                 f'"$CACHE_DIR_{idx:02d}" {step.name} "$KEY_{idx:02d}" {ttl_str} 2>/dev/null || true)"',
-                f'if [ -z "$RESPONSE_{idx:02d}" ]; then',
             ]
-            indent = "    "
-        else:
-            lines += [f'RESPONSE_{idx:02d}=""']
-            indent = ""
 
-        # Inner attempt (single-call form; the strategy chain comes in slice F).
-        lines += [
-            f'{indent}RAW_RESPONSE_{idx:02d}="$(printf %s "$PROMPT_{idx:02d}" | claude -p '
-            f'--model {model} --output-format text)"',
-            f'{indent}if [ -z "$RAW_RESPONSE_{idx:02d}" ]; then '
-            f'echo "[clio] empty response from claude -p in step {idx} ({step.name})" >&2; exit 1; fi',
-            f'{indent}RESPONSE_{idx:02d}="$(printf %s "$RAW_RESPONSE_{idx:02d}" | awk \'!/^```/\')"',
-            f'{indent}printf %s "$RESPONSE_{idx:02d}" | "$PYTHON" -m clio_runtime.validate '
-            f'{schema_path} -',
+        # Determine the strategy chain (default to a single attempt + implicit abort if no on_fail).
+        strategies = step.on_fail.strategies if step.on_fail is not None else ()
+
+        # Open the "if no cache hit" guard (only if cache is active).
+        if cache_active:
+            out.append(f'if [ -z "$RESPONSE_{idx:02d}" ]; then')
+            ind = "    "
+        else:
+            ind = ""
+
+        # Initial attempt: counted as part of strategy 1 if it's retry, else standalone.
+        # We always do at least one attempt with the primary model.
+        out += [
+            f'{ind}RESPONSE_{idx:02d}="$(_clio_run_attempt "${{MODELS_{idx:02d}[$MODEL_IDX_{idx:02d}]}}" '
+            f'"$PROMPT_{idx:02d}" {schema_path} || true)"',
         ]
 
-        if cache_active:
-            lines += [
-                f'{indent}"$PYTHON" -m clio_runtime.cache store "$CACHE_DIR_{idx:02d}" '
-                f'{step.name} "$KEY_{idx:02d}" {model} "$RESPONSE_{idx:02d}"',
-                "fi",
+        for s in strategies:
+            if s.kind == "retry":
+                # Up to N additional attempts on the current model (so total = 1 + N for this clause).
+                n = s.max_retries
+                out += [
+                    f'{ind}if [ -z "$RESPONSE_{idx:02d}" ]; then',
+                    f'{ind}    for _ in $(seq 1 {n}); do',
+                    f'{ind}        RESPONSE_{idx:02d}="$(_clio_run_attempt '
+                    f'"${{MODELS_{idx:02d}[$MODEL_IDX_{idx:02d}]}}" '
+                    f'"$PROMPT_{idx:02d}" {schema_path} || true)"',
+                    f'{ind}        [ -n "$RESPONSE_{idx:02d}" ] && break',
+                    f'{ind}    done',
+                    f'{ind}fi',
+                ]
+            elif s.kind == "escalate":
+                out += [
+                    f'{ind}if [ -z "$RESPONSE_{idx:02d}" ] '
+                    f'&& [ $MODEL_IDX_{idx:02d} -lt $((${{#MODELS_{idx:02d}[@]}} - 1)) ]; then',
+                    f'{ind}    MODEL_IDX_{idx:02d}=$((MODEL_IDX_{idx:02d} + 1))',
+                    f'{ind}    RESPONSE_{idx:02d}="$(_clio_run_attempt '
+                    f'"${{MODELS_{idx:02d}[$MODEL_IDX_{idx:02d}]}}" '
+                    f'"$PROMPT_{idx:02d}" {schema_path} || true)"',
+                    f'{ind}fi',
+                ]
+            elif s.kind == "abort":
+                msg = (s.abort_message or "").replace('"', '\\"')
+                out += [
+                    f'{ind}if [ -z "$RESPONSE_{idx:02d}" ]; then',
+                    f'{ind}    echo "[clio] step {step.name}: {msg}" >&2',
+                    f'{ind}    exit 1',
+                    f'{ind}fi',
+                ]
+            elif s.kind == "fallback":
+                # Slice G fills this in. In slice F, fixtures don't use fallback.
+                raise NotImplementedError(
+                    f"fallback strategy not yet supported in this build "
+                    f"(step {step.name}, fallback to {s.fallback_step.name if s.fallback_step else '?'})"
+                )
+
+        # Implicit abort if no terminal `abort` clause and the response is still empty.
+        terminal = strategies and strategies[-1].kind == "abort"
+        if not terminal:
+            out += [
+                f'{ind}if [ -z "$RESPONSE_{idx:02d}" ]; then',
+                f'{ind}    echo "[clio] step {step.name}: ON_FAIL strategies exhausted" >&2',
+                f'{ind}    exit 1',
+                f'{ind}fi',
             ]
 
-        lines += [
+        # Cache store on success (only when MODEL_IDX is still on the primary model;
+        # other models cache under their own key only if they were hit by lookup later).
+        if cache_active:
+            out += [
+                f'{ind}if [ $MODEL_IDX_{idx:02d} -eq 0 ] && [ -n "$RESPONSE_{idx:02d}" ]; then',
+                f'{ind}    "$PYTHON" -m clio_runtime.cache store "$CACHE_DIR_{idx:02d}" '
+                f'{step.name} "$KEY_{idx:02d}" {first_model_lit} "$RESPONSE_{idx:02d}"',
+                f'{ind}fi',
+                "fi",  # closes the `if [ -z "$RESPONSE_NN" ]; then` cache-miss guard
+            ]
+
+        # Apply
+        out += [
             f"jq --argjson r \"$RESPONSE_{idx:02d}\" '.{out_name} = $r' state.json > state.json.tmp "
             f"&& mv state.json.tmp state.json",
         ]
-        return lines
+        return out
 
     @staticmethod
     def _render_kwargs_as_cli(call) -> str:

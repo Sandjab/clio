@@ -36,17 +36,35 @@ echo '{}' > state.json
 "$PYTHON" steps/01_load_customers.py --file=customers.csv
 
 # Step 2: detect_churn (judgment)
-INLINED_SCHEMA_02='{"type":"array","items":{"type":"object","properties":{"client":{"type":"string"},"risk":{"enum":["low","mid","high"]},"reason":{"type":"string","maxLength":300}},"required":["client","risk","reason"],"additionalProperties":false}}'
+INLINED_SCHEMA_02='{"type":"array","items":{"type":"object","properties":{"client":{"type":"string"},"risk":{"enum":["low","mid","high"]},"reason":{"type":"string"}},"required":["client","risk","reason"],"additionalProperties":false}}'
 PROMPT_02="$("$PYTHON" -m clio_runtime.substitute steps/02_detect_churn.prompt state.json)"
 PROMPT_02="${PROMPT_02//\$\{schema\}/$INLINED_SCHEMA_02}"
-MODELS_02=(haiku)
+MODELS_02=(haiku sonnet)
 MODEL_IDX_02=0
 RESPONSE_02=""
-RESPONSE_02="$(_clio_run_attempt "${MODELS_02[$MODEL_IDX_02]}" "$PROMPT_02" steps/02_detect_churn.schema.json || true)"
+CACHE_DIR_02="${CLIO_CACHE_DIR:-.cache}"
+KEY_02="$("$PYTHON" -m clio_runtime.cache key detect_churn haiku "$PROMPT_02" "$INLINED_SCHEMA_02")"
+RESPONSE_02="$("$PYTHON" -m clio_runtime.cache lookup "$CACHE_DIR_02" detect_churn "$KEY_02" 86400 2>/dev/null || true)"
 if [ -z "$RESPONSE_02" ]; then
-    echo "[clio] step detect_churn: ON_FAIL strategies exhausted" >&2
-    exit 1
+    RESPONSE_02="$(_clio_run_attempt "${MODELS_02[$MODEL_IDX_02]}" "$PROMPT_02" steps/02_detect_churn.schema.json || true)"
+    if [ -z "$RESPONSE_02" ]; then
+        for _ in $(seq 1 3); do
+            RESPONSE_02="$(_clio_run_attempt "${MODELS_02[$MODEL_IDX_02]}" "$PROMPT_02" steps/02_detect_churn.schema.json || true)"
+            [ -n "$RESPONSE_02" ] && break
+        done
+    fi
+    if [ -z "$RESPONSE_02" ] && [ $MODEL_IDX_02 -lt $((${#MODELS_02[@]} - 1)) ]; then
+        MODEL_IDX_02=$((MODEL_IDX_02 + 1))
+        RESPONSE_02="$(_clio_run_attempt "${MODELS_02[$MODEL_IDX_02]}" "$PROMPT_02" steps/02_detect_churn.schema.json || true)"
+    fi
+    if [ -z "$RESPONSE_02" ]; then
+        echo "[clio] step detect_churn: churn detection failed" >&2
+        exit 1
+    fi
+    if [ $MODEL_IDX_02 -eq 0 ] && [ -n "$RESPONSE_02" ]; then
+        "$PYTHON" -m clio_runtime.cache store "$CACHE_DIR_02" detect_churn "$KEY_02" haiku "$RESPONSE_02"
+    fi
 fi
 jq --argjson r "$RESPONSE_02" '.risks = $r' state.json > state.json.tmp && mv state.json.tmp state.json
 
-echo "[clio] flow customer_retention completed."
+echo "[clio] flow retention completed."
