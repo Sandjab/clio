@@ -147,6 +147,101 @@ def test_emit_v03_cache(tmp_path):
     assert actual == expected
 
 
+def test_emit_v03_onfail(tmp_path):
+    src = (FIXTURES / "mvp_v03_onfail.clio").read_text()
+    graph = build_ir(parse(src))
+    PythonEmitter().emit(graph, tmp_path)
+    expected = _read_tree(FIXTURES / "expected" / "v03_onfail")
+    actual = _read_tree(tmp_path)
+    assert actual == expected
+
+
+def test_emit_v03_fallback(tmp_path):
+    src = (FIXTURES / "mvp_v03_fallback.clio").read_text()
+    graph = build_ir(parse(src))
+    PythonEmitter().emit(graph, tmp_path)
+    expected = _read_tree(FIXTURES / "expected" / "v03_fallback")
+    actual = _read_tree(tmp_path)
+    assert actual == expected
+
+
+def test_emit_onfail_retry_then_escalate(tmp_path, monkeypatch):
+    """First 4 calls fail (initial + 3 retries on haiku), 5th succeeds on sonnet."""
+    src = (FIXTURES / "mvp_v03_onfail.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    monkeypatch.setenv("CLIO_CACHE_DIR", str(tmp_path / ".cache"))
+    try:
+        import anthropic
+        call_log = []
+
+        class FakeMessages:
+            @staticmethod
+            def create(**kw):
+                call_log.append(kw["model"])
+                if len(call_log) <= 4:
+                    return type("M", (), {"content": [type("B", (), {"text": "garbage"})()]})()
+                return type("M", (), {"content": [type("B", (), {"text": '[{"client": "X", "risk": "low", "reason": "ok"}]'})()]})()
+
+        class FakeClient:
+            def __init__(self, *_a, **_k):
+                self.messages = FakeMessages()
+
+        monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
+
+        from retention.steps import detect_churn as dc_mod
+        result = dc_mod.detect_churn(customers=[{"name": "X", "revenue": 1.0}])
+        assert len(result) == 1
+        assert len(call_log) == 5
+        assert call_log[:4] == ["claude-haiku-4-5-20251001"] * 4
+        assert call_log[4] == "claude-sonnet-4-6"
+    finally:
+        sys.path.remove(str(tmp_path))
+        for k in list(sys.modules):
+            if k.startswith("retention"):
+                del sys.modules[k]
+
+
+def test_emit_onfail_fallback_uses_naive(tmp_path, monkeypatch):
+    """All model attempts fail → fallback step runs."""
+    src = (FIXTURES / "mvp_v03_fallback.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    monkeypatch.setenv("CLIO_CACHE_DIR", str(tmp_path / ".cache"))
+    try:
+        import anthropic
+
+        class FakeMessages:
+            @staticmethod
+            def create(**kw):
+                return type("M", (), {"content": [type("B", (), {"text": "garbage"})()]})()
+
+        class FakeClient:
+            def __init__(self, *_a, **_k):
+                self.messages = FakeMessages()
+
+        monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
+
+        from retention.steps import detect_churn_naive as naive_mod
+
+        def fake_naive(*, customers):
+            return [{"client": c["name"], "risk": "high", "reason": "fallback"} for c in customers]
+
+        monkeypatch.setattr(naive_mod, "detect_churn_naive", fake_naive)
+
+        from retention.steps import detect_churn as dc_mod
+        result = dc_mod.detect_churn(customers=[{"name": "X", "revenue": 1.0}])
+        assert len(result) == 1
+        assert result[0].reason == "fallback"
+    finally:
+        sys.path.remove(str(tmp_path))
+        for k in list(sys.modules):
+            if k.startswith("retention"):
+                del sys.modules[k]
+
+
 def test_emit_judgment_cache_hit_skips_sdk(tmp_path, monkeypatch):
     src = (FIXTURES / "mvp_v03_cache.clio").read_text()
     PythonEmitter().emit(build_ir(parse(src)), tmp_path)
@@ -162,9 +257,9 @@ def test_emit_judgment_cache_hit_skips_sdk(tmp_path, monkeypatch):
         prompt = dc_mod._PROMPT_TEMPLATE
         prompt = prompt.replace("${customers}", json.dumps([{"name": "X", "revenue": 1.0}]))
         prompt = prompt.replace("${schema}", dc_mod._INLINED_SCHEMA)
-        key = _cache.cache_key("detect_churn", dc_mod._PRIMARY_MODEL, prompt, dc_mod._INLINED_SCHEMA)
+        key = _cache.cache_key("detect_churn", dc_mod._MODELS[0], prompt, dc_mod._INLINED_SCHEMA)
         cached_payload = json.dumps([{"client": "Cached", "risk": "low", "reason": "from cache"}])
-        _cache.cache_store(cache_dir, "detect_churn", key, dc_mod._PRIMARY_MODEL, cached_payload)
+        _cache.cache_store(cache_dir, "detect_churn", key, dc_mod._MODELS[0], cached_payload)
 
         import anthropic
         def boom(*a, **kw):

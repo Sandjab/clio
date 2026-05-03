@@ -18,7 +18,7 @@ from .. import contracts
 
 _PROMPT_TEMPLATE = 'You are executing the CLIO step `detect_churn`.\n\nInput:\n  customers: ${customers}\n\nProduce a JSON value that EXACTLY matches this schema:\n${schema}\n\nRules — these are non-negotiable:\n1. Use EXACTLY the property names listed in the schema. Do NOT invent new fields.\n2. Every required property must be present in every item.\n3. For enum properties, use ONLY values from the listed enum.\n4. Respect every constraint (maxLength, etc.).\n5. Output the raw JSON value only. No markdown code fences. No prose. No explanation.\n'
 _INLINED_SCHEMA = '{"type":"array","items":{"type":"object","properties":{"client":{"type":"string"},"risk":{"enum":["low","mid","high"]},"reason":{"type":"string"}},"required":["client","risk","reason"],"additionalProperties":false}}'
-_MODELS = ('claude-haiku-4-5-20251001',)
+_MODELS = ('claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7')
 
 
 def _attempt(model, prompt):
@@ -54,6 +54,7 @@ def detect_churn(*, customers: list[dict]) -> list[CustomerRisk]:
     prompt = prompt.replace('${schema}', _INLINED_SCHEMA)
 
     model_idx = 0
+    fallback_used = False
     response = None
 
     cache_dir = Path(os.environ.get('CLIO_CACHE_DIR', '.cache'))
@@ -65,10 +66,32 @@ def detect_churn(*, customers: list[dict]) -> list[CustomerRisk]:
     response = _attempt(_MODELS[model_idx], prompt)
 
     if response is None:
-        print('[clio] step detect_churn: ON_FAIL strategies exhausted', file=sys.stderr)
+        for _ in range(3):
+            response = _attempt(_MODELS[model_idx], prompt)
+            if response is not None:
+                break
+
+    if response is None and model_idx < len(_MODELS) - 1:
+        model_idx += 1
+        esc_key = _cache.cache_key('detect_churn', _MODELS[model_idx], prompt, _INLINED_SCHEMA)
+        esc_hit = _cache.cache_lookup(cache_dir, 'detect_churn', esc_key, 86400)
+        if esc_hit is not None:
+            return (lambda raw: [contracts.CustomerRisk.model_validate(item) for item in raw])(json.loads(esc_hit))
+        response = _attempt(_MODELS[model_idx], prompt)
+        if response is not None:
+            _cache.cache_store(cache_dir, 'detect_churn', esc_key, _MODELS[model_idx], _serialize(response))
+
+    if response is None:
+        from . import detect_churn_naive as _detect_churn_naive_mod
+        fb_response = _detect_churn_naive_mod.detect_churn_naive(customers=customers)
+        response = (lambda raw: [contracts.CustomerRisk.model_validate(item) for item in raw])(fb_response if not isinstance(fb_response, str) else json.loads(fb_response))
+        fallback_used = True
+
+    if response is None:
+        print('[clio] step detect_churn: churn detection exhausted', file=sys.stderr)
         raise SystemExit(1)
 
-    if model_idx == 0 and response is not None:
+    if model_idx == 0 and response is not None and not fallback_used:
         _cache.cache_store(cache_dir, 'detect_churn', primary_key, _MODELS[0], _serialize(response))
 
     return response

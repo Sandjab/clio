@@ -289,6 +289,7 @@ class PythonEmitter(BaseEmitter):
             f'Implement the body below. The orchestrator passes arguments by keyword\n'
             f'and expects the return value to conform to the GIVES type.\n'
             f'"""\n'
+            f'from __future__ import annotations\n'
             f'\n\n'
             f'def {step.name}({params}) -> {ret_type}:\n'
             f'    raise NotImplementedError(\n'
@@ -322,7 +323,16 @@ class PythonEmitter(BaseEmitter):
             if graph.resources is not None and graph.resources.models
             else ("haiku",)
         )
-        primary = _model_id(models[0])
+        models_full = tuple(_model_id(m) for m in models)
+        models_array_repr = (
+            "(" + ", ".join(repr(m) for m in models_full) + ",)"
+            if len(models_full) == 1
+            else "(" + ", ".join(repr(m) for m in models_full) + ")"
+        )
+
+        strategies = step.on_fail.strategies if step.on_fail is not None else ()
+        has_fallback = any(s.kind == "fallback" for s in strategies)
+        terminal_abort = bool(strategies) and strategies[-1].kind == "abort"
 
         prompt_template = _render_prompt(step)
         result_class = _gives_validator_expr(step.gives)
@@ -367,7 +377,7 @@ class PythonEmitter(BaseEmitter):
             "",
             f"_PROMPT_TEMPLATE = {prompt_template!r}",
             f"_INLINED_SCHEMA = {inlined_json!r}",
-            f"_PRIMARY_MODEL = {primary!r}",
+            f"_MODELS = {models_array_repr}",
             "",
             "",
             "def _attempt(model, prompt):",
@@ -409,30 +419,106 @@ class PythonEmitter(BaseEmitter):
         body += sub_lines
         body.append("")
 
+        chain_lines: list[str] = [
+            "    model_idx = 0",
+        ]
+        if has_fallback:
+            chain_lines.append("    fallback_used = False")
+        chain_lines += [
+            "    response = None",
+            "",
+        ]
+
         if cache_active:
-            body += [
+            chain_lines += [
                 "    cache_dir = Path(os.environ.get('CLIO_CACHE_DIR', '.cache'))",
-                f"    primary_key = _cache.cache_key({step.name!r}, _PRIMARY_MODEL, prompt, _INLINED_SCHEMA)",
-                f"    hit = _cache.cache_lookup(cache_dir, {step.name!r}, primary_key, {ttl_repr})",
+                f"    primary_key = _cache.cache_key('{step.name}', _MODELS[0], prompt, _INLINED_SCHEMA)",
+                f"    hit = _cache.cache_lookup(cache_dir, '{step.name}', primary_key, {ttl_repr})",
                 "    if hit is not None:",
                 f"        return {result_class}(json.loads(hit))",
                 "",
             ]
 
-        body += [
-            "    response = _attempt(_PRIMARY_MODEL, prompt)",
-            "    if response is None:",
-            f"        print('[clio] step {step.name}: ON_FAIL strategies exhausted', file=sys.stderr)",
-            "        raise SystemExit(1)",
-        ]
-        if cache_active:
-            body.append(
-                f"    _cache.cache_store(cache_dir, {step.name!r}, primary_key, _PRIMARY_MODEL, _serialize(response))"
-            )
-        body += [
-            "    return response",
+        chain_lines += [
+            "    response = _attempt(_MODELS[model_idx], prompt)",
             "",
         ]
+
+        for s in strategies:
+            if s.kind == "retry":
+                n = s.max_retries
+                chain_lines += [
+                    "    if response is None:",
+                    f"        for _ in range({n}):",
+                    "            response = _attempt(_MODELS[model_idx], prompt)",
+                    "            if response is not None:",
+                    "                break",
+                    "",
+                ]
+            elif s.kind == "escalate":
+                if cache_active:
+                    chain_lines += [
+                        "    if response is None and model_idx < len(_MODELS) - 1:",
+                        "        model_idx += 1",
+                        f"        esc_key = _cache.cache_key('{step.name}', _MODELS[model_idx], prompt, _INLINED_SCHEMA)",
+                        f"        esc_hit = _cache.cache_lookup(cache_dir, '{step.name}', esc_key, {ttl_repr})",
+                        "        if esc_hit is not None:",
+                        f"            return {result_class}(json.loads(esc_hit))",
+                        "        response = _attempt(_MODELS[model_idx], prompt)",
+                        "        if response is not None:",
+                        f"            _cache.cache_store(cache_dir, '{step.name}', esc_key, _MODELS[model_idx], _serialize(response))",
+                        "",
+                    ]
+                else:
+                    chain_lines += [
+                        "    if response is None and model_idx < len(_MODELS) - 1:",
+                        "        model_idx += 1",
+                        "        response = _attempt(_MODELS[model_idx], prompt)",
+                        "",
+                    ]
+            elif s.kind == "fallback":
+                fb_name = s.fallback_step.name
+                kw_str = ", ".join(f"{t.name}={_to_field_name(t.name)}" for t in step.takes)
+                chain_lines += [
+                    "    if response is None:",
+                    f"        from . import {fb_name} as _{fb_name}_mod",
+                    f"        fb_response = _{fb_name}_mod.{fb_name}({kw_str})",
+                    f"        response = {result_class}(fb_response if not isinstance(fb_response, str) else json.loads(fb_response))",
+                    "        fallback_used = True",
+                    "",
+                ]
+            elif s.kind == "abort":
+                msg = s.abort_message or ""
+                full_msg = f"[clio] step {step.name}: {msg}"
+                chain_lines += [
+                    "    if response is None:",
+                    f"        print({full_msg!r}, file=sys.stderr)",
+                    "        raise SystemExit(1)",
+                    "",
+                ]
+
+        if not terminal_abort:
+            chain_lines += [
+                "    if response is None:",
+                f"        print('[clio] step {step.name}: ON_FAIL strategies exhausted', file=sys.stderr)",
+                "        raise SystemExit(1)",
+                "",
+            ]
+
+        if cache_active:
+            gate_terms = ["model_idx == 0", "response is not None"]
+            if has_fallback:
+                gate_terms.append("not fallback_used")
+            chain_lines += [
+                f"    if {' and '.join(gate_terms)}:",
+                f"        _cache.cache_store(cache_dir, '{step.name}', primary_key, _MODELS[0], _serialize(response))",
+                "",
+            ]
+
+        chain_lines.append("    return response")
+
+        body += chain_lines
+        body.append("")
         return "\n".join(body)
 
     @staticmethod

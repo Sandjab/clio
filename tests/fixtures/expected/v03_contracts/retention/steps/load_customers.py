@@ -7,6 +7,7 @@ GIVES:
 Implement the body below. The orchestrator passes arguments by keyword
 and expects the return value to conform to the GIVES type.
 """
+from __future__ import annotations
 
 
 def load_customers(*, file: str) -> list[dict]:
