@@ -81,3 +81,13 @@ def test_emit_phase8(tmp_path):
     expected = _read_tree(FIXTURES / "expected" / "phase8")
     actual = _read_tree(tmp_path)
     assert actual == expected
+
+
+def test_emit_phase9_full_mvp(tmp_path):
+    src = (FIXTURES / "mvp_phase9.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeCLIEmitter().emit(graph, tmp_path)
+
+    expected = _read_tree(FIXTURES / "expected" / "phase9")
+    actual = _read_tree(tmp_path)
+    assert actual == expected

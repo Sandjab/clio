@@ -1,0 +1,9 @@
+You are executing the CLIO step `detect_churn`.
+
+Input:
+  customers: ${customers}
+
+Produce a JSON value that matches this schema:
+${schema}
+
+Respond with ONLY the JSON value, no prose.

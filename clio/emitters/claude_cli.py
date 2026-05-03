@@ -137,6 +137,11 @@ class ClaudeCLIEmitter(BaseEmitter):
             "echo '{}' > state.json",
             "",
         ]
+        model = (
+            graph.resources.models[0]
+            if graph.resources is not None and graph.resources.models
+            else "haiku"
+        )
         for idx, call in enumerate(graph.flow.chain, start=1):
             step = self._step_for_call(graph, call)
             if step.mode == "exact":
@@ -145,7 +150,7 @@ class ClaudeCLIEmitter(BaseEmitter):
                 lines.append(f"# Step {idx}: {step.name} (exact)")
                 lines.append(f"python {script_name} {args}")
             else:
-                lines.extend(self._render_judgment_step(idx, step, call, model="haiku"))
+                lines.extend(self._render_judgment_step(idx, step, call, model=model))
             lines.append("")
         lines.append('echo "[clio] flow ' + graph.flow.name + ' completed."')
         run_path = output_dir / "run.sh"
