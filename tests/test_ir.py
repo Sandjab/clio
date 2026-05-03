@@ -26,3 +26,31 @@ def test_primitive_type_to_json_schema():
     assert type_to_json_schema(PrimitiveType("int")) == {"type": "integer"}
     assert type_to_json_schema(PrimitiveType("bool")) == {"type": "boolean"}
     assert type_to_json_schema(PrimitiveType("float")) == {"type": "number"}
+
+
+def test_list_of_record_to_json_schema():
+    from clio.parser.ast_nodes import ListType, PrimitiveType, RecordType
+    t = ListType(
+        inner=RecordType(
+            fields=(("name", PrimitiveType("str")), ("age", PrimitiveType("int"))),
+        ),
+    )
+    schema = type_to_json_schema(t)
+    assert schema == {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "age": {"type": "integer"},
+            },
+            "required": ["name", "age"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def test_enum_to_json_schema():
+    from clio.parser.ast_nodes import EnumType
+    schema = type_to_json_schema(EnumType(values=("low", "mid", "high")))
+    assert schema == {"enum": ["low", "mid", "high"]}
