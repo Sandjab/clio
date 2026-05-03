@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -38,7 +39,7 @@ def test_compile_and_run_mvp(tmp_path):
     out = tmp_path / "out"
     rc = subprocess.run(
         [
-            "python", "-m", "clio", "compile",
+            sys.executable, "-m", "clio", "compile",
             str(EXAMPLE),
             "--target", "claude-cli",
             "--output", str(out),
@@ -55,6 +56,7 @@ def test_compile_and_run_mvp(tmp_path):
         cwd=out,
         capture_output=True,
         text=True,
+        env={**os.environ, "PYTHON": sys.executable},
     )
     assert proc.returncode == 0, f"run.sh failed:\nstdout={proc.stdout}\nstderr={proc.stderr}"
 

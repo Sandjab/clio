@@ -5,7 +5,47 @@ from pathlib import Path
 from clio.emitters.base import BaseEmitter
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import ContractIR, FieldIR, FlowGraph, StepIR
-from clio.parser.ast_nodes import PrimitiveType
+from clio.parser.ast_nodes import (
+    ConstrainedType,
+    ContractRef,
+    EnumType,
+    ListType,
+    PrimitiveType,
+    RecordType,
+    TypeExpr,
+)
+
+
+def _inline_schema(t: TypeExpr, contracts_by_name: dict[str, ContractIR]) -> dict:
+    """Resolve every ContractRef inline. Strips x-clio-assert from inlined contracts
+    so the schema is plain JSON Schema (the assert remains on the on-disk version
+    used by clio_runtime.validate)."""
+    if isinstance(t, ContractRef):
+        c = contracts_by_name.get(t.name)
+        if c is None:
+            return {"$ref": f"../contracts/{t.name}.schema.json"}
+        schema = {k: v for k, v in c.json_schema.items() if k != "x-clio-assert"}
+        return schema
+    if isinstance(t, ListType):
+        return {"type": "array", "items": _inline_schema(t.inner, contracts_by_name)}
+    if isinstance(t, RecordType):
+        return {
+            "type": "object",
+            "properties": {n: _inline_schema(ty, contracts_by_name) for n, ty in t.fields},
+            "required": [n for n, _ in t.fields],
+            "additionalProperties": False,
+        }
+    if isinstance(t, EnumType):
+        return {"enum": list(t.values)}
+    if isinstance(t, ConstrainedType):
+        out = _inline_schema(t.base, contracts_by_name)
+        for kind, value in t.constraints:
+            if kind == "max":
+                out["maxLength"] = value
+        return out
+    if isinstance(t, PrimitiveType):
+        return type_to_json_schema(t)
+    return type_to_json_schema(t)
 
 
 _CLAUDE_MD = """# CLIO-emitted project
@@ -74,10 +114,15 @@ _JUDGMENT_PROMPT_TEMPLATE = """You are executing the CLIO step `{name}`.
 Input:
 {input_block}
 
-Produce a JSON value that matches this schema:
+Produce a JSON value that EXACTLY matches this schema:
 ${{schema}}
 
-Respond with ONLY the JSON value, no prose.
+Rules — these are non-negotiable:
+1. Use EXACTLY the property names listed in the schema. Do NOT invent new fields.
+2. Every required property must be present in every item.
+3. For enum properties, use ONLY values from the listed enum.
+4. Respect every constraint (maxLength, etc.).
+5. Output the raw JSON value only. No markdown code fences. No prose. No explanation.
 """
 
 
@@ -134,6 +179,23 @@ class ClaudeCLIEmitter(BaseEmitter):
             "#!/usr/bin/env bash",
             "set -euo pipefail",
             'cd "$(dirname "$0")"',
+            "",
+            "# Resolve a Python 3.12+ interpreter (override with PYTHON env var if needed).",
+            'PYTHON="${PYTHON:-}"',
+            'if [ -z "$PYTHON" ]; then',
+            "    for candidate in python3.12 python3.13 python3.14 python3 python; do",
+            '        if command -v "$candidate" >/dev/null 2>&1 \\',
+            "           && \"$candidate\" -c 'import sys; sys.exit(0 if sys.version_info >= (3,12) else 1)' >/dev/null 2>&1; then",
+            '            PYTHON="$candidate"',
+            "            break",
+            "        fi",
+            "    done",
+            "fi",
+            'if [ -z "$PYTHON" ]; then',
+            '    echo "[clio] error: Python 3.12+ not found on PATH (set PYTHON=/path/to/python)" >&2',
+            "    exit 1",
+            "fi",
+            "",
             "echo '{}' > state.json",
             "",
         ]
@@ -142,31 +204,49 @@ class ClaudeCLIEmitter(BaseEmitter):
             if graph.resources is not None and graph.resources.models
             else "haiku"
         )
+        contracts_by_name = {c.name: c for c in graph.contracts}
         for idx, call in enumerate(graph.flow.chain, start=1):
             step = self._step_for_call(graph, call)
             if step.mode == "exact":
                 args = self._render_kwargs_as_cli(call)
                 script_name = f"steps/{idx:02d}_{step.name}.py"
                 lines.append(f"# Step {idx}: {step.name} (exact)")
-                lines.append(f"python {script_name} {args}")
+                lines.append(f'"$PYTHON" {script_name} {args}')
             else:
-                lines.extend(self._render_judgment_step(idx, step, call, model=model))
+                lines.extend(self._render_judgment_step(
+                    idx, step, call, model=model,
+                    contracts_by_name=contracts_by_name,
+                ))
             lines.append("")
         lines.append('echo "[clio] flow ' + graph.flow.name + ' completed."')
         run_path = output_dir / "run.sh"
         run_path.write_text("\n".join(lines) + "\n")
         run_path.chmod(0o755)
 
-    def _render_judgment_step(self, idx: int, step: StepIR, call, model: str) -> list[str]:
+    def _render_judgment_step(
+        self,
+        idx: int,
+        step: StepIR,
+        call,
+        model: str,
+        contracts_by_name: dict[str, ContractIR],
+    ) -> list[str]:
         prompt_path = f"steps/{idx:02d}_{step.name}.prompt"
         schema_path = f"steps/{idx:02d}_{step.name}.schema.json"
         out_name = step.gives.name if step.gives else "result"
+        # Build the inlined schema (resolved $refs, no x-clio-assert) for the LLM prompt.
+        # The on-disk schema_path keeps the $ref + x-clio-assert form for validate.py.
+        inlined = _inline_schema(step.gives.type, contracts_by_name) if step.gives else {}
+        inlined_json = json.dumps(inlined, separators=(",", ":"))
         return [
             f"# Step {idx}: {step.name} (judgment)",
-            f'PROMPT="$(python -m clio_runtime.substitute {prompt_path} state.json)"',
-            f'PROMPT="${{PROMPT//\\$\\{{schema\\}}/$(cat {schema_path})}}"',
-            f'RESPONSE="$(printf %s "$PROMPT" | claude -p --model {model} --output-format text)"',
-            f'printf %s "$RESPONSE" | python -m clio_runtime.validate {schema_path} -',
+            f"INLINED_SCHEMA_{idx:02d}={shlex.quote(inlined_json)}",
+            f'PROMPT="$("$PYTHON" -m clio_runtime.substitute {prompt_path} state.json)"',
+            f'PROMPT="${{PROMPT//\\$\\{{schema\\}}/$INLINED_SCHEMA_{idx:02d}}}"',
+            f'RAW_RESPONSE="$(printf %s "$PROMPT" | claude -p --model {model} --output-format text)"',
+            f'if [ -z "$RAW_RESPONSE" ]; then echo "[clio] empty response from claude -p in step {idx} ({step.name})" >&2; exit 1; fi',
+            f"RESPONSE=\"$(printf %s \"$RAW_RESPONSE\" | awk '!/^```/')\"",
+            f'printf %s "$RESPONSE" | "$PYTHON" -m clio_runtime.validate {schema_path} -',
             f"jq --argjson r \"$RESPONSE\" '.{out_name} = $r' state.json > state.json.tmp && mv state.json.tmp state.json",
         ]
 

@@ -3,7 +3,12 @@ You are executing the CLIO step `detect_churn`.
 Input:
   customers: ${customers}
 
-Produce a JSON value that matches this schema:
+Produce a JSON value that EXACTLY matches this schema:
 ${schema}
 
-Respond with ONLY the JSON value, no prose.
+Rules — these are non-negotiable:
+1. Use EXACTLY the property names listed in the schema. Do NOT invent new fields.
+2. Every required property must be present in every item.
+3. For enum properties, use ONLY values from the listed enum.
+4. Respect every constraint (maxLength, etc.).
+5. Output the raw JSON value only. No markdown code fences. No prose. No explanation.
