@@ -1,12 +1,12 @@
 from dataclasses import dataclass
 
-from clio.parser.ast_nodes import Field, TypeExpr
+from clio.parser.ast_nodes import TypeExpr
 
 
 @dataclass(frozen=True)
 class FieldIR:
     name: str
-    type: TypeExpr            # AST type nodes are reused as IR for now
+    type: TypeExpr
 
 
 @dataclass(frozen=True)
@@ -19,5 +19,13 @@ class StepIR:
 
 
 @dataclass(frozen=True)
+class ContractIR:
+    name: str
+    json_schema: dict
+    line: int
+
+
+@dataclass(frozen=True)
 class FlowGraph:
     steps: tuple[StepIR, ...]
+    contracts: tuple[ContractIR, ...] = ()

@@ -54,3 +54,34 @@ def test_enum_to_json_schema():
     from clio.parser.ast_nodes import EnumType
     schema = type_to_json_schema(EnumType(values=("low", "mid", "high")))
     assert schema == {"enum": ["low", "mid", "high"]}
+
+
+def test_build_ir_with_contract_and_ref():
+    src = (
+        "CONTRACT r\n"
+        "  SHAPE: {x: int}\n"
+        "STEP s\n"
+        "  GIVES: out: List<r>\n"
+        "  MODE:  judgment\n"
+    )
+    graph = build_ir(parse(src))
+    assert len(graph.contracts) == 1
+    assert graph.contracts[0].name == "r"
+    assert graph.contracts[0].json_schema == {
+        "type": "object",
+        "properties": {"x": {"type": "integer"}},
+        "required": ["x"],
+        "additionalProperties": False,
+    }
+
+
+def test_build_ir_unresolved_contract_ref_raises():
+    import pytest
+    src = (
+        "STEP s\n"
+        "  GIVES: out: List<missing>\n"
+        "  MODE:  judgment\n"
+    )
+    with pytest.raises(ValueError) as exc:
+        build_ir(parse(src))
+    assert "missing" in str(exc.value)

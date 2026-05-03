@@ -1,4 +1,5 @@
 from clio.parser.ast_nodes import (
+    ContractRef,
     EnumType,
     ListType,
     PrimitiveType,
@@ -29,4 +30,6 @@ def type_to_json_schema(t: TypeExpr) -> dict:
         }
     if isinstance(t, EnumType):
         return {"enum": list(t.values)}
+    if isinstance(t, ContractRef):
+        return {"$ref": f"../contracts/{t.name}.schema.json"}
     raise NotImplementedError(f"type_to_json_schema: {type(t).__name__}")
