@@ -123,3 +123,11 @@ class CompareExpr(ExprNode):
     left: "ExprNode"
     op: str                         # one of: ==, !=, >=, <=, >, <
     right: "ExprNode"
+
+
+@dataclass(frozen=True)
+class ResourcesDecl:
+    target: str
+    models: tuple[str, ...]
+    line: int
+    col: int

@@ -2,10 +2,7 @@ from enum import Enum
 
 
 class Keyword(str, Enum):
-    """Closed enum of every keyword recognized by the lexer.
-
-    Populated incrementally as each phase adds language features.
-    """
+    """Closed enum of every keyword recognized by the lexer."""
     STEP = "STEP"
     MODE = "MODE"
     EXACT = "exact"
@@ -23,3 +20,13 @@ class Keyword(str, Enum):
     CSV = "CSV"
     FLOW = "FLOW"
     ASSERT = "ASSERT"
+    RESOURCES = "RESOURCES"
+    TARGET = "target"
+    MODELS = "models"
+    CLAUDE_CLI = "claude-cli"
+    HAIKU = "haiku"
+    SONNET = "sonnet"
+    OPUS = "opus"
+    BUDGET = "budget"
+    PREFER = "prefer"
+    STRATEGY = "strategy"

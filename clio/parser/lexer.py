@@ -13,6 +13,8 @@ _SINGLE_CHAR_TOKENS = {
     "}": TokenType.RBRACE,
     "(": TokenType.LPAREN,
     ")": TokenType.RPAREN,
+    "[": TokenType.LBRACKET,
+    "]": TokenType.RBRACKET,
     "|": TokenType.PIPE,
     "=": TokenType.EQUALS,
 }
@@ -104,6 +106,17 @@ def lex(source: str) -> list[Token]:
                 j = i
                 while j < len(stripped) and (stripped[j].isalnum() or stripped[j] == "_"):
                     j += 1
+                # Allow an optional hyphenated continuation like `claude-cli`.
+                if j < len(stripped) and stripped[j] == "-":
+                    k = j + 1
+                    while k < len(stripped) and (stripped[k].isalnum() or stripped[k] == "_"):
+                        k += 1
+                    candidate = stripped[i:k]
+                    if candidate in _KEYWORD_VALUES:
+                        tokens.append(Token(TokenType.KEYWORD, candidate, lineno, col))
+                        col += k - i
+                        i = k
+                        continue
                 word = stripped[i:j]
                 ttype = TokenType.KEYWORD if word in _KEYWORD_VALUES else TokenType.IDENT
                 tokens.append(Token(ttype, word, lineno, col))

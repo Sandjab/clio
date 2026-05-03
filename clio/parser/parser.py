@@ -63,13 +63,68 @@ class _Parser:
                 decls.append(self.parse_contract())
             elif t.type == TokenType.KEYWORD and t.value == "FLOW":
                 decls.append(self.parse_flow())
+            elif t.type == TokenType.KEYWORD and t.value == "RESOURCES":
+                decls.append(self.parse_resources())
             else:
                 raise ParseError(
-                    f"expected STEP / CONTRACT / FLOW, got {t.type.value} {t.value!r}",
+                    f"expected STEP / CONTRACT / FLOW / RESOURCES, got {t.type.value} {t.value!r}",
                     t.line, t.col,
                 )
             self.skip_newlines()
         return Program(tuple(decls))
+
+    def parse_resources(self) -> "ResourcesDecl":
+        from clio.parser.ast_nodes import ResourcesDecl
+        kw = self.expect(TokenType.KEYWORD, "RESOURCES")
+        self.expect(TokenType.NEWLINE)
+        self.expect(TokenType.INDENT)
+
+        target: str | None = None
+        models: tuple[str, ...] = ()
+        while self.peek().type != TokenType.DEDENT:
+            t = self.peek()
+            if t.type == TokenType.KEYWORD and t.value == "target":
+                self.advance()
+                self.expect(TokenType.COLON)
+                value_tok = self.expect(TokenType.KEYWORD)
+                if value_tok.value != "claude-cli":
+                    raise ParseError(
+                        f"target {value_tok.value!r} is not supported in v0.1 (only claude-cli)",
+                        value_tok.line, value_tok.col,
+                    )
+                target = value_tok.value
+                self.expect(TokenType.NEWLINE)
+            elif t.type == TokenType.KEYWORD and t.value == "models":
+                self.advance()
+                self.expect(TokenType.COLON)
+                self.expect(TokenType.LBRACKET)
+                vals: list[str] = []
+                vals.append(self.expect(TokenType.KEYWORD).value)
+                while self.peek().type == TokenType.COMMA:
+                    self.advance()
+                    vals.append(self.expect(TokenType.KEYWORD).value)
+                self.expect(TokenType.RBRACKET)
+                models = tuple(vals)
+                self.expect(TokenType.NEWLINE)
+            elif t.type == TokenType.KEYWORD and t.value in {"budget", "prefer", "strategy"}:
+                raise ParseError(
+                    f"RESOURCES field {t.value!r} is not supported in v0.1 "
+                    f"(planned for a later milestone)",
+                    t.line, t.col,
+                )
+            else:
+                raise ParseError(
+                    f"unexpected RESOURCES field {t.value!r}",
+                    t.line, t.col,
+                )
+        self.expect(TokenType.DEDENT)
+
+        if target is None:
+            raise ParseError("RESOURCES is missing required `target` field", kw.line, kw.col)
+        if not models:
+            raise ParseError("RESOURCES is missing required `models` field", kw.line, kw.col)
+
+        return ResourcesDecl(target=target, models=models, line=kw.line, col=kw.col)
 
     def parse_step(self) -> StepDecl:
         kw = self.expect(TokenType.KEYWORD, "STEP")

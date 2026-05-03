@@ -21,6 +21,8 @@ class TokenType(str, Enum):
     RBRACE = "RBRACE"
     LPAREN = "LPAREN"
     RPAREN = "RPAREN"
+    LBRACKET = "LBRACKET"
+    RBRACKET = "RBRACKET"
     PIPE = "PIPE"
     NEWLINE = "NEWLINE"
     INDENT = "INDENT"

@@ -209,3 +209,26 @@ def test_parse_contract_with_assert():
     program = parse(src)
     c = program.decls[0]
     assert c.assert_expr is not None
+
+
+def test_parse_resources_block():
+    src = (
+        "STEP foo\n  MODE: exact\n"
+        "RESOURCES\n  target: claude-cli\n  models: [haiku, sonnet]\n"
+    )
+    program = parse(src)
+    res = [d for d in program.decls if d.__class__.__name__ == "ResourcesDecl"]
+    assert len(res) == 1
+    assert res[0].target == "claude-cli"
+    assert res[0].models == ("haiku", "sonnet")
+
+
+def test_parse_resources_unsupported_field_raises():
+    src = (
+        "STEP foo\n  MODE: exact\n"
+        "RESOURCES\n  budget: 30\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "budget" in str(exc.value)
+    assert "v0.1" in str(exc.value)
