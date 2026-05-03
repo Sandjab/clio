@@ -222,6 +222,9 @@ class PythonEmitter(BaseEmitter):
         (output_dir / "pyproject.toml").write_text(self._pyproject(pkg_name))
         (output_dir / "README.md").write_text(self._readme(pkg_name, graph))
 
+        (pkg_dir / "flow.py").write_text(self._emit_flow(graph))
+        (pkg_dir / "__main__.py").write_text(self._emit_main(pkg_name))
+
         from clio import runtime as src_pkg
         src = Path(src_pkg.__file__).parent / "cache.py"
         (runtime_dir / "cache.py").write_text(src.read_text())
@@ -520,6 +523,69 @@ class PythonEmitter(BaseEmitter):
         body += chain_lines
         body.append("")
         return "\n".join(body)
+
+    def _emit_flow(self, graph: FlowGraph) -> str:
+        if graph.flow is None:
+            return '"""No FLOW declared."""\n\ndef run(**kwargs):\n    return {}\n'
+
+        chain_lines: list[str] = []
+        imported_steps: list[str] = []
+        for call in graph.flow.chain:
+            step = next(s for s in graph.steps if s.name == call.step_name)
+            if step.name not in imported_steps:
+                imported_steps.append(step.name)
+            kw_parts = []
+            for name, value in call.kwargs:
+                if isinstance(value, str) and value.startswith("@"):
+                    kw_parts.append(f"{name}=state[{value[1:]!r}]")
+                else:
+                    kw_parts.append(f"{name}={value!r}")
+            kwargs_str = ", ".join(kw_parts)
+            out_name = step.gives.name if step.gives is not None else "_result"
+            chain_lines.append(
+                f"    state[{out_name!r}] = {step.name}_mod.{step.name}({kwargs_str})"
+            )
+
+        imports = "\n".join(f"from .steps import {n} as {n}_mod" for n in imported_steps)
+
+        return (
+            f'"""FLOW {graph.flow.name}.\n\n'
+            f'Auto-generated. Calls steps in chain order, threading state through a dict.\n'
+            f'"""\n'
+            f'\n'
+            f'{imports}\n'
+            f'\n'
+            f'\n'
+            f'def run(**initial: object) -> dict:\n'
+            f'    state: dict = dict(initial)\n'
+            + "\n".join(chain_lines)
+            + "\n    return state\n"
+        )
+
+    def _emit_main(self, pkg_name: str) -> str:
+        return (
+            f'"""CLI entry point: `python -m {pkg_name}`."""\n'
+            f'import argparse\n'
+            f'import json\n'
+            f'import sys\n'
+            f'\n'
+            f'from .flow import run\n'
+            f'\n'
+            f'\n'
+            f'def main(argv: list[str] | None = None) -> int:\n'
+            f'    parser = argparse.ArgumentParser(prog="{pkg_name}")\n'
+            f'    parser.add_argument("--kwargs", default="{{}}", help="JSON dict of initial flow kwargs")\n'
+            f'    args = parser.parse_args(argv)\n'
+            f'    initial = json.loads(args.kwargs)\n'
+            f'    result = run(**initial)\n'
+            f'    json.dump(result, sys.stdout, indent=2, default=str)\n'
+            f'    sys.stdout.write("\\n")\n'
+            f'    return 0\n'
+            f'\n'
+            f'\n'
+            f'if __name__ == "__main__":\n'
+            f'    raise SystemExit(main())\n'
+        )
 
     @staticmethod
     def _package_name(graph: FlowGraph) -> str:

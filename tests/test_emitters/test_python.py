@@ -242,6 +242,40 @@ def test_emit_onfail_fallback_uses_naive(tmp_path, monkeypatch):
                 del sys.modules[k]
 
 
+def test_emit_orchestrator_runs_full_flow(tmp_path, monkeypatch):
+    src = (FIXTURES / "mvp_v03_contracts.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    try:
+        from retention.steps import load_customers as lc
+        monkeypatch.setattr(lc, "load_customers", lambda *, file: [{"name": "A", "revenue": 1.0}])
+
+        import anthropic
+
+        class FakeMessages:
+            @staticmethod
+            def create(**kw):
+                return type("M", (), {"content": [type("B", (), {"text": '[{"client": "A", "risk": "low", "reason": "ok"}]'})()]})()
+
+        class FakeClient:
+            def __init__(self, *_a, **_k):
+                self.messages = FakeMessages()
+
+        monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
+
+        from retention.flow import run
+        result = run()
+        assert "customers" in result
+        assert "risks" in result
+        assert len(result["risks"]) == 1
+    finally:
+        sys.path.remove(str(tmp_path))
+        for k in list(sys.modules):
+            if k.startswith("retention"):
+                del sys.modules[k]
+
+
 def test_emit_judgment_cache_hit_skips_sdk(tmp_path, monkeypatch):
     src = (FIXTURES / "mvp_v03_cache.clio").read_text()
     PythonEmitter().emit(build_ir(parse(src)), tmp_path)
