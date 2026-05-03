@@ -4,10 +4,12 @@ from clio.parser.ast_nodes import (
     ContractRef,
     EnumType,
     Field,
+    FlowDecl,
     ListType,
     PrimitiveType,
     Program,
     RecordType,
+    StepCall,
     StepDecl,
     TypeExpr,
 )
@@ -59,9 +61,11 @@ class _Parser:
                 decls.append(self.parse_step())
             elif t.type == TokenType.KEYWORD and t.value == "CONTRACT":
                 decls.append(self.parse_contract())
+            elif t.type == TokenType.KEYWORD and t.value == "FLOW":
+                decls.append(self.parse_flow())
             else:
                 raise ParseError(
-                    f"expected STEP or CONTRACT, got {t.type.value} {t.value!r}",
+                    f"expected STEP / CONTRACT / FLOW, got {t.type.value} {t.value!r}",
                     t.line, t.col,
                 )
             self.skip_newlines()
@@ -271,6 +275,72 @@ class _Parser:
             values.append(tok.value)
         self.expect(TokenType.RPAREN)
         return EnumType(values=tuple(values))
+
+    def parse_flow(self) -> FlowDecl:
+        kw = self.expect(TokenType.KEYWORD, "FLOW")
+        ident = self.expect(TokenType.IDENT)
+        self.expect(TokenType.NEWLINE)
+        self.expect(TokenType.INDENT)
+
+        chain: list[StepCall] = [self.parse_step_call()]
+        # Skip newlines and indent/dedent changes between chain elements,
+        # then look for ARROW. The -> may appear on a more-indented continuation line.
+        while True:
+            while self.peek().type in (TokenType.NEWLINE, TokenType.INDENT):
+                self.advance()
+            if self.peek().type == TokenType.ARROW:
+                self.advance()
+                chain.append(self.parse_step_call())
+            else:
+                break
+
+        # Consume any remaining newlines and dedents to close the FLOW block
+        while self.peek().type in (TokenType.NEWLINE, TokenType.DEDENT):
+            self.advance()
+
+        return FlowDecl(name=ident.value, chain=tuple(chain), line=kw.line, col=kw.col)
+
+    def parse_step_call(self) -> StepCall:
+        name_tok = self.expect(TokenType.IDENT)
+        self.expect(TokenType.LPAREN)
+        kwargs: list[tuple[str, object]] = []
+        if self.peek().type != TokenType.RPAREN:
+            kwargs.append(self._parse_call_arg())
+            while self.peek().type == TokenType.COMMA:
+                self.advance()
+                kwargs.append(self._parse_call_arg())
+        self.expect(TokenType.RPAREN)
+        return StepCall(
+            name=name_tok.value,
+            kwargs=tuple(kwargs),
+            line=name_tok.line,
+            col=name_tok.col,
+        )
+
+    def _parse_call_arg(self) -> tuple[str, object]:
+        first = self.peek()
+        if first.type == TokenType.IDENT and self.tokens[self.pos + 1].type == TokenType.EQUALS:
+            name_tok = self.advance()
+            self.expect(TokenType.EQUALS)
+            value_tok = self.peek()
+            if value_tok.type == TokenType.STRING:
+                self.advance()
+                return (name_tok.value, value_tok.value)
+            if value_tok.type == TokenType.NUMBER:
+                self.advance()
+                txt = value_tok.value
+                return (name_tok.value, float(txt) if "." in txt else int(txt))
+            raise ParseError(
+                f"expected literal value for kwarg, got {value_tok.type.value}",
+                value_tok.line, value_tok.col,
+            )
+        if first.type == TokenType.IDENT:
+            self.advance()
+            return (first.value, f"@{first.value}")
+        raise ParseError(
+            f"expected call argument, got {first.type.value} {first.value!r}",
+            first.line, first.col,
+        )
 
 
 def parse(source: str) -> Program:

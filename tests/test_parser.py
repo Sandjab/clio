@@ -169,3 +169,32 @@ def test_parse_str_with_max_constraint():
     assert t.base.__class__.__name__ == "PrimitiveType"
     assert t.base.name == "str"
     assert t.constraints == (("max", 300),)
+
+
+def test_parse_minimal_flow_with_string_kwarg():
+    src = (
+        "STEP a\n  GIVES: x: str\n  MODE: exact\n"
+        "STEP b\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n"
+        "FLOW f\n"
+        '  a(input="hi")\n'
+        "    -> b(x)\n"
+    )
+    program = parse(src)
+    flows = [d for d in program.decls if d.__class__.__name__ == "FlowDecl"]
+    assert len(flows) == 1
+    flow = flows[0]
+    assert [c.name for c in flow.chain] == ["a", "b"]
+    assert flow.chain[0].kwargs == (("input", "hi"),)
+    k = dict(flow.chain[1].kwargs)
+    assert "x" in k
+    assert k["x"] == "@x"
+
+
+def test_parse_flow_arrow_required_between_calls():
+    src = (
+        "STEP a\n  MODE: exact\n"
+        "STEP b\n  MODE: exact\n"
+        "FLOW f\n  a()\n    b()\n"
+    )
+    with pytest.raises(ParseError):
+        parse(src)
