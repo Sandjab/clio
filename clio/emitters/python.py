@@ -207,6 +207,22 @@ def _first_ident(assert_ast: dict) -> str:
     raise KeyError("no ident found")
 
 
+def _collect_idents(assert_ast: dict) -> set[str]:
+    """Walk the assert AST and return every distinct ident name."""
+    if assert_ast.get("kind") == "ident":
+        return {assert_ast["name"]}
+    out: set[str] = set()
+    for key in ("args", "left", "right"):
+        sub = assert_ast.get(key)
+        if isinstance(sub, dict):
+            out |= _collect_idents(sub)
+        elif isinstance(sub, list):
+            for item in sub:
+                if isinstance(item, dict):
+                    out |= _collect_idents(item)
+    return out
+
+
 class PythonEmitter(BaseEmitter):
     def emit(self, graph: FlowGraph, output_dir: Path) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -272,6 +288,13 @@ class PythonEmitter(BaseEmitter):
                 lines.append(f"    {_field_from_schema(fname, fschema)}")
 
             if c.assert_json_ast is not None:
+                idents = _collect_idents(c.assert_json_ast)
+                if len(idents) > 1:
+                    raise ValueError(
+                        f"CONTRACT {c.name!r} ASSERT references multi-field "
+                        f"({sorted(idents)}); the python target only supports "
+                        f"single-field ASSERTs in v0.3"
+                    )
                 target_field = _first_ident(c.assert_json_ast)
                 expr = _ast_to_python(c.assert_json_ast)
                 lines += [

@@ -336,3 +336,22 @@ def test_emit_rejects_pydantic_reserved_field_names(tmp_path):
     with pytest.raises(ValueError, match="model_config"):
         PythonEmitter().emit(graph, tmp_path)
 
+
+def test_emit_rejects_multifield_assert(tmp_path):
+    """Latent #2: ASSERT referencing more than one field would generate a
+    @field_validator whose body references idents not in scope at runtime
+    (NameError on validation). Reject at emit with a clear message."""
+    src = (
+        "CONTRACT item\n"
+        "  SHAPE: {a: int, b: int}\n"
+        "  ASSERT: a > b\n"
+        "STEP load\n"
+        "  GIVES: r: List<item>\n"
+        "  MODE:  exact\n"
+        "FLOW f\n"
+        "  load()\n"
+    )
+    graph = build_ir(parse(src))
+    with pytest.raises(ValueError, match="multi-field"):
+        PythonEmitter().emit(graph, tmp_path)
+
