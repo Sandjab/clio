@@ -317,3 +317,22 @@ def test_emit_judgment_cache_hit_skips_sdk(tmp_path, monkeypatch):
         for k in list(sys.modules):
             if k.startswith("retention"):
                 del sys.modules[k]
+
+
+def test_emit_rejects_pydantic_reserved_field_names(tmp_path):
+    """Latent #1: CONTRACT field colliding with Pydantic v2 reserved attribute
+    (model_config, model_dump, ...) must be rejected at emit, not crash at
+    import time with PydanticUserError."""
+    src = (
+        "CONTRACT item\n"
+        "  SHAPE: {model_config: str, ok: str}\n"
+        "STEP load\n"
+        "  GIVES: r: List<item>\n"
+        "  MODE:  exact\n"
+        "FLOW f\n"
+        "  load()\n"
+    )
+    graph = build_ir(parse(src))
+    with pytest.raises(ValueError, match="model_config"):
+        PythonEmitter().emit(graph, tmp_path)
+

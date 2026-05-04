@@ -24,6 +24,19 @@ from clio.parser.ast_nodes import (
 _PYTHON_PRIMITIVES = {"int": "int", "float": "float", "str": "str", "bool": "bool"}
 
 
+# Pydantic v2 attributes that raise PydanticUserError/ValueError when used as
+# field names (verified against pydantic 2.x). The shadowing-only `model_*`
+# names are not blocked, just warned about, so we let them through.
+_PYDANTIC_RESERVED_FIELDS = frozenset({
+    "model_config",
+    "model_dump",
+    "model_dump_json",
+    "model_validate",
+    "model_validate_json",
+    "model_validate_strings",
+})
+
+
 _MODEL_ID_MAP = {
     "haiku": "claude-haiku-4-5-20251001",
     "sonnet": "claude-sonnet-4-6",
@@ -245,6 +258,13 @@ class PythonEmitter(BaseEmitter):
         for c in graph.contracts:
             class_name = _to_class_name(c.name)
             shape = _shape_from_schema(c.json_schema)
+            for fname, _ in shape:
+                if fname in _PYDANTIC_RESERVED_FIELDS:
+                    raise ValueError(
+                        f"CONTRACT {c.name!r} field {fname!r} collides with a "
+                        f"Pydantic v2 reserved attribute and cannot be emitted "
+                        f"to the python target; rename the field in your .clio source"
+                    )
             lines.append(f"class {class_name}(BaseModel):")
             lines.append(f'    """CONTRACT {c.name}."""')
 
