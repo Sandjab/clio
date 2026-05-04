@@ -10,7 +10,7 @@ and expects the return value to conform to the GIVES type.
 from __future__ import annotations
 
 
-def detect_churn_naive(*, customers: list[dict]) -> list[CustomerRisk]:
+def detect_churn_naive(*, customers: list[dict]) -> list[contracts.CustomerRisk]:
     raise NotImplementedError(
         "Implement steps/detect_churn_naive.py: this is an exact (deterministic) step."
     )

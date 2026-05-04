@@ -84,7 +84,10 @@ def _type_to_python(t: TypeExpr, contracts: dict[str, "ContractIR"]) -> str:
     if isinstance(t, ConstrainedType):
         return _type_to_python(t.base, contracts)
     if isinstance(t, ContractRef):
-        return _to_class_name(t.name)
+        # Step modules import `from .. import contracts`, so qualify the ref —
+        # an unqualified name breaks typing.get_type_hints under `from __future__
+        # import annotations`.
+        return f"contracts.{_to_class_name(t.name)}"
     if isinstance(t, RecordType):
         # Anonymous nested records: typed as `dict` for v0.3.
         # The contract's BaseModel handles structured validation.

@@ -41,7 +41,7 @@ def _attempt(model, prompt):
         return None
 
 
-def detect_churn(*, customers: list[dict]) -> list[CustomerRisk]:
+def detect_churn(*, customers: list[dict]) -> list[contracts.CustomerRisk]:
     prompt = _PROMPT_TEMPLATE
     prompt = prompt.replace('${customers}', json.dumps(customers))
     prompt = prompt.replace('${schema}', _INLINED_SCHEMA)

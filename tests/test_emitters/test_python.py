@@ -355,3 +355,23 @@ def test_emit_rejects_multifield_assert(tmp_path):
     with pytest.raises(ValueError, match="multi-field"):
         PythonEmitter().emit(graph, tmp_path)
 
+
+def test_emitted_step_signatures_resolve_via_get_type_hints(tmp_path):
+    """Latent #3: with `from __future__ import annotations`, an unqualified
+    `list[CustomerRisk]` in a step signature crashes typing.get_type_hints
+    because only `contracts` is imported, not the class itself."""
+    import sys
+    from typing import get_type_hints
+    src = (FIXTURES / "mvp_v03_contracts.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        from retention.steps import detect_churn as dc
+        hints = get_type_hints(dc.detect_churn)
+        assert "return" in hints
+    finally:
+        sys.path.remove(str(tmp_path))
+        for k in list(sys.modules):
+            if k.startswith("retention"):
+                del sys.modules[k]
+
