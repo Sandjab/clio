@@ -43,3 +43,16 @@ def test_parse_str_equality():
 def test_parse_unknown_function_raises():
     with pytest.raises(ExpressionError):
         parse_expression(_toks("max(x) > 0"))
+
+
+def test_parse_ident_compare_ident():
+    """`a > b` — a bare identifier as the right-hand term. Used to crash with
+    IndexError because parse_term peeked past the last token to check for
+    LPAREN."""
+    expr, _ = parse_expression(_toks("a > b"))
+    assert expr_to_json_ast(expr) == {
+        "kind": "compare",
+        "op": ">",
+        "left": {"kind": "ident", "name": "a"},
+        "right": {"kind": "ident", "name": "b"},
+    }

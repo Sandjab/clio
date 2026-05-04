@@ -66,7 +66,7 @@ class _ExprParser:
             return StrExpr(value=t.value)
         if t.type == TokenType.IDENT:
             self.advance()
-            if self.peek().type == TokenType.LPAREN:
+            if self.pos < len(self.tokens) and self.peek().type == TokenType.LPAREN:
                 if t.value not in _ALLOWED_FUNCS:
                     raise ExpressionError(
                         f"unknown function {t.value!r} (only `len` is allowed in v0.1)",
