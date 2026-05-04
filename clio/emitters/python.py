@@ -490,7 +490,10 @@ class PythonEmitter(BaseEmitter):
                 f"    primary_key = _cache.cache_key('{step.name}', _MODELS[0], prompt, _INLINED_SCHEMA)",
                 f"    hit = _cache.cache_lookup(cache_dir, '{step.name}', primary_key, {ttl_repr})",
                 "    if hit is not None:",
-                f"        return {result_class}(json.loads(hit))",
+                "        try:",
+                f"            return {result_class}(json.loads(hit))",
+                "        except Exception:",
+                "            pass  # stale cache (schema changed): fall through to a fresh call",
                 "",
             ]
 
@@ -518,7 +521,10 @@ class PythonEmitter(BaseEmitter):
                         f"        esc_key = _cache.cache_key('{step.name}', _MODELS[model_idx], prompt, _INLINED_SCHEMA)",
                         f"        esc_hit = _cache.cache_lookup(cache_dir, '{step.name}', esc_key, {ttl_repr})",
                         "        if esc_hit is not None:",
-                        f"            return {result_class}(json.loads(esc_hit))",
+                        "            try:",
+                        f"                return {result_class}(json.loads(esc_hit))",
+                        "            except Exception:",
+                        "                pass  # stale escalate cache: fall through",
                         "        response = _attempt(_MODELS[model_idx], prompt)",
                         "        if response is not None:",
                         f"            _cache.cache_store(cache_dir, '{step.name}', esc_key, _MODELS[model_idx], _serialize(response))",

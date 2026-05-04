@@ -356,6 +356,49 @@ def test_emit_rejects_multifield_assert(tmp_path):
         PythonEmitter().emit(graph, tmp_path)
 
 
+def test_emit_judgment_cache_stale_falls_through_to_sdk(tmp_path, monkeypatch):
+    """Latent #4: a cached payload that no longer matches the current schema
+    (e.g. user edited the .clio between runs) must be treated as a cache
+    miss and trigger a fresh SDK call, not crash with ValidationError."""
+    import sys, json
+    src = (FIXTURES / "mvp_v03_cache.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    sys.path.insert(0, str(tmp_path))
+    try:
+        cache_dir = tmp_path / ".cache"
+        monkeypatch.setenv("CLIO_CACHE_DIR", str(cache_dir))
+
+        from retention.clio_runtime import cache as _cache
+        from retention.steps import detect_churn as dc_mod
+
+        prompt = dc_mod._PROMPT_TEMPLATE
+        prompt = prompt.replace("${customers}", json.dumps([{"name": "X", "revenue": 1.0}]))
+        prompt = prompt.replace("${schema}", dc_mod._INLINED_SCHEMA)
+        key = _cache.cache_key("detect_churn", dc_mod._MODELS[0], prompt, dc_mod._INLINED_SCHEMA)
+        # Stale payload — missing required `risk` and `reason` fields
+        stale = json.dumps([{"client": "X"}])
+        _cache.cache_store(cache_dir, "detect_churn", key, dc_mod._MODELS[0], stale)
+
+        import anthropic
+        class FakeMessages:
+            @staticmethod
+            def create(**kw):
+                return type("M", (), {"content": [type("B", (), {"text": '[{"client": "Fresh", "risk": "low", "reason": "from sdk"}]'})()]})()
+        class FakeClient:
+            def __init__(self, *_a, **_k):
+                self.messages = FakeMessages()
+        monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
+
+        result = dc_mod.detect_churn(customers=[{"name": "X", "revenue": 1.0}])
+        assert len(result) == 1
+        assert result[0].client == "Fresh"
+    finally:
+        sys.path.remove(str(tmp_path))
+        for k in list(sys.modules):
+            if k.startswith("retention"):
+                del sys.modules[k]
+
+
 def test_emitted_step_signatures_resolve_via_get_type_hints(tmp_path):
     """Latent #3: with `from __future__ import annotations`, an unqualified
     `list[CustomerRisk]` in a step signature crashes typing.get_type_hints

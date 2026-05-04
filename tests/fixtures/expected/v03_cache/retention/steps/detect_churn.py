@@ -66,7 +66,10 @@ def detect_churn(*, customers: list[dict]) -> list[contracts.CustomerRisk]:
     primary_key = _cache.cache_key('detect_churn', _MODELS[0], prompt, _INLINED_SCHEMA)
     hit = _cache.cache_lookup(cache_dir, 'detect_churn', primary_key, 86400)
     if hit is not None:
-        return (lambda raw: [contracts.CustomerRisk.model_validate(item) for item in raw])(json.loads(hit))
+        try:
+            return (lambda raw: [contracts.CustomerRisk.model_validate(item) for item in raw])(json.loads(hit))
+        except Exception:
+            pass  # stale cache (schema changed): fall through to a fresh call
 
     response = _attempt(_MODELS[model_idx], prompt)
 
