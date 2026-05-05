@@ -6,7 +6,33 @@ This is the reference grammar for the CLIO language. The compiler parses `.clio`
 
 Adds per-step **`impl:`** block (EXACT implementations: code, REST, shell, SQL, MCP tool, binary) and per-step **`invoke:`** block (JUDGMENT invocations: CLI, API, embedded, MCP sampling). Both are optional and backward-compatible — v0.1 files parse unchanged. Defaults can be set at the `RESOURCES` level and overridden per step.
 
-These additions are **specified here but not yet fully implemented** — the parser, IR, and emitters are catching up. See `docs/COMPILATION_TARGETS.md` for current emitter coverage.
+Also lifts `FOR EACH <var> IN <collection>:` from spec-only to implemented control flow.
+
+### Implementation status (as of v0.2)
+
+| Feature | Parser | IR | python target | claude-cli target |
+|---|---|---|---|---|
+| `LANG:` per step | ✅ | ✅ | ignored (still emits Python on every EXACT) | ignored |
+| `impl.mode: code` | ✅ | ✅ | (default behavior — Python stub) | (default behavior — Python stub) |
+| `impl.mode: rest` | ✅ | ✅ | ✅ `requests.request(...)` | ✅ standalone Python step with `requests` |
+| `impl.mode: shell` / `sql` / `mcp_tool` / `binary` | ❌ | ❌ | ❌ | ❌ |
+| `invoke.mode: cli` | ✅ | ✅ | rejected at compile time | (default behavior — `claude -p`) |
+| `invoke.mode: api` (`anthropic`) | ✅ | ✅ | ✅ with overrides | (uses RESOURCES.models chain) |
+| `invoke.mode: api` (`openai`) | ✅ | ✅ | ✅ — covers LiteLLM / OpenRouter / Ollama / vLLM via OpenAI-compat | rejected |
+| `invoke.mode: api` (`bedrock` / `vertex`) | ✅ | ✅ | rejected at compile time | rejected |
+| `invoke.mode: embedded` / `mcp_sampling` | ❌ | ❌ | ❌ | ❌ |
+| `FOR EACH ... IN ...:` | ✅ | ✅ | ✅ `for x in state[...]:` | ✅ `mapfile` + bash `for` loop |
+| Judgment step inside FOR EACH | parses fine | builds fine | works | rejected at emit |
+
+Where the table says *rejected at compile time*, the emitter raises a clear `ValueError` / `NotImplementedError` rather than producing silent or broken code.
+
+v0 limitations carried forward, to be lifted in v0.3+:
+
+- `impl.rest` does not yet template TAKES into url/headers/body (`${var}` substitution).
+- `impl.rest` does not yet parse `query`/`headers`/`body` fields.
+- `impl.rest` `retries` is parsed but not honored at runtime.
+- `FOR EACH` body call results are not accumulated into state — the step is invoked for side effects only.
+- `invoke.api` requires single-model overrides (no escalate chain when `invoke.model` is set).
 
 ## Semantic note: EXACT vs JUDGMENT
 
