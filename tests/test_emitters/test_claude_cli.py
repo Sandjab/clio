@@ -207,3 +207,52 @@ def test_emit_escalate_recomputes_cache_key(tmp_path):
     assert 'cache lookup "$CACHE_DIR_01" s "$KEY_01_ESC"' in run_sh
     # And store under it on success.
     assert 'cache store "$CACHE_DIR_01" s "$KEY_01_ESC"' in run_sh
+
+
+# --- impl: mode: rest emission ---------------------------------------------
+
+_REST_SRC = (
+    "STEP geocode\n"
+    "  TAKES: address: str\n"
+    "  GIVES: location: str\n"
+    "  MODE:  exact\n"
+    "  impl:\n"
+    "    mode: rest\n"
+    "    method: GET\n"
+    '    url: "https://api.example.com/geocode"\n'
+    '    response_path: "results[0].location"\n'
+    "    timeout: 30s\n"
+    "FLOW geo\n"
+    '  geocode(address="123 Main St")\n'
+)
+
+
+def test_claude_cli_emit_rest_step_calls_requests(tmp_path):
+    ClaudeCLIEmitter().emit(build_ir(parse(_REST_SRC)), tmp_path)
+    body = (tmp_path / "steps" / "01_geocode.py").read_text()
+    assert "import requests" in body
+    assert "requests.request(" in body
+    assert "method='GET'" in body
+    assert "url='https://api.example.com/geocode'" in body
+    assert "timeout=30" in body
+
+
+def test_claude_cli_emit_rest_step_traverses_response_path(tmp_path):
+    ClaudeCLIEmitter().emit(build_ir(parse(_REST_SRC)), tmp_path)
+    body = (tmp_path / "steps" / "01_geocode.py").read_text()
+    assert "_traverse(response.json(), 'results[0].location')" in body
+    assert "import re as _re" in body
+
+
+def test_claude_cli_emit_rest_step_parses_as_python(tmp_path):
+    import ast
+    ClaudeCLIEmitter().emit(build_ir(parse(_REST_SRC)), tmp_path)
+    body = (tmp_path / "steps" / "01_geocode.py").read_text()
+    ast.parse(body)
+
+
+def test_claude_cli_emit_rest_step_writes_state_with_gives_name(tmp_path):
+    ClaudeCLIEmitter().emit(build_ir(parse(_REST_SRC)), tmp_path)
+    body = (tmp_path / "steps" / "01_geocode.py").read_text()
+    # The result is stored under the GIVES name in state.json.
+    assert 'state["location"] = location' in body
