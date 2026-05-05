@@ -11,10 +11,12 @@ from pathlib import Path
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import (
     ApiInvokeIR,
+    CallIR,
     CliInvokeIR,
     ContractIR,
     FieldIR,
     FlowGraph,
+    ForEachIR,
     InvokeIR,
     RestImplIR,
     StepIR,
@@ -830,21 +832,59 @@ class PythonEmitter(BaseEmitter):
 
         chain_lines: list[str] = []
         imported_steps: list[str] = []
-        for call in graph.flow.chain:
+
+        def _emit_call(call: CallIR, indent: str, scope_local: set[str]) -> None:
             step = next(s for s in graph.steps if s.name == call.step_name)
             if step.name not in imported_steps:
                 imported_steps.append(step.name)
             kw_parts = []
             for name, value in call.kwargs:
                 if isinstance(value, str) and value.startswith("@"):
-                    kw_parts.append(f"{name}=state[{value[1:]!r}]")
+                    ref = value[1:]
+                    if ref in scope_local:
+                        kw_parts.append(f"{name}={ref}")
+                    else:
+                        kw_parts.append(f"{name}=state[{ref!r}]")
                 else:
                     kw_parts.append(f"{name}={value!r}")
             kwargs_str = ", ".join(kw_parts)
             out_name = step.gives.name if step.gives is not None else "_result"
-            chain_lines.append(
-                f"    state[{out_name!r}] = {step.name}_mod.{step.name}({kwargs_str})"
-            )
+            # Inside a FOR EACH body, results are not assigned to the global state
+            # (no accumulation semantic in v0); the call is invoked for its side
+            # effects on whatever it explicitly writes.
+            if scope_local:
+                chain_lines.append(
+                    f"{indent}{step.name}_mod.{step.name}({kwargs_str})"
+                )
+            else:
+                chain_lines.append(
+                    f"{indent}state[{out_name!r}] = {step.name}_mod.{step.name}({kwargs_str})"
+                )
+
+        def _emit_item(item, indent: str, scope_local: set[str]) -> None:
+            if isinstance(item, ForEachIR):
+                # FOR EACH item IN collection:
+                #     <body>
+                source = (
+                    item.collection
+                    if item.collection in scope_local
+                    else f"state[{item.collection!r}]"
+                )
+                chain_lines.append(f"{indent}for {item.loop_var} in {source}:")
+                inner_scope = scope_local | {item.loop_var}
+                inner_indent = indent + "    "
+                if not item.body:
+                    chain_lines.append(f"{inner_indent}pass")
+                for sub in item.body:
+                    _emit_item(sub, inner_indent, inner_scope)
+                return
+            if isinstance(item, CallIR):
+                _emit_call(item, indent, scope_local)
+                return
+            raise ValueError(f"unknown flow item: {type(item).__name__}")
+
+        for item in graph.flow.chain:
+            _emit_item(item, "    ", set())
 
         imports = "\n".join(f"from .steps import {n} as {n}_mod" for n in imported_steps)
 

@@ -354,3 +354,64 @@ def test_build_ir_invoke_omitted_is_none():
     src = "STEP s\n  GIVES: r: str\n  MODE: judgment\n"
     step = build_ir(parse(src)).steps[0]
     assert step.invoke is None
+
+
+def test_build_ir_for_each_basic():
+    src = (
+        "STEP load\n  GIVES: items: List<str>\n  MODE: exact\n"
+        "STEP process\n  TAKES: x: str\n  GIVES: r: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH item IN items:\n"
+        "         process(x=item)\n"
+    )
+    flow = build_ir(parse(src)).flow
+    assert [type(c).__name__ for c in flow.chain] == ["CallIR", "ForEachIR"]
+    fe = flow.chain[1]
+    assert fe.loop_var == "item"
+    assert fe.collection == "items"
+    assert [type(b).__name__ for b in fe.body] == ["CallIR"]
+
+
+def test_build_ir_for_each_unknown_collection_raises():
+    src = (
+        "STEP load\n  GIVES: items: List<str>\n  MODE: exact\n"
+        "STEP process\n  TAKES: x: str\n  GIVES: r: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH item IN nonexistent:\n"
+        "         process(x=item)\n"
+    )
+    with pytest.raises(ValueError) as exc:
+        build_ir(parse(src))
+    assert "nonexistent" in str(exc.value)
+
+
+def test_build_ir_for_each_non_list_collection_raises():
+    src = (
+        "STEP load\n  GIVES: count: int\n  MODE: exact\n"
+        "STEP process\n  TAKES: x: int\n  GIVES: r: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH item IN count:\n"
+        "         process(x=item)\n"
+    )
+    with pytest.raises(ValueError) as exc:
+        build_ir(parse(src))
+    assert "List" in str(exc.value)
+
+
+def test_build_ir_for_each_loop_var_in_kwarg_resolution():
+    """Inside the FOR EACH body, the loop_var should resolve as a state-like
+    reference for kwargs that bind to it."""
+    src = (
+        "STEP load\n  GIVES: items: List<str>\n  MODE: exact\n"
+        "STEP process\n  TAKES: x: str\n  GIVES: r: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH item IN items:\n"
+        "         process(x=item)\n"
+    )
+    flow = build_ir(parse(src)).flow
+    body_call = flow.chain[1].body[0]
+    assert body_call.kwargs == (("x", "@item"),)

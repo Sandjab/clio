@@ -9,6 +9,7 @@ from clio.parser.ast_nodes import (
     EnumType,
     Field,
     FlowDecl,
+    ForEachBlock,
     ImplBlock,
     InvokeBlock,
     ListType,
@@ -911,7 +912,7 @@ class _Parser:
         self.expect(TokenType.NEWLINE)
         self.expect(TokenType.INDENT)
 
-        chain: list[StepCall] = [self.parse_step_call()]
+        chain: list[StepCall | ForEachBlock] = [self.parse_flow_item()]
         # Skip newlines and indent/dedent changes between chain elements,
         # then look for ARROW. The -> may appear on a more-indented continuation line.
         while True:
@@ -919,7 +920,7 @@ class _Parser:
                 self.advance()
             if self.peek().type == TokenType.ARROW:
                 self.advance()
-                chain.append(self.parse_step_call())
+                chain.append(self.parse_flow_item())
             else:
                 break
 
@@ -928,6 +929,53 @@ class _Parser:
             self.advance()
 
         return FlowDecl(name=ident.value, chain=tuple(chain), line=kw.line, col=kw.col)
+
+    def parse_flow_item(self) -> "StepCall | ForEachBlock":
+        """A FLOW (or a FOR EACH body) item: either a step call or a nested FOR EACH."""
+        t = self.peek()
+        if t.type == TokenType.KEYWORD and t.value == "FOR":
+            return self.parse_for_each()
+        return self.parse_step_call()
+
+    def parse_for_each(self) -> ForEachBlock:
+        """FOR EACH <loop_var> IN <collection>:
+            <flow_item>
+              -> <flow_item>
+              -> ...
+        """
+        kw = self.expect(TokenType.KEYWORD, "FOR")
+        self.expect(TokenType.KEYWORD, "EACH")
+        var_tok = self.expect(TokenType.IDENT)
+        self.expect(TokenType.KEYWORD, "IN")
+        collection_tok = self.expect(TokenType.IDENT)
+        self.expect(TokenType.COLON)
+        self.expect(TokenType.NEWLINE)
+        self.expect(TokenType.INDENT)
+
+        body: list[StepCall | ForEachBlock] = [self.parse_flow_item()]
+        while True:
+            while self.peek().type in (TokenType.NEWLINE, TokenType.INDENT):
+                self.advance()
+            if self.peek().type == TokenType.ARROW:
+                self.advance()
+                body.append(self.parse_flow_item())
+            else:
+                break
+
+        # Close the FOR EACH block
+        while self.peek().type in (TokenType.NEWLINE, TokenType.DEDENT):
+            # Stop at DEDENT once we've consumed the loop body's
+            if self.peek().type == TokenType.DEDENT:
+                self.advance()
+                break
+            self.advance()
+
+        return ForEachBlock(
+            loop_var=var_tok.value,
+            collection=collection_tok.value,
+            body=tuple(body),
+            line=kw.line, col=kw.col,
+        )
 
     def parse_step_call(self) -> StepCall:
         name_tok = self.expect(TokenType.IDENT)
@@ -959,8 +1007,14 @@ class _Parser:
                 self.advance()
                 txt = value_tok.value
                 return (name_tok.value, float(txt) if "." in txt else int(txt))
+            if value_tok.type == TokenType.IDENT:
+                # State reference: kwarg=identifier resolves to state[identifier]
+                # at runtime. Same convention as the shorthand `step(name)` form.
+                self.advance()
+                return (name_tok.value, f"@{value_tok.value}")
             raise ParseError(
-                f"expected literal value for kwarg, got {value_tok.type.value}",
+                f"expected literal value or state reference for kwarg, "
+                f"got {value_tok.type.value}",
                 value_tok.line, value_tok.col,
             )
         if first.type == TokenType.IDENT:

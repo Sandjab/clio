@@ -626,3 +626,66 @@ def test_emit_anthropic_invoke_with_overrides(tmp_path):
     assert "max_tokens=2048" in body
     assert "temperature=0.5" in body
 
+
+# --- FOR EACH emission -----------------------------------------------------
+
+_FOREACH_SRC = (
+    "STEP load_articles\n"
+    "  GIVES: articles: List<str>\n"
+    "  MODE: exact\n"
+    "STEP extract\n"
+    "  TAKES: text: str\n"
+    "  GIVES: entities: List<str>\n"
+    "  MODE: exact\n"
+    "FLOW pipe\n"
+    "  load_articles()\n"
+    "    -> FOR EACH article IN articles:\n"
+    "         extract(text=article)\n"
+)
+
+
+def test_emit_for_each_generates_python_loop(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_FOREACH_SRC)), tmp_path)
+    flow = (tmp_path / "pipe" / "flow.py").read_text()
+    assert "for article in state['articles']:" in flow
+    # Body call uses the loop variable as a kwarg, not state[]
+    assert "extract_mod.extract(text=article)" in flow
+
+
+def test_emit_for_each_does_not_assign_to_state_inside_body(tmp_path):
+    """v0 limitation: the body call's result is invoked for side effects,
+    not accumulated into state. State assignment only happens at top-level."""
+    PythonEmitter().emit(build_ir(parse(_FOREACH_SRC)), tmp_path)
+    flow = (tmp_path / "pipe" / "flow.py").read_text()
+    # `state['articles'] = ...` for the top-level call is fine
+    assert "state['articles'] = load_articles_mod.load_articles()" in flow
+    # ...but inside the loop, the extract call should not be wrapped in state[...] = ...
+    inside_loop = flow.split("for article in state['articles']:")[1]
+    assert "state[" not in inside_loop
+
+
+def test_emit_for_each_flow_parses_as_python(tmp_path):
+    import ast
+    PythonEmitter().emit(build_ir(parse(_FOREACH_SRC)), tmp_path)
+    flow = (tmp_path / "pipe" / "flow.py").read_text()
+    ast.parse(flow)
+
+
+def test_emit_for_each_nested(tmp_path):
+    src = (
+        "STEP load\n  GIVES: matrix: List<List<str>>\n  MODE: exact\n"
+        "STEP inner\n  TAKES: cell: str\n  GIVES: r: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH row IN matrix:\n"
+        "         FOR EACH cell IN row:\n"
+        "           inner(cell=cell)\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow = (tmp_path / "pipe" / "flow.py").read_text()
+    # Nested loops should produce nested Python for-loops with proper indentation;
+    # inside the inner loop, `cell` resolves via the local scope, not state[]
+    assert "for row in state['matrix']:" in flow
+    assert "for cell in row:" in flow
+    assert "inner_mod.inner(cell=cell)" in flow
+

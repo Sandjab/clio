@@ -723,3 +723,75 @@ def test_parse_invoke_api_unknown_field_raises():
     with pytest.raises(ParseError) as exc:
         parse(src)
     assert "speed" in str(exc.value)
+
+
+# --- FOR EACH parsing ------------------------------------------------------
+
+_FOREACH_SRC = (
+    "STEP load\n"
+    "  GIVES: items: List<str>\n"
+    "  MODE: exact\n"
+    "STEP process\n"
+    "  TAKES: x: str\n"
+    "  GIVES: r: str\n"
+    "  MODE: exact\n"
+    "FLOW pipe\n"
+    "  load()\n"
+    "    -> FOR EACH item IN items:\n"
+    "         process(x=item)\n"
+)
+
+
+def test_parse_for_each_basic():
+    flow = next(d for d in parse(_FOREACH_SRC).decls if d.__class__.__name__ == "FlowDecl")
+    assert [type(c).__name__ for c in flow.chain] == ["StepCall", "ForEachBlock"]
+    fe = flow.chain[1]
+    assert fe.loop_var == "item"
+    assert fe.collection == "items"
+    assert len(fe.body) == 1
+    assert fe.body[0].__class__.__name__ == "StepCall"
+    assert fe.body[0].name == "process"
+
+
+def test_parse_for_each_kwarg_binding_uses_state_ref_format():
+    # `process(x=item)` should produce kwargs (("x", "@item"),) — same convention
+    # as the shorthand `step(name)` form.
+    flow = next(d for d in parse(_FOREACH_SRC).decls if d.__class__.__name__ == "FlowDecl")
+    body_call = flow.chain[1].body[0]
+    assert body_call.kwargs == (("x", "@item"),)
+
+
+def test_parse_for_each_with_arrow_chain_in_body():
+    src = (
+        "STEP load\n  GIVES: items: List<str>\n  MODE: exact\n"
+        "STEP a\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n"
+        "STEP b\n  TAKES: y: str\n  GIVES: z: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH item IN items:\n"
+        "         a(x=item)\n"
+        "           -> b(y)\n"
+    )
+    flow = next(d for d in parse(src).decls if d.__class__.__name__ == "FlowDecl")
+    fe = flow.chain[1]
+    assert len(fe.body) == 2
+    assert [c.name for c in fe.body] == ["a", "b"]
+
+
+def test_parse_for_each_nested():
+    src = (
+        "STEP load\n  GIVES: matrix: List<str>\n  MODE: exact\n"
+        "STEP inner\n  TAKES: cell: str\n  GIVES: r: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH row IN matrix:\n"
+        "         FOR EACH cell IN row:\n"
+        "           inner(cell=cell)\n"
+    )
+    flow = next(d for d in parse(src).decls if d.__class__.__name__ == "FlowDecl")
+    outer = flow.chain[1]
+    assert outer.__class__.__name__ == "ForEachBlock"
+    assert outer.body[0].__class__.__name__ == "ForEachBlock"
+    inner = outer.body[0]
+    assert inner.loop_var == "cell"
+    assert inner.collection == "row"

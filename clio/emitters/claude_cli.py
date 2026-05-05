@@ -4,7 +4,15 @@ from pathlib import Path
 
 from clio.emitters.base import BaseEmitter
 from clio.ir.contracts import type_to_json_schema
-from clio.ir.graph import ContractIR, FieldIR, FlowGraph, RestImplIR, StepIR
+from clio.ir.graph import (
+    CallIR,
+    ContractIR,
+    FieldIR,
+    FlowGraph,
+    ForEachIR,
+    RestImplIR,
+    StepIR,
+)
 from clio.parser.ast_nodes import (
     ConstrainedType,
     ContractRef,
@@ -209,9 +217,15 @@ class ClaudeCLIEmitter(BaseEmitter):
             self._emit_step(steps_dir, idx, step)
 
         if graph.flow is not None:
+            if _chain_has_for_each(graph.flow.chain):
+                raise NotImplementedError(
+                    "FOR EACH is not yet supported by the claude-cli emitter "
+                    "in v0.2; use --target python for flows with FOR EACH loops"
+                )
             self._emit_run_sh(graph, output_dir)
             if any(
-                self._step_for_call(graph, c).mode == "judgment"
+                isinstance(c, CallIR)
+                and self._step_for_call(graph, c).mode == "judgment"
                 for c in graph.flow.chain
             ):
                 self._copy_runtime(output_dir)
@@ -553,6 +567,15 @@ class ClaudeCLIEmitter(BaseEmitter):
                 out_name=out_name,
             )
         (steps_dir / f"{prefix}.py").write_text(body)
+
+
+def _chain_has_for_each(chain) -> bool:
+    """Recursively scan a flow chain for any ForEachIR node."""
+    for item in chain:
+        if isinstance(item, ForEachIR):
+            return True
+        # Nested CallIR carries no children; nothing else to recurse into.
+    return False
 
 
 def _render_prompt(step: StepIR) -> str:

@@ -80,9 +80,23 @@ class StepCall:
 
 
 @dataclass(frozen=True)
+class ForEachBlock:
+    """FOR EACH <loop_var> IN <collection>:
+        <body>
+
+    `collection` is the name of a state field (the GIVES of an upstream step).
+    `body` is a chain of FlowItems executed for each element."""
+    loop_var: str
+    collection: str
+    body: "tuple[StepCall | ForEachBlock, ...]"
+    line: int
+    col: int
+
+
+@dataclass(frozen=True)
 class FlowDecl:
     name: str
-    chain: tuple[StepCall, ...]                 # sequential: [a, b, c] means a -> b -> c
+    chain: "tuple[StepCall | ForEachBlock, ...]"   # sequential composition; ForEachBlock = nested loop
     line: int
     col: int
 

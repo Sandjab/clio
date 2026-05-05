@@ -109,9 +109,19 @@ class CallIR:
 
 
 @dataclass(frozen=True)
+class ForEachIR:
+    """IR mirror of ForEachBlock: iterate `loop_var` over `collection` (a state
+    field name), executing `body` for each element."""
+    loop_var: str
+    collection: str
+    body: "tuple[CallIR | ForEachIR, ...]"
+    line: int
+
+
+@dataclass(frozen=True)
 class FlowIR:
     name: str
-    chain: tuple[CallIR, ...]
+    chain: "tuple[CallIR | ForEachIR, ...]"
     line: int
 
 

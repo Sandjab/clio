@@ -256,3 +256,23 @@ def test_claude_cli_emit_rest_step_writes_state_with_gives_name(tmp_path):
     body = (tmp_path / "steps" / "01_geocode.py").read_text()
     # The result is stored under the GIVES name in state.json.
     assert 'state["location"] = location' in body
+
+
+# --- FOR EACH rejection ----------------------------------------------------
+
+def test_claude_cli_emit_rejects_for_each(tmp_path):
+    """v0.2: claude-cli emitter does not yet support FOR EACH; it should
+    raise a clear NotImplementedError suggesting --target python."""
+    import pytest as _pytest
+    src = (
+        "STEP load\n  GIVES: items: List<str>\n  MODE: exact\n"
+        "STEP process\n  TAKES: x: str\n  GIVES: r: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH item IN items:\n"
+        "         process(x=item)\n"
+    )
+    with _pytest.raises(NotImplementedError) as exc:
+        ClaudeCLIEmitter().emit(build_ir(parse(src)), tmp_path)
+    assert "FOR EACH" in str(exc.value)
+    assert "python" in str(exc.value)

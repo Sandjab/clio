@@ -62,3 +62,6 @@ class Keyword(str, Enum):
     OPENAI = "openai"
     BEDROCK = "bedrock"
     VERTEX = "vertex"
+    FOR = "FOR"
+    EACH = "EACH"
+    IN = "IN"

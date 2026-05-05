@@ -9,6 +9,7 @@ from clio.ir.graph import (
     FieldIR,
     FlowGraph,
     FlowIR,
+    ForEachIR,
     ImplIR,
     InvokeIR,
     OnFailChainIR,
@@ -27,6 +28,7 @@ from clio.parser.ast_nodes import (
     ContractRef,
     EnumType,
     FlowDecl,
+    ForEachBlock,
     ImplBlock,
     InvokeBlock,
     ListType,
@@ -35,6 +37,7 @@ from clio.parser.ast_nodes import (
     RecordType,
     ResourcesDecl,
     RestImpl,
+    StepCall,
     StepDecl,
     TypeExpr,
 )
@@ -282,47 +285,110 @@ def _build_flow(
     contracts: dict[str, ContractIR],
 ) -> FlowIR:
     available: dict[str, TypeExpr] = {}
+    items = _build_flow_items(decl.chain, steps_by_name, contracts, available)
+    return FlowIR(name=decl.name, chain=tuple(items), line=decl.line)
 
-    calls: list[CallIR] = []
-    for call in decl.chain:
-        if call.name not in steps_by_name:
-            raise IRBuildError(
-                f"line {call.line}:{call.col}: unknown STEP {call.name!r} in FLOW {decl.name}"
-            )
-        step = steps_by_name[call.name]
 
-        provided = dict(call.kwargs)
-        for taken in step.takes:
-            if taken.name not in provided:
-                raise IRBuildError(
-                    f"line {call.line}:{call.col}: STEP {step.name} requires kwarg {taken.name!r}, "
-                    f"got {sorted(provided)}"
-                )
-            value = provided[taken.name]
-            if isinstance(value, str) and value.startswith("@"):
-                ref = value[1:]
-                if ref not in available:
-                    raise IRBuildError(
-                        f"line {call.line}:{call.col}: state reference {ref!r} not produced by "
-                        f"any previous step"
-                    )
-                ref_type = available[ref]
-                if not (
-                    types_equal(ref_type, taken.type, contracts)
-                    or names_equal(ref_type, taken.type)
-                ):
-                    raise IRBuildError(
-                        f"line {call.line}:{call.col}: type mismatch on {taken.name!r}: "
-                        f"step {step.name} expects {_render(taken.type)}, "
-                        f"flow provides {_render(ref_type)}"
-                    )
-
+def _build_flow_items(
+    chain: "tuple[StepCall | ForEachBlock, ...]",
+    steps_by_name: dict[str, StepIR],
+    contracts: dict[str, ContractIR],
+    available: dict[str, TypeExpr],
+) -> list:
+    """Build IR items from a chain of FlowItems. Mutates `available` to track
+    fields produced by step.gives so that downstream calls can reference them."""
+    out: list = []
+    for item in chain:
+        if isinstance(item, ForEachBlock):
+            out.append(_build_for_each(item, steps_by_name, contracts, available))
+            # FOR EACH does not contribute to the outer state in v0.
+            continue
+        # StepCall path
+        out.append(_build_call(item, steps_by_name, contracts, available))
+        step = steps_by_name[item.name]
         if step.gives is not None:
             available[step.gives.name] = step.gives.type
+    return out
 
-        calls.append(CallIR(step_name=call.name, kwargs=call.kwargs, line=call.line))
 
-    return FlowIR(name=decl.name, chain=tuple(calls), line=decl.line)
+def _build_call(
+    call: StepCall,
+    steps_by_name: dict[str, StepIR],
+    contracts: dict[str, ContractIR],
+    available: dict[str, TypeExpr],
+) -> CallIR:
+    if call.name not in steps_by_name:
+        raise IRBuildError(
+            f"line {call.line}:{call.col}: unknown STEP {call.name!r}"
+        )
+    step = steps_by_name[call.name]
+
+    provided = dict(call.kwargs)
+    for taken in step.takes:
+        if taken.name not in provided:
+            raise IRBuildError(
+                f"line {call.line}:{call.col}: STEP {step.name} requires kwarg {taken.name!r}, "
+                f"got {sorted(provided)}"
+            )
+        value = provided[taken.name]
+        if isinstance(value, str) and value.startswith("@"):
+            ref = value[1:]
+            if ref not in available:
+                raise IRBuildError(
+                    f"line {call.line}:{call.col}: state reference {ref!r} not produced by "
+                    f"any previous step"
+                )
+            ref_type = available[ref]
+            if not (
+                types_equal(ref_type, taken.type, contracts)
+                or names_equal(ref_type, taken.type)
+            ):
+                raise IRBuildError(
+                    f"line {call.line}:{call.col}: type mismatch on {taken.name!r}: "
+                    f"step {step.name} expects {_render(taken.type)}, "
+                    f"flow provides {_render(ref_type)}"
+                )
+
+    return CallIR(step_name=call.name, kwargs=call.kwargs, line=call.line)
+
+
+def _build_for_each(
+    decl: ForEachBlock,
+    steps_by_name: dict[str, StepIR],
+    contracts: dict[str, ContractIR],
+    outer_available: dict[str, TypeExpr],
+) -> ForEachIR:
+    """Validate and build a FOR EACH IR node.
+
+    v0 validation:
+    - `collection` must be a state field produced by an upstream step
+    - that field must be a ListType (otherwise iteration is undefined)
+    - inside the body, `loop_var` is bound to the inner type and is also
+      visible to nested calls/loops via the (mutated) inner scope
+    """
+    if decl.collection not in outer_available:
+        raise IRBuildError(
+            f"line {decl.line}:{decl.col}: FOR EACH iterates over {decl.collection!r} "
+            f"which is not produced by any previous step"
+        )
+    coll_type = outer_available[decl.collection]
+    if not isinstance(coll_type, ListType):
+        raise IRBuildError(
+            f"line {decl.line}:{decl.col}: FOR EACH expects {decl.collection!r} to be a List, "
+            f"got {_render(coll_type)}"
+        )
+
+    inner_available = dict(outer_available)
+    inner_available[decl.loop_var] = coll_type.inner
+
+    body_items = _build_flow_items(decl.body, steps_by_name, contracts, inner_available)
+
+    return ForEachIR(
+        loop_var=decl.loop_var,
+        collection=decl.collection,
+        body=tuple(body_items),
+        line=decl.line,
+    )
 
 
 def _check_refs(t: TypeExpr, contracts: dict[str, ContractIR], line: int, col: int) -> None:
