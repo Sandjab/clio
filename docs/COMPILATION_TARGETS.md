@@ -2,6 +2,33 @@
 
 Each target is an emitter module that transforms the IR graph into a runnable project. This document describes what each target emits and the constraints it operates under.
 
+## Targets at a glance
+
+| Target | Status | Output | Why / Use case | Effort |
+|---|---|---|---|---|
+| `claude-cli` | Implemented | Claude Code project (bash + `claude -p` subprocess) | Prototype + reference target | — |
+| `python` | Implemented | Python package (Anthropic SDK + Pydantic v2) | Production-grade Python deployment | — |
+| `local` | Future | Same as `python`, with Ollama/vLLM | Offline / data-privacy constraints | High (Outlines/Guidance) |
+| `rust` | Future | Cargo async project | Performance-critical `exact` steps | High |
+| `docker` | Future | Multi-stage Dockerfile + compose | Mixed-language flows | Medium |
+| `hybrid` | Future | Claude CLI + precompiled binaries for `exact` | Heavy `exact` within CLI orchestration | Medium |
+| `mcp-server` | Candidate | MCP server, each FLOW exposed as a tool | Native Anthropic ecosystem integration; turn a `.clio` into a structured MCP tool | Low |
+| `fastapi` | Candidate | HTTP server (FLOW = endpoint, CONTRACT = `response_model`) | Deploy a `.clio` as a microservice | Low–Medium |
+| `temporal` | Candidate | Temporal workflow (Python/Go), STEPs = activities | Enterprise durability, retry, observability — maps 1:1 onto `ON_FAIL` semantics | Medium–High |
+| `typescript` | Candidate | TS/Node package with `@anthropic-ai/sdk` | Frontend / Vercel / edge audiences | Medium |
+| `langgraph` | Candidate | LangGraph graph (nodes = STEPs, state = CONTRACTs) | Adoption by existing LangChain users; positions CLIO as a meta-language | Medium |
+| `dspy` | Candidate | DSPy signatures + composed module | Research-oriented audiences | Medium |
+| `modal` | Candidate | Python with `@modal.function` decorators | Frictionless cloud deployment | Low |
+| `step-functions` | Candidate | AWS States Language JSON + Bedrock integration | AWS-native enterprise | Medium–High |
+| `jupyter` | Candidate | Notebook with one cell per STEP | Exploration / demo / pedagogy | Low |
+
+**Status legend**:
+- *Implemented* — emitter shipped, tests green.
+- *Future* — designed in this document, not yet built. See dedicated sections below.
+- *Candidate* — rationale captured here, no formal design yet, pending a decision to invest.
+
+---
+
 ## `target: claude-cli` (Milestone 1)
 
 **What it emits**: a Claude Code project folder.
