@@ -258,21 +258,78 @@ def test_claude_cli_emit_rest_step_writes_state_with_gives_name(tmp_path):
     assert 'state["location"] = location' in body
 
 
-# --- FOR EACH rejection ----------------------------------------------------
+# --- FOR EACH bash emission ------------------------------------------------
 
-def test_claude_cli_emit_rejects_for_each(tmp_path):
-    """v0.2: claude-cli emitter does not yet support FOR EACH; it should
-    raise a clear NotImplementedError suggesting --target python."""
+_FOREACH_BASH_SRC = (
+    "STEP load\n  GIVES: items: List<str>\n  MODE: exact\n"
+    "STEP process\n  TAKES: x: str\n  GIVES: r: str\n  MODE: exact\n"
+    "FLOW pipe\n"
+    "  load()\n"
+    "    -> FOR EACH item IN items:\n"
+    "         process(x=item)\n"
+)
+
+
+def test_claude_cli_emit_for_each_generates_bash_loop(tmp_path):
+    ClaudeCLIEmitter().emit(build_ir(parse(_FOREACH_BASH_SRC)), tmp_path)
+    run_sh = (tmp_path / "run.sh").read_text()
+    # The emitted run.sh should contain a `for ... in ... do` loop bound to a
+    # mapfile-populated array reading from state.json via jq.
+    assert "FOR EACH item IN items" in run_sh
+    assert "mapfile -t _CLIO_ITER_0" in run_sh
+    assert "jq -r '.items[]' state.json" in run_sh   # primitive (str) → -r
+    assert 'for item in "${_CLIO_ITER_0[@]}"; do' in run_sh
+    assert "done" in run_sh
+
+
+def test_claude_cli_emit_for_each_passes_loop_var_as_bash_var(tmp_path):
+    ClaudeCLIEmitter().emit(build_ir(parse(_FOREACH_BASH_SRC)), tmp_path)
+    run_sh = (tmp_path / "run.sh").read_text()
+    # The body call should reference the bash variable, not jq state.json
+    assert '--x="$item"' in run_sh
+    # And the loop body should NOT do `jq -r .item state.json` (the loop var
+    # is loop-local, not a state field).
+    assert "jq -r .item state.json" not in run_sh
+
+
+def test_claude_cli_emit_for_each_uses_jq_c_for_object_collection(tmp_path):
+    """When iterating over List<{...}>, values must stay as JSON literals
+    (jq -c) so they can be passed back through the pipeline unaltered."""
+    src = (
+        "STEP load\n"
+        "  GIVES: rows: List<{name: str, age: int}>\n"
+        "  MODE: exact\n"
+        "STEP process\n"
+        "  TAKES: row: {name: str, age: int}\n"
+        "  GIVES: r: str\n"
+        "  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH row IN rows:\n"
+        "         process(row=row)\n"
+    )
+    ClaudeCLIEmitter().emit(build_ir(parse(src)), tmp_path)
+    run_sh = (tmp_path / "run.sh").read_text()
+    assert "jq -c '.rows[]' state.json" in run_sh   # object → -c
+
+
+def test_claude_cli_emit_for_each_judgment_in_body_raises(tmp_path):
+    """v0.2: judgment steps inside a FOR EACH body are not yet supported by
+    the claude-cli emitter (cache + escalate + state.json substitution would
+    need to be reworked for loop-local variables)."""
     import pytest as _pytest
     src = (
         "STEP load\n  GIVES: items: List<str>\n  MODE: exact\n"
-        "STEP process\n  TAKES: x: str\n  GIVES: r: str\n  MODE: exact\n"
+        "STEP classify\n"
+        "  TAKES: x: str\n"
+        "  GIVES: label: str\n"
+        "  MODE: judgment\n"
         "FLOW pipe\n"
         "  load()\n"
         "    -> FOR EACH item IN items:\n"
-        "         process(x=item)\n"
+        "         classify(x=item)\n"
     )
     with _pytest.raises(NotImplementedError) as exc:
         ClaudeCLIEmitter().emit(build_ir(parse(src)), tmp_path)
+    assert "judgment" in str(exc.value)
     assert "FOR EACH" in str(exc.value)
-    assert "python" in str(exc.value)

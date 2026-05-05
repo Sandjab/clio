@@ -217,16 +217,10 @@ class ClaudeCLIEmitter(BaseEmitter):
             self._emit_step(steps_dir, idx, step)
 
         if graph.flow is not None:
-            if _chain_has_for_each(graph.flow.chain):
-                raise NotImplementedError(
-                    "FOR EACH is not yet supported by the claude-cli emitter "
-                    "in v0.2; use --target python for flows with FOR EACH loops"
-                )
             self._emit_run_sh(graph, output_dir)
             if any(
-                isinstance(c, CallIR)
-                and self._step_for_call(graph, c).mode == "judgment"
-                for c in graph.flow.chain
+                self._step_for_call(graph, c).mode == "judgment"
+                for c in _flatten_calls(graph.flow.chain)
             ):
                 self._copy_runtime(output_dir)
 
@@ -291,21 +285,92 @@ class ClaudeCLIEmitter(BaseEmitter):
             else ("haiku",)
         )
         contracts_by_name = {c.name: c for c in graph.contracts}
-        for call in graph.flow.chain:
-            step = self._step_for_call(graph, call)
-            idx = self._step_index_in_emit(graph, step)
-            if step.mode == "exact":
-                args = self._render_kwargs_as_cli(call)
-                script_name = f"steps/{idx:02d}_{step.name}.py"
-                lines.append(f"# Step {idx}: {step.name} (exact)")
-                lines.append(f'"$PYTHON" {script_name} {args}')
+
+        # Track types of state fields produced by upstream steps so we can
+        # decide jq -r vs jq -c when iterating with FOR EACH.
+        available_types: dict = {}
+        # Counter for unique mapfile array variable names across nested loops.
+        iter_counter = [0]
+
+        def _emit_chain(items, indent: str, local_scope: dict) -> None:
+            for item in items:
+                if isinstance(item, ForEachIR):
+                    _emit_for_each(item, indent, local_scope)
+                else:  # CallIR
+                    step = self._step_for_call(graph, item)
+                    idx = self._step_index_in_emit(graph, step)
+                    if step.mode == "exact":
+                        args = self._render_kwargs_as_cli(item, local_scope)
+                        script_name = f"steps/{idx:02d}_{step.name}.py"
+                        lines.append(f"{indent}# Step {idx}: {step.name} (exact)")
+                        lines.append(f'{indent}"$PYTHON" {script_name} {args}')
+                    else:
+                        if local_scope:
+                            raise NotImplementedError(
+                                f"judgment step {step.name!r} inside a FOR EACH body is "
+                                "not yet supported by the claude-cli emitter in v0.2; "
+                                "use --target python or move the judgment step out of the loop"
+                            )
+                        lines.extend(self._render_judgment_step(
+                            graph, idx, step, item,
+                            models_list=models_list,
+                            contracts_by_name=contracts_by_name,
+                        ))
+                    if step.gives is not None and not local_scope:
+                        # Only top-level state is tracked; inside a loop the body
+                        # may produce values but they are not accumulated in v0.
+                        available_types[step.gives.name] = step.gives.type
+                    lines.append("")
+
+        def _emit_for_each(item: ForEachIR, indent: str, local_scope: dict) -> None:
+            if item.collection in local_scope:
+                inner_type = _resolve_iter_inner_type(local_scope[item.collection])
+                source_expr = (
+                    f'"${item.collection}"'
+                    if _is_primitive_type(local_scope[item.collection])
+                    else f'"${item.collection}"'
+                )
+                # Iterating a loop-local list is rare but allowed; same shape.
+                primitive = _is_primitive_type(inner_type) if inner_type is not None else True
+                jq_flag = "-r" if primitive else "-c"
+                # In this case the local var holds a JSON list. Use jq on stdin.
+                array_var = f"_CLIO_ITER_{iter_counter[0]}"
+                iter_counter[0] += 1
+                lines.append(
+                    f"{indent}# FOR EACH {item.loop_var} IN {item.collection} (loop-local)"
+                )
+                lines.append(
+                    f"{indent}mapfile -t {array_var} < <(printf %s \"${item.collection}\" | jq {jq_flag} '.[]')"
+                )
             else:
-                lines.extend(self._render_judgment_step(
-                    graph, idx, step, call,
-                    models_list=models_list,
-                    contracts_by_name=contracts_by_name,
-                ))
-            lines.append("")
+                if item.collection not in available_types:
+                    raise ValueError(
+                        f"FOR EACH iterates over {item.collection!r} which is not "
+                        f"a known state field at emit time"
+                    )
+                coll_type = available_types[item.collection]
+                inner_type = _resolve_iter_inner_type(coll_type)
+                primitive = _is_primitive_type(inner_type) if inner_type is not None else True
+                jq_flag = "-r" if primitive else "-c"
+                array_var = f"_CLIO_ITER_{iter_counter[0]}"
+                iter_counter[0] += 1
+                lines.append(
+                    f"{indent}# FOR EACH {item.loop_var} IN {item.collection}"
+                )
+                lines.append(
+                    f"{indent}mapfile -t {array_var} < <(jq {jq_flag} '.{item.collection}[]' state.json)"
+                )
+
+            lines.append(
+                f'{indent}for {item.loop_var} in "${{{array_var}[@]}}"; do'
+            )
+            inner_scope = dict(local_scope)
+            inner_scope[item.loop_var] = inner_type  # may be None
+            _emit_chain(item.body, indent + "    ", inner_scope)
+            lines.append(f"{indent}done")
+
+        _emit_chain(graph.flow.chain, "", {})
+
         lines.append('echo "[clio] flow ' + graph.flow.name + ' completed."')
         run_path = output_dir / "run.sh"
         run_path.write_text("\n".join(lines) + "\n")
@@ -498,12 +563,18 @@ class ClaudeCLIEmitter(BaseEmitter):
         return out
 
     @staticmethod
-    def _render_kwargs_as_cli(call) -> str:
+    def _render_kwargs_as_cli(call, local_scope: dict | None = None) -> str:
+        local_scope = local_scope or {}
         parts: list[str] = []
         for name, value in call.kwargs:
             if isinstance(value, str) and value.startswith("@"):
                 ref = value[1:]
-                parts.append(f'--{name}="$(jq -r .{ref} state.json)"')
+                if ref in local_scope:
+                    # Loop variable bound by an enclosing FOR EACH; resolve via
+                    # the bash variable rather than re-querying state.json.
+                    parts.append(f'--{name}="${ref}"')
+                else:
+                    parts.append(f'--{name}="$(jq -r .{ref} state.json)"')
             else:
                 parts.append(f'--{name}={shlex.quote(str(value))}')
         return " ".join(parts)
@@ -576,6 +647,33 @@ def _chain_has_for_each(chain) -> bool:
             return True
         # Nested CallIR carries no children; nothing else to recurse into.
     return False
+
+
+def _flatten_calls(chain) -> list:
+    """Recursively yield every CallIR in `chain`, descending into nested
+    ForEachIR.body."""
+    out: list = []
+    for item in chain:
+        if isinstance(item, CallIR):
+            out.append(item)
+        elif isinstance(item, ForEachIR):
+            out.extend(_flatten_calls(item.body))
+    return out
+
+
+def _is_primitive_type(t) -> bool:
+    """True if `t` is one of int|float|str|bool. Used to decide between
+    `jq -r` (primitive → unwrapped) and `jq -c` (object → JSON literal)."""
+    from clio.parser.ast_nodes import PrimitiveType, ConstrainedType
+    if isinstance(t, ConstrainedType):
+        return _is_primitive_type(t.base)
+    return isinstance(t, PrimitiveType)
+
+
+def _resolve_iter_inner_type(t):
+    """Return the element type of a ListType, or None for any other shape."""
+    from clio.parser.ast_nodes import ListType
+    return t.inner if isinstance(t, ListType) else None
 
 
 def _render_prompt(step: StepIR) -> str:
