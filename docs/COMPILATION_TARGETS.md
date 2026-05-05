@@ -37,7 +37,7 @@ Each target is an emitter module that transforms the IR graph into a runnable pr
 
 | IR element        | Emitted artifact                                  |
 |-------------------|---------------------------------------------------|
-| STEP `exact`      | `steps/NN_name.sh` or `steps/NN_name.py`          |
+| STEP `exact`      | `steps/NN_name.py` (Python script with argparse + `state.json`) |
 | STEP `judgment`   | `steps/NN_name.prompt` + `steps/NN_name.schema.json` |
 | CONTRACT          | JSON Schema file + validation hook in `.claude/hooks.json` |
 | FLOW              | `run.sh` — bash orchestrator                      |
