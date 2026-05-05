@@ -328,3 +328,45 @@ def test_parse_on_fail_duplicate_raises():
     with pytest.raises(ParseError) as exc:
         parse(src)
     assert "duplicate" in str(exc.value).lower()
+
+
+def test_parse_lang_on_exact_step():
+    src = "STEP foo\n  MODE: exact\n  LANG: python\n"
+    step = parse(src).decls[0]
+    assert step.lang == "python"
+
+
+def test_parse_lang_omitted_defaults_to_none():
+    src = "STEP foo\n  MODE: exact\n"
+    step = parse(src).decls[0]
+    assert step.lang is None
+
+
+def test_parse_lang_accepts_all_documented_values():
+    for lang in ("python", "rust", "go", "node", "bash", "auto"):
+        src = f"STEP foo\n  MODE: exact\n  LANG: {lang}\n"
+        step = parse(src).decls[0]
+        assert step.lang == lang
+
+
+def test_parse_lang_on_judgment_step_raises():
+    src = "STEP s\n  GIVES: r: str\n  MODE: judgment\n  LANG: python\n"
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "LANG" in str(exc.value)
+    assert "exact" in str(exc.value)
+
+
+def test_parse_lang_duplicate_raises():
+    src = "STEP foo\n  MODE: exact\n  LANG: python\n  LANG: rust\n"
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "duplicate" in str(exc.value).lower()
+
+
+def test_parse_lang_unknown_value_raises():
+    # `cobol` is not a CLIO LANG. The lexer treats it as IDENT, which the
+    # KEYWORD-expecting branch rejects; either way the parse must fail.
+    src = "STEP foo\n  MODE: exact\n  LANG: cobol\n"
+    with pytest.raises(ParseError):
+        parse(src)

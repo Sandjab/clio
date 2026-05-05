@@ -39,6 +39,7 @@ class StepIR:
     gives: FieldIR | None
     cache: CacheConfigIR | None
     on_fail: OnFailChainIR | None
+    lang: str | None              # one of python|rust|go|node|bash|auto, exact-only; None if unset
     line: int
 
 

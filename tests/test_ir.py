@@ -255,3 +255,16 @@ def test_build_ir_fallback_cycle_raises():
     with pytest.raises(ValueError) as exc:
         build_ir(parse(src))
     assert "cycle" in str(exc.value).lower()
+
+
+def test_build_ir_propagates_lang_field():
+    src = (
+        "STEP a\n  MODE: exact\n  LANG: rust\n"
+        "STEP b\n  MODE: exact\n"
+        "STEP c\n  GIVES: r: str\n  MODE: judgment\n"
+    )
+    graph = build_ir(parse(src))
+    by_name = {s.name: s for s in graph.steps}
+    assert by_name["a"].lang == "rust"
+    assert by_name["b"].lang is None
+    assert by_name["c"].lang is None

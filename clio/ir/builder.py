@@ -127,6 +127,7 @@ def _resolve_fallbacks(
             name=step.name, mode=step.mode, takes=step.takes, gives=step.gives,
             cache=step.cache,
             on_fail=OnFailChainIR(strategies=tuple(new_strategies)),
+            lang=step.lang,
             line=step.line,
         )
     return new_steps
@@ -205,6 +206,7 @@ def _build_step(decl: StepDecl) -> StepIR:
         gives=FieldIR(name=decl.gives.name, type=decl.gives.type) if decl.gives else None,
         cache=cache_ir,
         on_fail=on_fail_ir,
+        lang=decl.lang,
         line=decl.line,
     )
 

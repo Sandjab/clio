@@ -42,6 +42,7 @@ class StepDecl:
     gives: Field | None
     cache: "CacheConfig | None"
     on_fail: "OnFailChain | None"
+    lang: str | None              # one of python|rust|go|node|bash|auto, exact-only
     line: int
     col: int
 

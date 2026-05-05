@@ -29,6 +29,7 @@ class ParseError(Exception):
 
 _PRIMITIVE_TYPES = {"int", "float", "str", "bool"}
 _VALID_MODES = {"exact", "judgment"}
+_VALID_LANGS = {"python", "rust", "go", "node", "bash", "auto"}
 
 
 class _Parser:
@@ -145,6 +146,9 @@ class _Parser:
         mode: str | None = None
         cache: CacheConfig | None = None
         on_fail: OnFailChain | None = None
+        lang: str | None = None
+        lang_line: int = 0
+        lang_col: int = 0
 
         while self.peek().type != TokenType.DEDENT:
             t = self.peek()
@@ -199,6 +203,22 @@ class _Parser:
                         f"STEP {ident.value} has duplicate ON_FAIL field", t.line, t.col,
                     )
                 on_fail = self.parse_on_fail(t.line, t.col)
+            elif t.value == "LANG":
+                if lang is not None:
+                    raise ParseError(
+                        f"STEP {ident.value} has duplicate LANG field", t.line, t.col,
+                    )
+                lang_line, lang_col = t.line, t.col
+                self.advance()
+                self.expect(TokenType.COLON)
+                value_tok = self.expect(TokenType.KEYWORD)
+                if value_tok.value not in _VALID_LANGS:
+                    raise ParseError(
+                        f"unknown LANG {value_tok.value!r}, expected one of {sorted(_VALID_LANGS)}",
+                        value_tok.line, value_tok.col,
+                    )
+                lang = value_tok.value
+                self.expect(TokenType.NEWLINE)
             else:
                 raise ParseError(f"unexpected step field {t.value!r}", t.line, t.col)
 
@@ -217,10 +237,15 @@ class _Parser:
                 f"'ON_FAIL' is only supported on judgment steps in v0.2 (got mode {mode!r})",
                 on_fail.line, on_fail.col,
             )
+        if lang is not None and mode != "exact":
+            raise ParseError(
+                f"'LANG' is only supported on exact steps (got mode {mode!r})",
+                lang_line, lang_col,
+            )
 
         return StepDecl(
             name=ident.value, mode=mode, takes=takes, gives=gives,
-            cache=cache, on_fail=on_fail, line=kw.line, col=kw.col,
+            cache=cache, on_fail=on_fail, lang=lang, line=kw.line, col=kw.col,
         )
 
     def parse_cache(self, line: int, col: int) -> CacheConfig:
