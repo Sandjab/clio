@@ -180,6 +180,9 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# understand-anything (knowledge graph cache generated locally by the skill)
+.understand-anything/
+
 # macOS
 .DS_Store
 .AppleDouble
