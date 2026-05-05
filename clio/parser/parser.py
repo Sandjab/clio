@@ -1,5 +1,7 @@
 from clio.parser.ast_nodes import (
+    ApiInvoke,
     CacheConfig,
+    CliInvoke,
     CodeImpl,
     ConstrainedType,
     ContractDecl,
@@ -8,6 +10,7 @@ from clio.parser.ast_nodes import (
     Field,
     FlowDecl,
     ImplBlock,
+    InvokeBlock,
     ListType,
     OnFailChain,
     OnFailStrategy,
@@ -35,6 +38,8 @@ _VALID_MODES = {"exact", "judgment"}
 _VALID_LANGS = {"python", "rust", "go", "node", "bash", "auto"}
 _VALID_IMPL_MODES = {"code", "rest"}
 _VALID_HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+_VALID_INVOKE_MODES = {"cli", "api"}
+_VALID_PROTOCOLS = {"anthropic", "openai", "bedrock", "vertex"}
 
 
 class _Parser:
@@ -155,6 +160,7 @@ class _Parser:
         lang_line: int = 0
         lang_col: int = 0
         impl: ImplBlock | None = None
+        invoke: InvokeBlock | None = None
 
         while self.peek().type != TokenType.DEDENT:
             t = self.peek()
@@ -231,6 +237,12 @@ class _Parser:
                         f"STEP {ident.value} has duplicate impl field", t.line, t.col,
                     )
                 impl = self.parse_impl_block(t.line, t.col)
+            elif t.value == "invoke":
+                if invoke is not None:
+                    raise ParseError(
+                        f"STEP {ident.value} has duplicate invoke field", t.line, t.col,
+                    )
+                invoke = self.parse_invoke_block(t.line, t.col)
             else:
                 raise ParseError(f"unexpected step field {t.value!r}", t.line, t.col)
 
@@ -259,10 +271,15 @@ class _Parser:
                 f"'impl' is only supported on exact steps (got mode {mode!r})",
                 impl.line, impl.col,
             )
+        if invoke is not None and mode != "judgment":
+            raise ParseError(
+                f"'invoke' is only supported on judgment steps (got mode {mode!r})",
+                invoke.line, invoke.col,
+            )
 
         return StepDecl(
             name=ident.value, mode=mode, takes=takes, gives=gives,
-            cache=cache, on_fail=on_fail, lang=lang, impl=impl,
+            cache=cache, on_fail=on_fail, lang=lang, impl=impl, invoke=invoke,
             line=kw.line, col=kw.col,
         )
 
@@ -470,6 +487,216 @@ class _Parser:
             line=line, col=col,
             method=method, url=url,
             response_path=response_path,
+            timeout_seconds=timeout_seconds,
+            retries=retries,
+        )
+
+    def parse_invoke_block(self, line: int, col: int) -> InvokeBlock:
+        """Parse an indented `invoke:` block. Dispatches on `mode:` to CliInvoke or ApiInvoke."""
+        self.expect(TokenType.KEYWORD, "invoke")
+        self.expect(TokenType.COLON)
+        self.expect(TokenType.NEWLINE)
+        self.expect(TokenType.INDENT)
+
+        mode_value: str | None = None
+        mode_line, mode_col = line, col
+        fields: dict[str, tuple[object, int, int]] = {}
+
+        while self.peek().type != TokenType.DEDENT:
+            t = self.peek()
+            if t.type not in (TokenType.IDENT, TokenType.KEYWORD):
+                raise ParseError(
+                    f"unexpected invoke block field {t.type.value} {t.value!r}",
+                    t.line, t.col,
+                )
+            field_name = t.value
+            if field_name == "mode":
+                if mode_value is not None:
+                    raise ParseError(
+                        "invoke block has duplicate mode field", t.line, t.col,
+                    )
+                self.advance()
+                self.expect(TokenType.COLON)
+                v = self.expect(TokenType.KEYWORD)
+                if v.value not in _VALID_INVOKE_MODES:
+                    raise ParseError(
+                        f"unknown invoke.mode {v.value!r}, "
+                        f"expected one of {sorted(_VALID_INVOKE_MODES)}",
+                        v.line, v.col,
+                    )
+                mode_value = v.value
+                mode_line, mode_col = v.line, v.col
+                self.expect(TokenType.NEWLINE)
+            else:
+                if field_name in fields:
+                    raise ParseError(
+                        f"invoke block has duplicate field {field_name!r}",
+                        t.line, t.col,
+                    )
+                self.advance()
+                self.expect(TokenType.COLON)
+                value = self._parse_impl_field_value()
+                fields[field_name] = (value, t.line, t.col)
+                self.expect(TokenType.NEWLINE)
+
+        self.expect(TokenType.DEDENT)
+
+        if mode_value is None:
+            raise ParseError("invoke block is missing required 'mode' field", line, col)
+
+        if mode_value == "cli":
+            return self._build_cli_invoke(fields, line, col)
+        if mode_value == "api":
+            return self._build_api_invoke(fields, line, col, mode_line, mode_col)
+        raise ParseError(
+            f"invoke.mode {mode_value!r} not yet implemented", mode_line, mode_col,
+        )
+
+    def _build_cli_invoke(
+        self, fields: dict[str, tuple[object, int, int]], line: int, col: int,
+    ) -> CliInvoke:
+        allowed = {"cli", "model", "output_format", "max_turns"}
+        unknown = set(fields.keys()) - allowed
+        if unknown:
+            sample = sorted(unknown)[0]
+            _, fline, fcol = fields[sample]
+            raise ParseError(
+                f"unknown field {sample!r} for invoke.mode: cli "
+                f"(allowed: {sorted(allowed)})",
+                fline, fcol,
+            )
+
+        def _opt_str(name: str) -> str | None:
+            if name not in fields:
+                return None
+            v, fline, fcol = fields[name]
+            if not isinstance(v, str):
+                raise ParseError(
+                    f"invoke.{name} must be a string, got {type(v).__name__}",
+                    fline, fcol,
+                )
+            return v
+
+        max_turns = None
+        if "max_turns" in fields:
+            v, fline, fcol = fields["max_turns"]
+            if not isinstance(v, int):
+                raise ParseError(
+                    f"invoke.max_turns must be an integer, got {v!r}",
+                    fline, fcol,
+                )
+            max_turns = v
+
+        return CliInvoke(
+            line=line, col=col,
+            cli=_opt_str("cli"),
+            model=_opt_str("model"),
+            output_format=_opt_str("output_format"),
+            max_turns=max_turns,
+        )
+
+    def _build_api_invoke(
+        self,
+        fields: dict[str, tuple[object, int, int]],
+        line: int, col: int,
+        mode_line: int, mode_col: int,
+    ) -> ApiInvoke:
+        allowed = {
+            "protocol", "model", "base_url", "auth",
+            "temperature", "max_tokens", "timeout", "retries",
+        }
+        unknown = set(fields.keys()) - allowed
+        if unknown:
+            sample = sorted(unknown)[0]
+            _, fline, fcol = fields[sample]
+            raise ParseError(
+                f"unknown field {sample!r} for invoke.mode: api "
+                f"(allowed: {sorted(allowed)})",
+                fline, fcol,
+            )
+        if "protocol" not in fields:
+            raise ParseError(
+                "invoke.mode: api requires 'protocol'", mode_line, mode_col,
+            )
+        if "model" not in fields:
+            raise ParseError(
+                "invoke.mode: api requires 'model'", mode_line, mode_col,
+            )
+
+        protocol, pline, pcol = fields["protocol"]
+        if not isinstance(protocol, str) or protocol not in _VALID_PROTOCOLS:
+            raise ParseError(
+                f"unknown invoke.protocol {protocol!r}, "
+                f"expected one of {sorted(_VALID_PROTOCOLS)}",
+                pline, pcol,
+            )
+
+        model, mline, mcol = fields["model"]
+        if not isinstance(model, str):
+            raise ParseError(
+                f"invoke.model must be a string, got {type(model).__name__}",
+                mline, mcol,
+            )
+
+        def _opt_str(name: str) -> str | None:
+            if name not in fields:
+                return None
+            v, fline, fcol = fields[name]
+            if not isinstance(v, str):
+                raise ParseError(
+                    f"invoke.{name} must be a string, got {type(v).__name__}",
+                    fline, fcol,
+                )
+            return v
+
+        temperature = None
+        if "temperature" in fields:
+            v, fline, fcol = fields["temperature"]
+            if not isinstance(v, (int, float)):
+                raise ParseError(
+                    f"invoke.temperature must be a number, got {v!r}",
+                    fline, fcol,
+                )
+            temperature = float(v)
+
+        max_tokens = None
+        if "max_tokens" in fields:
+            v, fline, fcol = fields["max_tokens"]
+            if not isinstance(v, int):
+                raise ParseError(
+                    f"invoke.max_tokens must be an integer, got {v!r}",
+                    fline, fcol,
+                )
+            max_tokens = v
+
+        timeout_seconds = None
+        if "timeout" in fields:
+            v, fline, fcol = fields["timeout"]
+            if not isinstance(v, int):
+                raise ParseError(
+                    f"invoke.timeout must be a duration (e.g. 60s, 2m), got {v!r}",
+                    fline, fcol,
+                )
+            timeout_seconds = v
+
+        retries = None
+        if "retries" in fields:
+            v, fline, fcol = fields["retries"]
+            if not isinstance(v, int):
+                raise ParseError(
+                    f"invoke.retries must be an integer, got {v!r}",
+                    fline, fcol,
+                )
+            retries = v
+
+        return ApiInvoke(
+            line=line, col=col,
+            protocol=protocol,
+            model=model,
+            base_url=_opt_str("base_url"),
+            auth=_opt_str("auth"),
+            temperature=temperature,
+            max_tokens=max_tokens,
             timeout_seconds=timeout_seconds,
             retries=retries,
         )

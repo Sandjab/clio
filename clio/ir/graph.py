@@ -53,6 +53,33 @@ class RestImplIR(ImplIR):
 
 
 @dataclass(frozen=True)
+class InvokeIR:
+    """Sealed base for the per-step invoke: block. Subtypes: CliInvokeIR, ApiInvokeIR."""
+
+
+@dataclass(frozen=True)
+class CliInvokeIR(InvokeIR):
+    """invoke.mode: cli — subprocess to a locally installed LLM CLI."""
+    cli: str | None
+    model: str | None
+    output_format: str | None
+    max_turns: int | None
+
+
+@dataclass(frozen=True)
+class ApiInvokeIR(InvokeIR):
+    """invoke.mode: api — SDK or HTTP call to a network endpoint."""
+    protocol: str
+    model: str
+    base_url: str | None
+    auth: str | None
+    temperature: float | None
+    max_tokens: int | None
+    timeout_seconds: int | None
+    retries: int | None
+
+
+@dataclass(frozen=True)
 class StepIR:
     name: str
     mode: str
@@ -62,6 +89,7 @@ class StepIR:
     on_fail: OnFailChainIR | None
     lang: str | None              # one of python|rust|go|node|bash|auto, exact-only; None if unset
     impl: ImplIR | None           # impl: block (code | rest), exact-only; None if unset
+    invoke: InvokeIR | None       # invoke: block (cli | api), judgment-only; None if unset
     line: int
 
 

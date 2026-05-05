@@ -44,6 +44,7 @@ class StepDecl:
     on_fail: "OnFailChain | None"
     lang: str | None              # one of python|rust|go|node|bash|auto, exact-only
     impl: "ImplBlock | None"      # impl: block (code | rest), exact-only
+    invoke: "InvokeBlock | None"  # invoke: block (cli | api), judgment-only
     line: int
     col: int
 
@@ -190,5 +191,35 @@ class RestImpl(ImplBlock):
     method: str                    # GET | POST | PUT | PATCH | DELETE
     url: str
     response_path: str | None      # e.g. "results[0].geometry.location"
+    timeout_seconds: int | None
+    retries: int | None
+
+
+@dataclass(frozen=True)
+class InvokeBlock:
+    """Sealed base for the per-step invoke: block. Subtypes: CliInvoke, ApiInvoke.
+    Specced in LANGUAGE_SPEC.md §JUDGMENT invocation."""
+    line: int
+    col: int
+
+
+@dataclass(frozen=True)
+class CliInvoke(InvokeBlock):
+    """invoke.mode: cli — subprocess to a locally installed LLM CLI."""
+    cli: str | None                # e.g. "claude" (default if None)
+    model: str | None              # CLI alias, e.g. "haiku"|"sonnet"|"opus"
+    output_format: str | None      # e.g. "json" (default), "text", "stream-json"
+    max_turns: int | None
+
+
+@dataclass(frozen=True)
+class ApiInvoke(InvokeBlock):
+    """invoke.mode: api — SDK or HTTP call to a network endpoint."""
+    protocol: str                  # anthropic | openai | bedrock | vertex
+    model: str
+    base_url: str | None           # required for proxies / local servers
+    auth: str | None               # env:VAR | aws-profile:NAME | gcp-sa:PATH | none
+    temperature: float | None
+    max_tokens: int | None
     timeout_seconds: int | None
     retries: int | None

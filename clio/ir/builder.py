@@ -1,13 +1,16 @@
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
+    ApiInvokeIR,
     CacheConfigIR,
     CallIR,
+    CliInvokeIR,
     CodeImplIR,
     ContractIR,
     FieldIR,
     FlowGraph,
     FlowIR,
     ImplIR,
+    InvokeIR,
     OnFailChainIR,
     OnFailStrategyIR,
     ResourcesIR,
@@ -16,6 +19,8 @@ from clio.ir.graph import (
 )
 from clio.ir.types import names_equal, types_equal
 from clio.parser.ast_nodes import (
+    ApiInvoke,
+    CliInvoke,
     CodeImpl,
     ConstrainedType,
     ContractDecl,
@@ -23,6 +28,7 @@ from clio.parser.ast_nodes import (
     EnumType,
     FlowDecl,
     ImplBlock,
+    InvokeBlock,
     ListType,
     PrimitiveType,
     Program,
@@ -135,6 +141,7 @@ def _resolve_fallbacks(
             on_fail=OnFailChainIR(strategies=tuple(new_strategies)),
             lang=step.lang,
             impl=step.impl,
+            invoke=step.invoke,
             line=step.line,
         )
     return new_steps
@@ -215,6 +222,7 @@ def _build_step(decl: StepDecl) -> StepIR:
         on_fail=on_fail_ir,
         lang=decl.lang,
         impl=_build_impl(decl.impl) if decl.impl is not None else None,
+        invoke=_build_invoke(decl.invoke) if decl.invoke is not None else None,
         line=decl.line,
     )
 
@@ -231,6 +239,28 @@ def _build_impl(decl: ImplBlock) -> ImplIR:
             retries=decl.retries,
         )
     raise IRBuildError(f"unknown ImplBlock subtype: {type(decl).__name__}")
+
+
+def _build_invoke(decl: InvokeBlock) -> InvokeIR:
+    if isinstance(decl, CliInvoke):
+        return CliInvokeIR(
+            cli=decl.cli,
+            model=decl.model,
+            output_format=decl.output_format,
+            max_turns=decl.max_turns,
+        )
+    if isinstance(decl, ApiInvoke):
+        return ApiInvokeIR(
+            protocol=decl.protocol,
+            model=decl.model,
+            base_url=decl.base_url,
+            auth=decl.auth,
+            temperature=decl.temperature,
+            max_tokens=decl.max_tokens,
+            timeout_seconds=decl.timeout_seconds,
+            retries=decl.retries,
+        )
+    raise IRBuildError(f"unknown InvokeBlock subtype: {type(decl).__name__}")
 
 
 def _build_on_fail(chain) -> OnFailChainIR:

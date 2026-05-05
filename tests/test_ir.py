@@ -309,3 +309,48 @@ def test_build_ir_impl_omitted_is_none():
     src = "STEP foo\n  MODE: exact\n"
     step = build_ir(parse(src)).steps[0]
     assert step.impl is None
+
+
+def test_build_ir_propagates_invoke_api():
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE: judgment\n"
+        "  invoke:\n"
+        "    mode: api\n"
+        "    protocol: openai\n"
+        '    model: "gemini-1.5-pro"\n'
+        '    base_url: "http://litellm:4000"\n'
+        '    auth: "env:LITELLM_KEY"\n'
+        "    max_tokens: 1024\n"
+    )
+    step = build_ir(parse(src)).steps[0]
+    assert step.invoke is not None
+    assert step.invoke.__class__.__name__ == "ApiInvokeIR"
+    assert step.invoke.protocol == "openai"
+    assert step.invoke.model == "gemini-1.5-pro"
+    assert step.invoke.base_url == "http://litellm:4000"
+    assert step.invoke.auth == "env:LITELLM_KEY"
+    assert step.invoke.max_tokens == 1024
+
+
+def test_build_ir_propagates_invoke_cli():
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE: judgment\n"
+        "  invoke:\n"
+        "    mode: cli\n"
+        "    cli: claude\n"
+        "    model: opus\n"
+    )
+    step = build_ir(parse(src)).steps[0]
+    assert step.invoke.__class__.__name__ == "CliInvokeIR"
+    assert step.invoke.cli == "claude"
+    assert step.invoke.model == "opus"
+
+
+def test_build_ir_invoke_omitted_is_none():
+    src = "STEP s\n  GIVES: r: str\n  MODE: judgment\n"
+    step = build_ir(parse(src)).steps[0]
+    assert step.invoke is None

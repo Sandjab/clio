@@ -528,3 +528,198 @@ def test_parse_impl_unknown_field_for_code_mode_raises():
         parse(src)
     assert "url" in str(exc.value)
     assert "code" in str(exc.value)
+
+
+# --- invoke: block parsing -------------------------------------------------
+
+def test_parse_invoke_cli_minimal():
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE: judgment\n"
+        "  invoke:\n"
+        "    mode: cli\n"
+    )
+    step = parse(src).decls[0]
+    assert step.invoke is not None
+    assert step.invoke.__class__.__name__ == "CliInvoke"
+    assert step.invoke.cli is None
+    assert step.invoke.model is None
+
+
+def test_parse_invoke_cli_with_fields():
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE: judgment\n"
+        "  invoke:\n"
+        "    mode: cli\n"
+        "    cli: claude\n"
+        "    model: opus\n"
+        "    output_format: json\n"
+        "    max_turns: 5\n"
+    )
+    step = parse(src).decls[0]
+    assert step.invoke.cli == "claude"
+    assert step.invoke.model == "opus"
+    assert step.invoke.output_format == "json"
+    assert step.invoke.max_turns == 5
+
+
+def test_parse_invoke_api_minimal():
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE: judgment\n"
+        "  invoke:\n"
+        "    mode: api\n"
+        "    protocol: anthropic\n"
+        '    model: "claude-opus-4-7"\n'
+    )
+    step = parse(src).decls[0]
+    assert step.invoke.__class__.__name__ == "ApiInvoke"
+    assert step.invoke.protocol == "anthropic"
+    assert step.invoke.model == "claude-opus-4-7"
+    assert step.invoke.base_url is None
+    assert step.invoke.auth is None
+
+
+def test_parse_invoke_api_full():
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE: judgment\n"
+        "  invoke:\n"
+        "    mode: api\n"
+        "    protocol: openai\n"
+        '    model: "gemini-1.5-pro"\n'
+        '    base_url: "http://litellm.local:4000"\n'
+        '    auth: "env:LITELLM_KEY"\n'
+        "    temperature: 0.0\n"
+        "    max_tokens: 1024\n"
+        "    timeout: 60s\n"
+        "    retries: 3\n"
+    )
+    step = parse(src).decls[0]
+    assert step.invoke.protocol == "openai"
+    assert step.invoke.model == "gemini-1.5-pro"
+    assert step.invoke.base_url == "http://litellm.local:4000"
+    assert step.invoke.auth == "env:LITELLM_KEY"
+    assert step.invoke.temperature == 0.0
+    assert step.invoke.max_tokens == 1024
+    assert step.invoke.timeout_seconds == 60
+    assert step.invoke.retries == 3
+
+
+def test_parse_invoke_on_exact_step_raises():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  invoke:\n"
+        "    mode: cli\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "invoke" in str(exc.value)
+    assert "judgment" in str(exc.value)
+
+
+def test_parse_invoke_duplicate_block_raises():
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE: judgment\n"
+        "  invoke:\n"
+        "    mode: cli\n"
+        "  invoke:\n"
+        "    mode: api\n"
+        "    protocol: anthropic\n"
+        '    model: "x"\n'
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "duplicate" in str(exc.value).lower()
+
+
+def test_parse_invoke_missing_mode_raises():
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE: judgment\n"
+        "  invoke:\n"
+        "    cli: claude\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "mode" in str(exc.value).lower()
+
+
+def test_parse_invoke_unknown_mode_raises():
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE: judgment\n"
+        "  invoke:\n"
+        "    mode: spawn\n"
+    )
+    with pytest.raises(ParseError):
+        parse(src)
+
+
+def test_parse_invoke_api_missing_protocol_raises():
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE: judgment\n"
+        "  invoke:\n"
+        "    mode: api\n"
+        '    model: "claude-opus-4-7"\n'
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "protocol" in str(exc.value)
+
+
+def test_parse_invoke_api_missing_model_raises():
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE: judgment\n"
+        "  invoke:\n"
+        "    mode: api\n"
+        "    protocol: anthropic\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "model" in str(exc.value)
+
+
+def test_parse_invoke_api_unknown_protocol_raises():
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE: judgment\n"
+        "  invoke:\n"
+        "    mode: api\n"
+        "    protocol: cohere\n"
+        '    model: "command-r"\n'
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "cohere" in str(exc.value) or "protocol" in str(exc.value)
+
+
+def test_parse_invoke_api_unknown_field_raises():
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE: judgment\n"
+        "  invoke:\n"
+        "    mode: api\n"
+        "    protocol: anthropic\n"
+        '    model: "x"\n'
+        "    speed: 5\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "speed" in str(exc.value)
