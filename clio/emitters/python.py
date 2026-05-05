@@ -9,7 +9,7 @@ import keyword
 from pathlib import Path
 
 from clio.emitters.base import BaseEmitter
-from clio.ir.graph import ContractIR, FieldIR, FlowGraph, StepIR
+from clio.ir.graph import ContractIR, FieldIR, FlowGraph, RestImplIR, StepIR
 from clio.parser.ast_nodes import (
     ConstrainedType,
     ContractRef,
@@ -251,7 +251,12 @@ class PythonEmitter(BaseEmitter):
                 body = self._emit_judgment_step(step, graph, contracts_by_name)
             (steps_dir / f"{step.name}.py").write_text(body)
 
-        (output_dir / "pyproject.toml").write_text(self._pyproject(pkg_name))
+        needs_requests = any(
+            isinstance(s.impl, RestImplIR) for s in graph.steps
+        )
+        (output_dir / "pyproject.toml").write_text(
+            self._pyproject(pkg_name, needs_requests=needs_requests)
+        )
         (output_dir / "README.md").write_text(self._readme(pkg_name, graph))
 
         (pkg_dir / "flow.py").write_text(self._emit_flow(graph))
@@ -315,6 +320,9 @@ class PythonEmitter(BaseEmitter):
         return "\n".join(lines) + "\n"
 
     def _emit_exact_step(self, step: StepIR, contracts_by_name: dict[str, "ContractIR"]) -> str:
+        if isinstance(step.impl, RestImplIR):
+            return self._emit_rest_step(step, contracts_by_name, step.impl)
+
         params = _step_signature(step, contracts_by_name)
         ret_type = (
             _type_to_python(step.gives.type, contracts_by_name)
@@ -344,6 +352,85 @@ class PythonEmitter(BaseEmitter):
             f'    raise NotImplementedError(\n'
             f'        "Implement steps/{step.name}.py: this is an exact (deterministic) step."\n'
             f'    )\n'
+        )
+
+    def _emit_rest_step(
+        self,
+        step: StepIR,
+        contracts_by_name: dict[str, "ContractIR"],
+        impl: RestImplIR,
+    ) -> str:
+        params = _step_signature(step, contracts_by_name)
+        ret_type = (
+            _type_to_python(step.gives.type, contracts_by_name)
+            if step.gives is not None else "None"
+        )
+        takes_doc = (
+            "\n    ".join(f"{t.name}: {_render_type_short(t.type)}" for t in step.takes)
+            if step.takes else "(no TAKES)"
+        )
+        gives_doc = (
+            f"{step.gives.name}: {_render_type_short(step.gives.type)}"
+            if step.gives is not None else "(no GIVES)"
+        )
+
+        # The function body is generated; TAKES are accepted in the signature
+        # for orchestrator parity but not yet wired into the request (no
+        # templating in this version — see LANGUAGE_SPEC v0.2).
+        unused_takes_lines = [f"    _ = {_to_field_name(t.name)}" for t in step.takes]
+
+        timeout_arg = (
+            f"timeout={impl.timeout_seconds}"
+            if impl.timeout_seconds is not None else "timeout=None"
+        )
+
+        if impl.response_path is not None:
+            traversal_block = (
+                f"    _path = {impl.response_path!r}\n"
+                f"    _data = response.json()\n"
+                f"    for _part in _re.findall(r'[^.\\[\\]]+|\\[\\d+\\]', _path):\n"
+                f"        if _part.startswith('['):\n"
+                f"            _data = _data[int(_part[1:-1])]\n"
+                f"        else:\n"
+                f"            _data = _data[_part]\n"
+                f"    return _data\n"
+            )
+            extra_imports = "import re as _re\n"
+        else:
+            traversal_block = "    return response.json()\n"
+            extra_imports = ""
+
+        retries_note = (
+            f"# retries={impl.retries} requested but not implemented in v0.2; "
+            "wire ON_FAIL on rest steps in a future slice.\n"
+            if impl.retries is not None else ""
+        )
+
+        body_unused = ("\n".join(unused_takes_lines) + "\n") if unused_takes_lines else ""
+
+        return (
+            f'"""STEP {step.name} (exact, impl: rest)\n'
+            f'TAKES:\n'
+            f'    {takes_doc}\n'
+            f'GIVES:\n'
+            f'    {gives_doc}\n\n'
+            f'Auto-generated from `impl: mode: rest`. The HTTP request is hardcoded\n'
+            f'from the .clio source; templating of TAKES into the URL/headers/body\n'
+            f'is not yet supported (v0.2 limitation).\n'
+            f'"""\n'
+            f'from __future__ import annotations\n\n'
+            f'import requests\n'
+            f'{extra_imports}\n\n'
+            f'{retries_note}'
+            f'def {step.name}({params}) -> {ret_type}:\n'
+            f'{body_unused}'
+            f'    response = requests.request(\n'
+            f'        method={impl.method!r},\n'
+            f'        url={impl.url!r},\n'
+            f'        {timeout_arg},\n'
+            f'    )\n'
+            f'    response.raise_for_status()\n'
+            f'{traversal_block}'
         )
 
     def _emit_judgment_step(
@@ -652,7 +739,14 @@ class PythonEmitter(BaseEmitter):
         return graph.flow.name
 
     @staticmethod
-    def _pyproject(pkg_name: str) -> str:
+    def _pyproject(pkg_name: str, *, needs_requests: bool = False) -> str:
+        deps = [
+            '    "anthropic>=0.40",',
+            '    "pydantic>=2",',
+        ]
+        if needs_requests:
+            deps.append('    "requests>=2.31",')
+        deps_block = "\n".join(deps)
         return (
             "[build-system]\n"
             'requires = ["setuptools>=70"]\n'
@@ -663,8 +757,7 @@ class PythonEmitter(BaseEmitter):
             'version = "0.1.0"\n'
             'requires-python = ">=3.12"\n'
             "dependencies = [\n"
-            '    "anthropic>=0.40",\n'
-            '    "pydantic>=2",\n'
+            f"{deps_block}\n"
             "]\n"
             "\n"
             "[project.scripts]\n"

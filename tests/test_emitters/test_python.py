@@ -418,3 +418,66 @@ def test_emitted_step_signatures_resolve_via_get_type_hints(tmp_path):
             if k.startswith("retention"):
                 del sys.modules[k]
 
+
+# --- impl: mode: rest emission ---------------------------------------------
+
+_REST_SRC = (
+    "STEP geocode\n"
+    "  TAKES: address: str\n"
+    "  GIVES: location: str\n"
+    "  MODE:  exact\n"
+    "  impl:\n"
+    "    mode: rest\n"
+    "    method: GET\n"
+    '    url: "https://api.example.com/geocode"\n'
+    '    response_path: "results[0].formatted_address"\n'
+    "    timeout: 30s\n"
+    "FLOW geo\n"
+    '  geocode(address="123 Main St")\n'
+)
+
+
+def _emit_rest(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_REST_SRC)), tmp_path)
+    return tmp_path
+
+
+def test_emit_rest_step_imports_requests_and_calls_request(tmp_path):
+    out = _emit_rest(tmp_path)
+    body = (out / "geo" / "steps" / "geocode.py").read_text()
+    assert "import requests" in body
+    assert "requests.request(" in body
+    assert "method='GET'" in body
+    assert "url='https://api.example.com/geocode'" in body
+    assert "timeout=30" in body
+
+
+def test_emit_rest_step_parses_as_python(tmp_path):
+    import ast
+    out = _emit_rest(tmp_path)
+    body = (out / "geo" / "steps" / "geocode.py").read_text()
+    ast.parse(body)  # raises if invalid syntax
+
+
+def test_emit_rest_step_emits_response_path_traversal(tmp_path):
+    out = _emit_rest(tmp_path)
+    body = (out / "geo" / "steps" / "geocode.py").read_text()
+    # response_path 'results[0].formatted_address' should drive the regex-walked
+    # traversal block, not a raw `return response.json()`.
+    assert "results[0].formatted_address" in body
+    assert "import re as _re" in body
+    assert "for _part in _re.findall" in body
+
+
+def test_emit_rest_pyproject_adds_requests_dependency(tmp_path):
+    out = _emit_rest(tmp_path)
+    pyproject = (out / "pyproject.toml").read_text()
+    assert "requests>=2.31" in pyproject
+
+
+def test_emit_pyproject_omits_requests_when_no_rest_step(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    pyproject = (tmp_path / "pyproject.toml").read_text()
+    assert "requests" not in pyproject
+
