@@ -43,6 +43,7 @@ class StepDecl:
     cache: "CacheConfig | None"
     on_fail: "OnFailChain | None"
     lang: str | None              # one of python|rust|go|node|bash|auto, exact-only
+    impl: "ImplBlock | None"      # impl: block (code | rest), exact-only
     line: int
     col: int
 
@@ -167,3 +168,27 @@ class OnFailChain:
     strategies: tuple[OnFailStrategy, ...]
     line: int
     col: int
+
+
+@dataclass(frozen=True)
+class ImplBlock:
+    """Sealed base for the per-step impl: block. Subtypes: CodeImpl, RestImpl.
+    Specced in LANGUAGE_SPEC.md §EXACT implementations."""
+    line: int
+    col: int
+
+
+@dataclass(frozen=True)
+class CodeImpl(ImplBlock):
+    """impl.mode: code — inline function in the target language."""
+    lang: str | None              # python | rust | go | node | bash | auto
+
+
+@dataclass(frozen=True)
+class RestImpl(ImplBlock):
+    """impl.mode: rest — HTTP call to an external endpoint."""
+    method: str                    # GET | POST | PUT | PATCH | DELETE
+    url: str
+    response_path: str | None      # e.g. "results[0].geometry.location"
+    timeout_seconds: int | None
+    retries: int | None

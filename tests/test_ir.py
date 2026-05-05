@@ -268,3 +268,44 @@ def test_build_ir_propagates_lang_field():
     assert by_name["a"].lang == "rust"
     assert by_name["b"].lang is None
     assert by_name["c"].lang is None
+
+
+def test_build_ir_propagates_impl_rest():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: GET\n"
+        '    url: "https://api.example.com/v1/items"\n'
+        '    response_path: "items[0]"\n'
+        "    timeout: 30s\n"
+        "    retries: 3\n"
+    )
+    step = build_ir(parse(src)).steps[0]
+    assert step.impl is not None
+    assert step.impl.__class__.__name__ == "RestImplIR"
+    assert step.impl.method == "GET"
+    assert step.impl.url == "https://api.example.com/v1/items"
+    assert step.impl.response_path == "items[0]"
+    assert step.impl.timeout_seconds == 30
+    assert step.impl.retries == 3
+
+
+def test_build_ir_propagates_impl_code():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: code\n"
+        "    lang: python\n"
+    )
+    step = build_ir(parse(src)).steps[0]
+    assert step.impl.__class__.__name__ == "CodeImplIR"
+    assert step.impl.lang == "python"
+
+
+def test_build_ir_impl_omitted_is_none():
+    src = "STEP foo\n  MODE: exact\n"
+    step = build_ir(parse(src)).steps[0]
+    assert step.impl is None

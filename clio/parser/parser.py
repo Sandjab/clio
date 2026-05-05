@@ -1,17 +1,20 @@
 from clio.parser.ast_nodes import (
     CacheConfig,
+    CodeImpl,
     ConstrainedType,
     ContractDecl,
     ContractRef,
     EnumType,
     Field,
     FlowDecl,
+    ImplBlock,
     ListType,
     OnFailChain,
     OnFailStrategy,
     PrimitiveType,
     Program,
     RecordType,
+    RestImpl,
     StepCall,
     StepDecl,
     TypeExpr,
@@ -30,6 +33,8 @@ class ParseError(Exception):
 _PRIMITIVE_TYPES = {"int", "float", "str", "bool"}
 _VALID_MODES = {"exact", "judgment"}
 _VALID_LANGS = {"python", "rust", "go", "node", "bash", "auto"}
+_VALID_IMPL_MODES = {"code", "rest"}
+_VALID_HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 
 
 class _Parser:
@@ -149,6 +154,7 @@ class _Parser:
         lang: str | None = None
         lang_line: int = 0
         lang_col: int = 0
+        impl: ImplBlock | None = None
 
         while self.peek().type != TokenType.DEDENT:
             t = self.peek()
@@ -219,6 +225,12 @@ class _Parser:
                     )
                 lang = value_tok.value
                 self.expect(TokenType.NEWLINE)
+            elif t.value == "impl":
+                if impl is not None:
+                    raise ParseError(
+                        f"STEP {ident.value} has duplicate impl field", t.line, t.col,
+                    )
+                impl = self.parse_impl_block(t.line, t.col)
             else:
                 raise ParseError(f"unexpected step field {t.value!r}", t.line, t.col)
 
@@ -242,10 +254,16 @@ class _Parser:
                 f"'LANG' is only supported on exact steps (got mode {mode!r})",
                 lang_line, lang_col,
             )
+        if impl is not None and mode != "exact":
+            raise ParseError(
+                f"'impl' is only supported on exact steps (got mode {mode!r})",
+                impl.line, impl.col,
+            )
 
         return StepDecl(
             name=ident.value, mode=mode, takes=takes, gives=gives,
-            cache=cache, on_fail=on_fail, lang=lang, line=kw.line, col=kw.col,
+            cache=cache, on_fail=on_fail, lang=lang, impl=impl,
+            line=kw.line, col=kw.col,
         )
 
     def parse_cache(self, line: int, col: int) -> CacheConfig:
@@ -274,6 +292,186 @@ class _Parser:
         raise ParseError(
             f"expected CACHE value (on | off | ttl(<dur>)), got {t.type.value} {t.value!r}",
             t.line, t.col,
+        )
+
+    def parse_impl_block(self, line: int, col: int) -> ImplBlock:
+        """Parse an indented `impl:` block. Dispatches on `mode:` to CodeImpl or RestImpl."""
+        self.expect(TokenType.KEYWORD, "impl")
+        self.expect(TokenType.COLON)
+        self.expect(TokenType.NEWLINE)
+        self.expect(TokenType.INDENT)
+
+        mode_value: str | None = None
+        mode_line, mode_col = line, col
+        fields: dict[str, tuple[object, int, int]] = {}
+
+        while self.peek().type != TokenType.DEDENT:
+            t = self.peek()
+            # Field names accepted as either IDENT or KEYWORD — keeps the
+            # surface syntax flexible without polluting the global keyword set.
+            if t.type not in (TokenType.IDENT, TokenType.KEYWORD):
+                raise ParseError(
+                    f"unexpected impl block field {t.type.value} {t.value!r}",
+                    t.line, t.col,
+                )
+            field_name = t.value
+            if field_name == "mode":
+                if mode_value is not None:
+                    raise ParseError(
+                        "impl block has duplicate mode field", t.line, t.col,
+                    )
+                self.advance()
+                self.expect(TokenType.COLON)
+                v = self.expect(TokenType.KEYWORD)
+                if v.value not in _VALID_IMPL_MODES:
+                    raise ParseError(
+                        f"unknown impl.mode {v.value!r}, "
+                        f"expected one of {sorted(_VALID_IMPL_MODES)}",
+                        v.line, v.col,
+                    )
+                mode_value = v.value
+                mode_line, mode_col = v.line, v.col
+                self.expect(TokenType.NEWLINE)
+            else:
+                if field_name in fields:
+                    raise ParseError(
+                        f"impl block has duplicate field {field_name!r}",
+                        t.line, t.col,
+                    )
+                self.advance()
+                self.expect(TokenType.COLON)
+                value = self._parse_impl_field_value()
+                fields[field_name] = (value, t.line, t.col)
+                self.expect(TokenType.NEWLINE)
+
+        self.expect(TokenType.DEDENT)
+
+        if mode_value is None:
+            raise ParseError("impl block is missing required 'mode' field", line, col)
+
+        if mode_value == "code":
+            return self._build_code_impl(fields, line, col)
+        if mode_value == "rest":
+            return self._build_rest_impl(fields, line, col, mode_line, mode_col)
+        # unreachable: mode validation happened above
+        raise ParseError(f"impl.mode {mode_value!r} not yet implemented", mode_line, mode_col)
+
+    def _parse_impl_field_value(self) -> object:
+        t = self.peek()
+        if t.type == TokenType.STRING:
+            self.advance()
+            return t.value
+        if t.type == TokenType.NUMBER:
+            self.advance()
+            return int(t.value) if "." not in t.value else float(t.value)
+        if t.type == TokenType.DURATION:
+            self.advance()
+            return _duration_to_seconds(t.value)
+        if t.type == TokenType.KEYWORD or t.type == TokenType.IDENT:
+            self.advance()
+            return t.value
+        raise ParseError(
+            f"expected impl field value, got {t.type.value} {t.value!r}",
+            t.line, t.col,
+        )
+
+    def _build_code_impl(
+        self, fields: dict[str, tuple[object, int, int]], line: int, col: int,
+    ) -> CodeImpl:
+        allowed = {"lang"}
+        unknown = set(fields.keys()) - allowed
+        if unknown:
+            sample = sorted(unknown)[0]
+            _, fline, fcol = fields[sample]
+            raise ParseError(
+                f"unknown field {sample!r} for impl.mode: code "
+                f"(allowed: {sorted(allowed)})",
+                fline, fcol,
+            )
+        lang = None
+        if "lang" in fields:
+            lang_value, fline, fcol = fields["lang"]
+            if not isinstance(lang_value, str) or lang_value not in _VALID_LANGS:
+                raise ParseError(
+                    f"unknown impl.lang {lang_value!r}, "
+                    f"expected one of {sorted(_VALID_LANGS)}",
+                    fline, fcol,
+                )
+            lang = lang_value
+        return CodeImpl(line=line, col=col, lang=lang)
+
+    def _build_rest_impl(
+        self,
+        fields: dict[str, tuple[object, int, int]],
+        line: int, col: int,
+        mode_line: int, mode_col: int,
+    ) -> RestImpl:
+        allowed = {"method", "url", "response_path", "timeout", "retries"}
+        unknown = set(fields.keys()) - allowed
+        if unknown:
+            sample = sorted(unknown)[0]
+            _, fline, fcol = fields[sample]
+            raise ParseError(
+                f"unknown field {sample!r} for impl.mode: rest "
+                f"(allowed: {sorted(allowed)})",
+                fline, fcol,
+            )
+        if "method" not in fields:
+            raise ParseError("impl.mode: rest requires 'method'", mode_line, mode_col)
+        if "url" not in fields:
+            raise ParseError("impl.mode: rest requires 'url'", mode_line, mode_col)
+
+        method, mline, mcol = fields["method"]
+        if not isinstance(method, str) or method not in _VALID_HTTP_METHODS:
+            raise ParseError(
+                f"unknown HTTP method {method!r}, "
+                f"expected one of {sorted(_VALID_HTTP_METHODS)}",
+                mline, mcol,
+            )
+
+        url, uline, ucol = fields["url"]
+        if not isinstance(url, str):
+            raise ParseError(
+                f"impl.url must be a string, got {type(url).__name__}",
+                uline, ucol,
+            )
+
+        response_path = None
+        if "response_path" in fields:
+            rp, rline, rcol = fields["response_path"]
+            if not isinstance(rp, str):
+                raise ParseError(
+                    f"impl.response_path must be a string, got {type(rp).__name__}",
+                    rline, rcol,
+                )
+            response_path = rp
+
+        timeout_seconds = None
+        if "timeout" in fields:
+            to, tline, tcol = fields["timeout"]
+            if not isinstance(to, int):
+                raise ParseError(
+                    f"impl.timeout must be a duration (e.g. 30s, 2m), got {to!r}",
+                    tline, tcol,
+                )
+            timeout_seconds = to
+
+        retries = None
+        if "retries" in fields:
+            rv, rline, rcol = fields["retries"]
+            if not isinstance(rv, int):
+                raise ParseError(
+                    f"impl.retries must be an integer, got {rv!r}",
+                    rline, rcol,
+                )
+            retries = rv
+
+        return RestImpl(
+            line=line, col=col,
+            method=method, url=url,
+            response_path=response_path,
+            timeout_seconds=timeout_seconds,
+            retries=retries,
         )
 
     def parse_on_fail(self, line: int, col: int) -> OnFailChain:

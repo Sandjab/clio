@@ -2,27 +2,33 @@ from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
     CacheConfigIR,
     CallIR,
+    CodeImplIR,
     ContractIR,
     FieldIR,
     FlowGraph,
     FlowIR,
+    ImplIR,
     OnFailChainIR,
     OnFailStrategyIR,
     ResourcesIR,
+    RestImplIR,
     StepIR,
 )
 from clio.ir.types import names_equal, types_equal
 from clio.parser.ast_nodes import (
+    CodeImpl,
     ConstrainedType,
     ContractDecl,
     ContractRef,
     EnumType,
     FlowDecl,
+    ImplBlock,
     ListType,
     PrimitiveType,
     Program,
     RecordType,
     ResourcesDecl,
+    RestImpl,
     StepDecl,
     TypeExpr,
 )
@@ -128,6 +134,7 @@ def _resolve_fallbacks(
             cache=step.cache,
             on_fail=OnFailChainIR(strategies=tuple(new_strategies)),
             lang=step.lang,
+            impl=step.impl,
             line=step.line,
         )
     return new_steps
@@ -207,8 +214,23 @@ def _build_step(decl: StepDecl) -> StepIR:
         cache=cache_ir,
         on_fail=on_fail_ir,
         lang=decl.lang,
+        impl=_build_impl(decl.impl) if decl.impl is not None else None,
         line=decl.line,
     )
+
+
+def _build_impl(decl: ImplBlock) -> ImplIR:
+    if isinstance(decl, CodeImpl):
+        return CodeImplIR(lang=decl.lang)
+    if isinstance(decl, RestImpl):
+        return RestImplIR(
+            method=decl.method,
+            url=decl.url,
+            response_path=decl.response_path,
+            timeout_seconds=decl.timeout_seconds,
+            retries=decl.retries,
+        )
+    raise IRBuildError(f"unknown ImplBlock subtype: {type(decl).__name__}")
 
 
 def _build_on_fail(chain) -> OnFailChainIR:

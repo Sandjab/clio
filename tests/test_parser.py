@@ -370,3 +370,161 @@ def test_parse_lang_unknown_value_raises():
     src = "STEP foo\n  MODE: exact\n  LANG: cobol\n"
     with pytest.raises(ParseError):
         parse(src)
+
+
+# --- impl: block parsing ---------------------------------------------------
+
+def test_parse_impl_code_minimal():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: code\n"
+    )
+    step = parse(src).decls[0]
+    assert step.impl is not None
+    assert step.impl.__class__.__name__ == "CodeImpl"
+    assert step.impl.lang is None
+
+
+def test_parse_impl_code_with_lang():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: code\n"
+        "    lang: rust\n"
+    )
+    step = parse(src).decls[0]
+    assert step.impl.__class__.__name__ == "CodeImpl"
+    assert step.impl.lang == "rust"
+
+
+def test_parse_impl_rest_minimal():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: GET\n"
+        '    url: "https://api.example.com/v1/items"\n'
+    )
+    step = parse(src).decls[0]
+    assert step.impl.__class__.__name__ == "RestImpl"
+    assert step.impl.method == "GET"
+    assert step.impl.url == "https://api.example.com/v1/items"
+    assert step.impl.response_path is None
+    assert step.impl.timeout_seconds is None
+    assert step.impl.retries is None
+
+
+def test_parse_impl_rest_full():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: POST\n"
+        '    url: "https://api.example.com/v1/items"\n'
+        '    response_path: "items[0].id"\n'
+        "    timeout: 30s\n"
+        "    retries: 3\n"
+    )
+    step = parse(src).decls[0]
+    assert step.impl.method == "POST"
+    assert step.impl.response_path == "items[0].id"
+    assert step.impl.timeout_seconds == 30
+    assert step.impl.retries == 3
+
+
+def test_parse_impl_on_judgment_step_raises():
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE: judgment\n"
+        "  impl:\n"
+        "    mode: code\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "impl" in str(exc.value)
+    assert "exact" in str(exc.value)
+
+
+def test_parse_impl_duplicate_block_raises():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: code\n"
+        "  impl:\n"
+        "    mode: code\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "duplicate" in str(exc.value).lower()
+
+
+def test_parse_impl_missing_mode_raises():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    lang: python\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "mode" in str(exc.value).lower()
+
+
+def test_parse_impl_unknown_mode_raises():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: graphql\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "graphql" in str(exc.value) or "impl.mode" in str(exc.value)
+
+
+def test_parse_impl_rest_missing_required_field_raises():
+    # url is required for impl.mode: rest
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: GET\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "url" in str(exc.value)
+
+
+def test_parse_impl_rest_unknown_method_raises():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: TRACE\n"
+        '    url: "https://example.com"\n'
+    )
+    with pytest.raises(ParseError):
+        parse(src)
+
+
+def test_parse_impl_unknown_field_for_code_mode_raises():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: code\n"
+        '    url: "irrelevant"\n'
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "url" in str(exc.value)
+    assert "code" in str(exc.value)

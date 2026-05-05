@@ -32,6 +32,27 @@ class OnFailChainIR:
 
 
 @dataclass(frozen=True)
+class ImplIR:
+    """Sealed base for the per-step impl: block. Subtypes: CodeImplIR, RestImplIR."""
+
+
+@dataclass(frozen=True)
+class CodeImplIR(ImplIR):
+    """impl.mode: code — inline function in the target language."""
+    lang: str | None
+
+
+@dataclass(frozen=True)
+class RestImplIR(ImplIR):
+    """impl.mode: rest — HTTP call to an external endpoint."""
+    method: str
+    url: str
+    response_path: str | None
+    timeout_seconds: int | None
+    retries: int | None
+
+
+@dataclass(frozen=True)
 class StepIR:
     name: str
     mode: str
@@ -40,6 +61,7 @@ class StepIR:
     cache: CacheConfigIR | None
     on_fail: OnFailChainIR | None
     lang: str | None              # one of python|rust|go|node|bash|auto, exact-only; None if unset
+    impl: ImplIR | None           # impl: block (code | rest), exact-only; None if unset
     line: int
 
 
