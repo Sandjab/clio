@@ -1,0 +1,32 @@
+CONTRACT entity
+  SHAPE:  {name: str(max=200), kind: enum(person|organization|location|date|other), confidence: float}
+  ASSERT: len(name) > 0
+
+CONTRACT entity_summary
+  SHAPE: {total: int, by_kind: List<{kind: str, count: int}>, top_names: List<str>}
+
+STEP load_article
+  TAKES: file:    str
+  GIVES: article: str
+  MODE:  exact
+
+STEP extract_entities
+  TAKES:   article:  str
+  GIVES:   entities: List<entity>
+  MODE:    judgment
+  CACHE:   ttl(7d)
+  ON_FAIL: retry(3) then escalate then abort("entity extraction failed")
+
+STEP summarize_entities
+  TAKES: entities: List<entity>
+  GIVES: summary:  entity_summary
+  MODE:  exact
+
+FLOW news_entity_extraction
+  load_article(file="article.txt")
+    -> extract_entities(article)
+    -> summarize_entities(entities)
+
+RESOURCES
+  target: claude-cli
+  models: [haiku, sonnet, opus]
