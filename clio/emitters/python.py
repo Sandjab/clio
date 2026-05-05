@@ -260,7 +260,7 @@ class PythonEmitter(BaseEmitter):
         graph: FlowGraph,
         contracts_by_name: dict[str, "ContractIR"],
     ) -> str:
-        from clio.emitters.claude_cli import _inline_schema, _render_prompt
+        from clio.emitters._claude_cli_helpers import _inline_schema, _render_prompt
         import json as _json
 
         params = _step_signature(step, contracts_by_name)
