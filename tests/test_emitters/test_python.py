@@ -481,3 +481,148 @@ def test_emit_pyproject_omits_requests_when_no_rest_step(tmp_path):
     pyproject = (tmp_path / "pyproject.toml").read_text()
     assert "requests" not in pyproject
 
+
+# --- invoke: mode: api emission --------------------------------------------
+
+_OPENAI_SRC = (
+    "STEP classify\n"
+    "  TAKES: text: str\n"
+    "  GIVES: label: str\n"
+    "  MODE:  judgment\n"
+    "  invoke:\n"
+    "    mode: api\n"
+    "    protocol: openai\n"
+    '    base_url: "http://litellm.local:4000"\n'
+    '    model: "gemini-1.5-pro"\n'
+    '    auth: "env:LITELLM_KEY"\n'
+    "    temperature: 0.0\n"
+    "    max_tokens: 256\n"
+    "FLOW classifier\n"
+    '  classify(text="hello")\n'
+)
+
+
+def test_emit_openai_step_imports_openai_not_anthropic(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_OPENAI_SRC)), tmp_path)
+    body = (tmp_path / "classifier" / "steps" / "classify.py").read_text()
+    assert "import openai" in body
+    assert "import anthropic" not in body
+
+
+def test_emit_openai_step_uses_chat_completions(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_OPENAI_SRC)), tmp_path)
+    body = (tmp_path / "classifier" / "steps" / "classify.py").read_text()
+    assert "client.chat.completions.create(" in body
+    assert "msg.choices[0].message.content" in body
+    # messages array uses both system and user roles
+    assert "{'role': 'system'" in body
+    assert "{'role': 'user'" in body
+
+
+def test_emit_openai_step_passes_base_url_and_auth(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_OPENAI_SRC)), tmp_path)
+    body = (tmp_path / "classifier" / "steps" / "classify.py").read_text()
+    assert "base_url='http://litellm.local:4000'" in body
+    assert "api_key=os.environ.get('LITELLM_KEY')" in body
+
+
+def test_emit_openai_step_uses_invoke_model_not_resources(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_OPENAI_SRC)), tmp_path)
+    body = (tmp_path / "classifier" / "steps" / "classify.py").read_text()
+    # invoke.model is the literal model id passed to the endpoint;
+    # _MODELS becomes a single-element tuple of that id, no Anthropic mapping.
+    assert "_MODELS = ('gemini-1.5-pro',)" in body
+
+
+def test_emit_openai_step_parses_as_python(tmp_path):
+    import ast
+    PythonEmitter().emit(build_ir(parse(_OPENAI_SRC)), tmp_path)
+    body = (tmp_path / "classifier" / "steps" / "classify.py").read_text()
+    ast.parse(body)
+
+
+def test_emit_openai_pyproject_adds_openai_dep(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_OPENAI_SRC)), tmp_path)
+    pyproject = (tmp_path / "pyproject.toml").read_text()
+    assert "openai>=1.0" in pyproject
+
+
+def test_emit_pyproject_omits_openai_when_no_openai_protocol(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    pyproject = (tmp_path / "pyproject.toml").read_text()
+    assert "openai" not in pyproject
+
+
+def test_emit_bedrock_protocol_raises_at_compile_time(tmp_path):
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE: judgment\n"
+        "  invoke:\n"
+        "    mode: api\n"
+        "    protocol: bedrock\n"
+        '    model: "anthropic.claude-3-5-sonnet"\n'
+        "FLOW f\n"
+        "  s()\n"
+    )
+    with pytest.raises(ValueError) as exc:
+        PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    assert "bedrock" in str(exc.value)
+
+
+def test_emit_vertex_protocol_raises_at_compile_time(tmp_path):
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE: judgment\n"
+        "  invoke:\n"
+        "    mode: api\n"
+        "    protocol: vertex\n"
+        '    model: "claude-3-5-sonnet-v2"\n'
+        "FLOW f\n"
+        "  s()\n"
+    )
+    with pytest.raises(ValueError) as exc:
+        PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    assert "vertex" in str(exc.value)
+
+
+def test_emit_cli_invoke_raises_at_compile_time(tmp_path):
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE: judgment\n"
+        "  invoke:\n"
+        "    mode: cli\n"
+        "FLOW f\n"
+        "  s()\n"
+    )
+    with pytest.raises(ValueError) as exc:
+        PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    assert "cli" in str(exc.value).lower()
+
+
+def test_emit_anthropic_invoke_with_overrides(tmp_path):
+    """Anthropic with explicit invoke.model + overrides should produce code that
+    still uses the Anthropic SDK but with the overridden model and parameters."""
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE: judgment\n"
+        "  invoke:\n"
+        "    mode: api\n"
+        "    protocol: anthropic\n"
+        '    model: "claude-opus-4-7"\n'
+        "    temperature: 0.5\n"
+        "    max_tokens: 2048\n"
+        "FLOW f\n"
+        "  s()\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "f" / "steps" / "s.py").read_text()
+    assert "import anthropic" in body
+    assert "_MODELS = ('claude-opus-4-7',)" in body
+    assert "max_tokens=2048" in body
+    assert "temperature=0.5" in body
+

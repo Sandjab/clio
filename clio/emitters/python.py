@@ -9,7 +9,16 @@ import keyword
 from pathlib import Path
 
 from clio.emitters.base import BaseEmitter
-from clio.ir.graph import ContractIR, FieldIR, FlowGraph, RestImplIR, StepIR
+from clio.ir.graph import (
+    ApiInvokeIR,
+    CliInvokeIR,
+    ContractIR,
+    FieldIR,
+    FlowGraph,
+    InvokeIR,
+    RestImplIR,
+    StepIR,
+)
 from clio.parser.ast_nodes import (
     ConstrainedType,
     ContractRef,
@@ -226,6 +235,150 @@ def _collect_idents(assert_ast: dict) -> set[str]:
     return out
 
 
+def _emit_attempt_block(
+    invoke: InvokeIR | None, result_class: str, default_max_tokens: int = 4096,
+) -> tuple[list[str], list[str], bool]:
+    """Build the (extra_imports, attempt_function_lines, needs_os) tuple
+    for the SDK call inside a judgment step. Routes by invoke type and
+    invoke.protocol; defaults to Anthropic when invoke is None.
+
+    Raises ValueError at compile time for protocols/modes the python emitter
+    does not yet support (bedrock, vertex, cli).
+    """
+    if invoke is None:
+        return _attempt_anthropic_block(None, result_class, default_max_tokens)
+
+    if isinstance(invoke, ApiInvokeIR):
+        if invoke.protocol == "anthropic":
+            return _attempt_anthropic_block(invoke, result_class, default_max_tokens)
+        if invoke.protocol == "openai":
+            return _attempt_openai_block(invoke, result_class, default_max_tokens)
+        if invoke.protocol in ("bedrock", "vertex"):
+            raise ValueError(
+                f"invoke.protocol {invoke.protocol!r} is not yet supported by the "
+                "python emitter; only 'anthropic' and 'openai' are implemented in v0.2"
+            )
+        raise ValueError(f"unknown invoke.protocol {invoke.protocol!r}")
+
+    if isinstance(invoke, CliInvokeIR):
+        raise ValueError(
+            "invoke.mode: cli is not supported by the python emitter; "
+            "use --target claude-cli for CLI invocation, or switch to invoke.mode: api"
+        )
+
+    raise ValueError(f"unknown invoke type: {type(invoke).__name__}")
+
+
+def _attempt_anthropic_block(
+    invoke: ApiInvokeIR | None, result_class: str, default_max_tokens: int,
+) -> tuple[list[str], list[str], bool]:
+    """Anthropic SDK attempt block. Behavior is identical to the v0.1 emitter
+    when invoke is None; with invoke set, applies base_url/auth/temperature/
+    max_tokens overrides."""
+    extra_imports = ["import anthropic"]
+    needs_os = False
+
+    client_args_parts: list[str] = []
+    if invoke is not None and invoke.base_url:
+        client_args_parts.append(f"base_url={invoke.base_url!r}")
+    if invoke is not None and invoke.auth and invoke.auth.startswith("env:"):
+        env_var = invoke.auth[4:]
+        client_args_parts.append(f"api_key=os.environ.get({env_var!r})")
+        needs_os = True
+    client_args = ", ".join(client_args_parts)
+
+    max_tokens = (
+        invoke.max_tokens
+        if invoke is not None and invoke.max_tokens is not None
+        else default_max_tokens
+    )
+
+    create_args = [
+        "            model=model,",
+        f"            max_tokens={max_tokens},",
+    ]
+    if invoke is not None and invoke.temperature is not None:
+        create_args.append(f"            temperature={invoke.temperature},")
+    create_args += [
+        "            system=_SYSTEM_PROMPT,",
+        "            messages=[{'role': 'user', 'content': prompt}],",
+    ]
+
+    attempt_block = [
+        "def _attempt(model, prompt):",
+        '    """Single attempt: SDK call → markdown strip → Pydantic validation."""',
+        "    try:",
+        f"        client = anthropic.Anthropic({client_args})",
+        "        msg = client.messages.create(",
+    ] + create_args + [
+        "        )",
+        "        raw = msg.content[0].text if msg.content else ''",
+        "        if not raw:",
+        "            return None",
+        "        cleaned = '\\n'.join(line for line in raw.splitlines() if not line.startswith('```'))",
+        f"        return {result_class}(json.loads(cleaned))",
+        "    except Exception:",
+        "        return None",
+    ]
+
+    return extra_imports, attempt_block, needs_os
+
+
+def _attempt_openai_block(
+    invoke: ApiInvokeIR, result_class: str, default_max_tokens: int,
+) -> tuple[list[str], list[str], bool]:
+    """OpenAI SDK attempt block (chat.completions API). Compatible with LiteLLM,
+    OpenRouter, Ollama, vLLM, Together, etc. via base_url."""
+    extra_imports = ["import openai"]
+    needs_os = False
+
+    client_args_parts: list[str] = []
+    if invoke.base_url:
+        client_args_parts.append(f"base_url={invoke.base_url!r}")
+    if invoke.auth and invoke.auth.startswith("env:"):
+        env_var = invoke.auth[4:]
+        client_args_parts.append(f"api_key=os.environ.get({env_var!r})")
+        needs_os = True
+    elif invoke.auth == "none":
+        # Local servers (Ollama default, vLLM no-auth) accept any non-empty key.
+        client_args_parts.append("api_key='not-needed'")
+    client_args = ", ".join(client_args_parts)
+
+    max_tokens = invoke.max_tokens if invoke.max_tokens is not None else default_max_tokens
+
+    create_args = [
+        "            model=model,",
+        f"            max_tokens={max_tokens},",
+    ]
+    if invoke.temperature is not None:
+        create_args.append(f"            temperature={invoke.temperature},")
+    create_args += [
+        "            messages=[",
+        "                {'role': 'system', 'content': _SYSTEM_PROMPT},",
+        "                {'role': 'user', 'content': prompt},",
+        "            ],",
+    ]
+
+    attempt_block = [
+        "def _attempt(model, prompt):",
+        '    """Single attempt: SDK call → markdown strip → Pydantic validation."""',
+        "    try:",
+        f"        client = openai.OpenAI({client_args})",
+        "        msg = client.chat.completions.create(",
+    ] + create_args + [
+        "        )",
+        "        raw = msg.choices[0].message.content if msg.choices else ''",
+        "        if not raw:",
+        "            return None",
+        "        cleaned = '\\n'.join(line for line in raw.splitlines() if not line.startswith('```'))",
+        f"        return {result_class}(json.loads(cleaned))",
+        "    except Exception:",
+        "        return None",
+    ]
+
+    return extra_imports, attempt_block, needs_os
+
+
 class PythonEmitter(BaseEmitter):
     def emit(self, graph: FlowGraph, output_dir: Path) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -254,8 +407,16 @@ class PythonEmitter(BaseEmitter):
         needs_requests = any(
             isinstance(s.impl, RestImplIR) for s in graph.steps
         )
+        needs_openai = any(
+            isinstance(s.invoke, ApiInvokeIR) and s.invoke.protocol == "openai"
+            for s in graph.steps
+        )
         (output_dir / "pyproject.toml").write_text(
-            self._pyproject(pkg_name, needs_requests=needs_requests)
+            self._pyproject(
+                pkg_name,
+                needs_requests=needs_requests,
+                needs_openai=needs_openai,
+            )
         )
         (output_dir / "README.md").write_text(self._readme(pkg_name, graph))
 
@@ -454,12 +615,19 @@ class PythonEmitter(BaseEmitter):
         )
         inlined_json = _json.dumps(inlined, separators=(",", ":"))
 
-        models = (
-            graph.resources.models
-            if graph.resources is not None and graph.resources.models
-            else ("haiku",)
-        )
-        models_full = tuple(_model_id(m) for m in models)
+        # invoke.model overrides RESOURCES.models when set; otherwise the
+        # RESOURCES.models list drives the escalate chain as before.
+        invoke = step.invoke
+        if isinstance(invoke, ApiInvokeIR):
+            models = (invoke.model,)
+            models_full = (invoke.model,)  # invoke.model is the raw provider ID
+        else:
+            models = (
+                graph.resources.models
+                if graph.resources is not None and graph.resources.models
+                else ("haiku",)
+            )
+            models_full = tuple(_model_id(m) for m in models)
         models_array_repr = (
             "(" + ", ".join(repr(m) for m in models_full) + ",)"
             if len(models_full) == 1
@@ -485,6 +653,10 @@ class PythonEmitter(BaseEmitter):
         ]
         sub_lines.append("    prompt = prompt.replace('${schema}', _INLINED_SCHEMA)")
 
+        provider_imports, attempt_lines, attempt_needs_os = _emit_attempt_block(
+            invoke, result_class,
+        )
+
         header = [
             f'"""STEP {step.name} (judgment).',
             f'',
@@ -495,14 +667,13 @@ class PythonEmitter(BaseEmitter):
             "import json",
             "import sys",
         ]
+        if cache_active or attempt_needs_os:
+            header += ["import os"]
         if cache_active:
-            header += [
-                "import os",
-                "from pathlib import Path",
-            ]
+            header += ["from pathlib import Path"]
         header += [
             "",
-            "import anthropic",
+        ] + provider_imports + [
             "",
         ]
         if cache_active:
@@ -521,23 +692,7 @@ class PythonEmitter(BaseEmitter):
             f"_MODELS = {models_array_repr}",
             "",
             "",
-            "def _attempt(model, prompt):",
-            "    \"\"\"Single attempt: SDK call → markdown strip → Pydantic validation.\"\"\"",
-            "    try:",
-            "        client = anthropic.Anthropic()",
-            "        msg = client.messages.create(",
-            "            model=model,",
-            "            max_tokens=4096,",
-            "            system=_SYSTEM_PROMPT,",
-            "            messages=[{'role': 'user', 'content': prompt}],",
-            "        )",
-            "        raw = msg.content[0].text if msg.content else ''",
-            "        if not raw:",
-            "            return None",
-            "        cleaned = '\\n'.join(line for line in raw.splitlines() if not line.startswith('```'))",
-            f"        return {result_class}(json.loads(cleaned))",
-            "    except Exception:",
-            "        return None",
+        ] + attempt_lines + [
             "",
             "",
         ]
@@ -739,13 +894,20 @@ class PythonEmitter(BaseEmitter):
         return graph.flow.name
 
     @staticmethod
-    def _pyproject(pkg_name: str, *, needs_requests: bool = False) -> str:
+    def _pyproject(
+        pkg_name: str,
+        *,
+        needs_requests: bool = False,
+        needs_openai: bool = False,
+    ) -> str:
         deps = [
             '    "anthropic>=0.40",',
             '    "pydantic>=2",',
         ]
         if needs_requests:
             deps.append('    "requests>=2.31",')
+        if needs_openai:
+            deps.append('    "openai>=1.0",')
         deps_block = "\n".join(deps)
         return (
             "[build-system]\n"
