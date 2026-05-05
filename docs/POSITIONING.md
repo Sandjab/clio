@@ -181,6 +181,41 @@ These weaknesses are real, but they are weaknesses *only against the wrong yards
 - **A proprietary integration marketplace.** We would spend years catching up to n8n and never overtake; meanwhile we would carry a vendor-style runtime burden that contradicts the compiler-not-runtime stance.
 - **An embedded observability backend.** Same logic: open standards win, vendor lock-in loses.
 - **A no-code-style "self-running" cloud product.** Possible business model, but a different project — would warp the compiler core toward a SaaS runtime.
+- **An n8n compilation target.** n8n is itself the kind of monolithic runtime CLIO is designed against. Compiling to n8n means emitting JSON destined to be imported into a live n8n instance — losing source readability, portability, CONTRACT typing, and the EXACT/JUDGMENT semantic. A *visualization export* (`clio graph --format=n8n`) for non-developer stakeholders may make sense as part of W3; an executable emitter does not.
+- **A LangChain compilation target.** Anything LangChain offers (tools library, retrievers, loaders) is already reachable from the `python` emitter via `impl.mode: code`. A dedicated LangChain emitter would carry maintenance burden against an unstable upstream API for zero incremental value.
+
+---
+
+---
+
+## Adoption-bridge targets: when to add, when not to
+
+A **bridge target** is an emitter whose primary value is not production deployment but *adoption by an audience already invested in another stack*. LangGraph is the archetypal candidate. The pattern is delicate: legitimate when scoped right, corrosive when not.
+
+### LangGraph — conditional, not now
+
+**Case for.**
+- Adoption path for teams already invested in LangChain / LangGraph / LangSmith — they can try CLIO without abandoning their tooling.
+- Closes W5/W6 (replay, time-travel) and part of W2 (observability via LangSmith) **for free** on this specific target — LangGraph already provides those capabilities.
+
+**Case against.**
+- Breaks the *compiler-not-runtime* promise on this target specifically: emitted code requires LangGraph + LangChain at runtime, in contrast to the standalone `python` target.
+- LangGraph boilerplate is verbose; emitted code becomes noticeably less readable than `python`'s output.
+- **Suction effect.** If the LangGraph emitter ships before `python` has matured on W2 and W5, users perceive it as strictly more capable and migrate to it by default — turning CLIO into a LangGraph wrapper and ceding roadmap control to an upstream we don't own.
+- LangGraph's API evolves; the emitter carries ongoing maintenance cost against an upstream we do not control.
+
+**Conditions to satisfy before building it.**
+1. `python` has shipped W2 short-term (structured JSON-line logging) and W5 short-term (`clio resume --from-step N`). Otherwise LangGraph looks strictly superior and pulls users away from the canonical target.
+2. The README and CLI document the target explicitly as a **bridge, not production**: `python` remains the recommended emitter for new projects.
+3. Tests cover round-trip behavior at parity with `python` on at least one non-trivial example, so the bridge cannot quietly become the more-feature-rich path.
+
+### General principle for bridge targets
+
+A bridge target is legitimate if and only if **both** hold:
+- (a) it serves an audience genuinely impractical to reach via the canonical target, **and**
+- (b) it ships *after* the canonical target reaches feature parity on the bridge target's main draws.
+
+Otherwise the bridge becomes the destination, and the canonical target withers. The same test will apply to any future "bridge" candidate (DSPy, Haystack, …): not before parity, not without explicit positioning as a bridge.
 
 ---
 
