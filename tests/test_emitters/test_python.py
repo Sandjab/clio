@@ -547,6 +547,19 @@ def test_emit_openai_pyproject_adds_openai_dep(tmp_path):
     assert "openai>=1.0" in pyproject
 
 
+def test_emit_openai_only_pyproject_omits_anthropic_dep(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_OPENAI_SRC)), tmp_path)
+    pyproject = (tmp_path / "pyproject.toml").read_text()
+    assert "anthropic" not in pyproject
+
+
+def test_emit_pyproject_includes_anthropic_when_judgment_step_present(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    pyproject = (tmp_path / "pyproject.toml").read_text()
+    assert "anthropic>=0.40" in pyproject
+
+
 def test_emit_pyproject_omits_openai_when_no_openai_protocol(tmp_path):
     src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
     PythonEmitter().emit(build_ir(parse(src)), tmp_path)
