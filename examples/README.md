@@ -1,8 +1,9 @@
 # CLIO examples
 
-Two compilable `.clio` files demonstrate distinct use cases. Both compile to
-both targets (`claude-cli` and `python`); the EXACT step bodies are stubs the
-user fills in.
+Three compilable `.clio` files demonstrate distinct use cases. The first two
+compile to both targets (`claude-cli` and `python`); the third targets
+`python` only because it uses `invoke.protocol: openai` (LiteLLM bridge) which
+the `claude-cli` target does not implement.
 
 ## 1. `mvp.clio` — customer churn detection
 
@@ -67,3 +68,45 @@ with caching and resilience. `entities.clio` shows the same primitives (STEP,
 CONTRACT, FLOW) handle a different domain (NER / extraction) with no language
 change — only the contracts and step names differ. This is the central claim
 of CLIO: one compiler, many use cases, no domain-specific runtime.
+
+## 3. `classify_corpus.clio` — FOR EACH + OpenAI-compat (LiteLLM → Gemini)
+
+Pipeline: load lines from a file, classify each line's sentiment via an
+OpenAI-compatible endpoint (LiteLLM proxying to Gemini), with a typed
+classification contract.
+
+What this example exercises that the first two do not:
+
+- `FOR EACH line IN lines:` — body executed once per element of the source
+  list (loop variable `line` bound as a local kwarg).
+- `invoke.protocol: openai` — Python emitter routes through the OpenAI SDK
+  rather than the Anthropic SDK. With `base_url` pointing at a LiteLLM
+  proxy, the actual model can be Gemini, OpenAI, Mistral, Together, Groq,
+  Ollama or vLLM without any code change.
+- A contract with `ASSERT` (`confidence > 0.0`) compiled into a Pydantic
+  `@field_validator` in the emitted package.
+
+```bash
+uv run python -m clio compile examples/classify_corpus.clio --target python --output ./out
+
+# Edit out/classify_corpus/steps/load_lines.py to read reviews.txt and return
+# `[line.strip() for line in open(file).read().splitlines() if line.strip()]`.
+
+# Start a LiteLLM proxy locally (or point base_url at any OpenAI-compatible
+# endpoint), then:
+export LITELLM_KEY=...
+uv pip install ./out
+classify_corpus
+```
+
+The emitted `out/pyproject.toml` declares `openai>=1.0` and `pydantic>=2` (no
+`anthropic`, no `requests` — both omitted because no step needs them). The
+emitted `flow.py` chains `load_lines` then `for line in state['lines']: classify(text=line)`.
+
+### v0 limitation visible in this example
+
+`FOR EACH` body call results are not yet accumulated into `state` — each
+iteration's `classify` result is computed but not retained for downstream
+aggregation. To aggregate, add a follow-up step after the loop that re-derives
+the per-line results (e.g. read them back from a side-channel the step writes
+to) or wait for the planned `FOR EACH x IN xs COLLECT y INTO ys:` syntax.

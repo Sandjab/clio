@@ -1,0 +1,25 @@
+CONTRACT classification
+  SHAPE:  {label: enum(positive|negative|neutral), confidence: float}
+  ASSERT: confidence > 0.0
+
+STEP load_lines
+  TAKES: file:  str
+  GIVES: lines: List<str>
+  MODE:  exact
+
+STEP classify
+  TAKES: text:   str
+  GIVES: result: classification
+  MODE:  judgment
+  invoke:
+    mode:        api
+    protocol:    openai
+    base_url:    "http://localhost:4000"
+    model:       "gemini-1.5-pro"
+    auth:        "env:LITELLM_KEY"
+    temperature: 0.0
+
+FLOW classify_corpus
+  load_lines(file="reviews.txt")
+    -> FOR EACH line IN lines:
+         classify(text=line)

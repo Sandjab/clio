@@ -35,6 +35,7 @@
 ### Examples
 
 - New `examples/entities.clio` (named-entity recognition + summary) demonstrating the language is not churn-specific. Three steps (two EXACT, one JUDGMENT), nested record types (`List<{kind: str, count: int}>`), enum + float fields. Compiles to both targets with no manual edits beyond filling EXACT step bodies.
+- New `examples/classify_corpus.clio` combining `FOR EACH` + `invoke.protocol: openai` (LiteLLM proxy → Gemini). Two steps + one CONTRACT with ASSERT. Compiles via `--target python` only (claude-cli rejects openai protocol). Emits an `openai>=1.0`/`pydantic>=2` package — no `anthropic`, no `requests` — and a `flow.py` that chains `load_lines()` then `for line in state['lines']: classify(text=line)`.
 
 ### Documentation
 
@@ -44,7 +45,7 @@
 
 ### Tests
 
-- 231 tests + 2 e2e gated (was 121 + 2). +110 tests covering LANG plumbing, impl/invoke block parsing and IR, REST emission and url templating in both targets, openai protocol emission, FOR EACH parsing/IR/emission in both targets, conditional anthropic/pydantic deps, `clio graph` rendering, `impl.mode: shell` parser/IR/both-emitters and runtime argv substitution smoke test, and explicit-rejection paths.
+- 232 tests + 2 e2e gated (was 121 + 2). +111 tests covering LANG plumbing, impl/invoke block parsing and IR, REST emission and url templating in both targets, openai protocol emission, FOR EACH parsing/IR/emission in both targets, conditional anthropic/pydantic deps, `clio graph` rendering, `impl.mode: shell` parser/IR/both-emitters and runtime argv substitution smoke test, the `classify_corpus` FOR-EACH-plus-openai example end-to-end, and explicit-rejection paths.
 
 ### Repo hygiene
 

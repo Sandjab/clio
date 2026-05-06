@@ -285,6 +285,32 @@ def test_emit_examples_mvp_python(tmp_path):
     assert actual == expected
 
 
+def test_emit_examples_classify_corpus_python(tmp_path):
+    src = (Path(__file__).parent.parent.parent / "examples" / "classify_corpus.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+
+    pyproject = (tmp_path / "pyproject.toml").read_text()
+    assert "openai>=1.0" in pyproject
+    assert "anthropic" not in pyproject
+    assert "pydantic>=2" in pyproject
+    assert "requests" not in pyproject
+
+    classify_body = (tmp_path / "classify_corpus" / "steps" / "classify.py").read_text()
+    assert "import openai" in classify_body
+    assert "openai.OpenAI(base_url='http://localhost:4000'" in classify_body
+    assert "api_key=os.environ.get('LITELLM_KEY')" in classify_body
+    assert "import anthropic" not in classify_body
+
+    flow = (tmp_path / "classify_corpus" / "flow.py").read_text()
+    assert "state['lines'] = load_lines_mod.load_lines" in flow
+    assert "for line in state['lines']:" in flow
+    assert "classify_mod.classify(text=line)" in flow
+
+    contracts_py = (tmp_path / "classify_corpus" / "contracts.py").read_text()
+    assert "class Classification(BaseModel)" in contracts_py
+    assert "@field_validator" in contracts_py
+
+
 def test_emit_judgment_cache_hit_skips_sdk(tmp_path, monkeypatch):
     src = (FIXTURES / "mvp_v03_cache.clio").read_text()
     PythonEmitter().emit(build_ir(parse(src)), tmp_path)
