@@ -258,6 +258,40 @@ def test_claude_cli_emit_rest_step_writes_state_with_gives_name(tmp_path):
     assert 'state["location"] = location' in body
 
 
+_REST_TEMPLATED_SRC_CLI = (
+    "STEP geocode\n"
+    "  TAKES: address: str, country: str\n"
+    "  GIVES: location: str\n"
+    "  MODE:  exact\n"
+    "  impl:\n"
+    "    mode: rest\n"
+    "    method: GET\n"
+    '    url: "https://api.example.com/geo/${country}?q=${address}"\n'
+    '    response_path: "results[0].formatted_address"\n'
+    "    timeout: 30s\n"
+    "FLOW geo\n"
+    '  geocode(address="123 Main St", country="US")\n'
+)
+
+
+def test_claude_cli_emit_rest_step_templates_takes_into_url(tmp_path):
+    ClaudeCLIEmitter().emit(build_ir(parse(_REST_TEMPLATED_SRC_CLI)), tmp_path)
+    body = (tmp_path / "steps" / "01_geocode.py").read_text()
+    assert "url = 'https://api.example.com/geo/${country}?q=${address}'" in body
+    assert "url = url.replace('${address}', str(args.address))" in body
+    assert "url = url.replace('${country}', str(args.country))" in body
+    assert "url=url," in body
+    assert "_ = args.address" not in body
+    assert "_ = args.country" not in body
+
+
+def test_claude_cli_emit_rest_step_templated_parses_as_python(tmp_path):
+    import ast
+    ClaudeCLIEmitter().emit(build_ir(parse(_REST_TEMPLATED_SRC_CLI)), tmp_path)
+    body = (tmp_path / "steps" / "01_geocode.py").read_text()
+    ast.parse(body)
+
+
 # --- FOR EACH bash emission ------------------------------------------------
 
 _FOREACH_BASH_SRC = (

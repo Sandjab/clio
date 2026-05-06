@@ -442,18 +442,34 @@ class ClaudeCLIEmitter(BaseEmitter):
                 f'    parser.add_argument("--{f.name}", required=True)'
                 for f in step.takes
             ) or "    pass"
-            unused_takes = (
-                "\n" + "\n".join(f"    _ = args.{f.name}" for f in step.takes)
-                if step.takes else ""
-            )
+
+            templating_active = "${" in step.impl.url
+            if templating_active:
+                unused_takes = ""
+                url_lines = [f"    url = {step.impl.url!r}"]
+                for f in step.takes:
+                    url_lines.append(
+                        f"    url = url.replace('${{{f.name}}}', str(args.{f.name}))"
+                    )
+                url_block = "\n".join(url_lines) + "\n"
+                url_arg = "url"
+            else:
+                unused_takes = (
+                    "".join(f"    _ = args.{f.name}\n" for f in step.takes)
+                    if step.takes else ""
+                )
+                url_block = ""
+                url_arg = repr(step.impl.url)
+
             out_name = step.gives.name if step.gives else "result"
             body = _REST_STEP_TEMPLATE.format(
                 name=step.name,
                 io_doc=io_doc,
                 argparse_block=argparse_block,
                 unused_takes=unused_takes,
+                url_block=url_block,
+                url_arg=url_arg,
                 method=step.impl.method,
-                url=step.impl.url,
                 timeout_repr=repr(step.impl.timeout_seconds),
                 response_path_repr=repr(step.impl.response_path),
                 out_name=out_name,

@@ -482,6 +482,66 @@ def test_emit_pyproject_omits_requests_when_no_rest_step(tmp_path):
     assert "requests" not in pyproject
 
 
+_REST_TEMPLATED_SRC = (
+    "STEP geocode\n"
+    "  TAKES: address: str, country: str\n"
+    "  GIVES: location: str\n"
+    "  MODE:  exact\n"
+    "  impl:\n"
+    "    mode: rest\n"
+    "    method: GET\n"
+    '    url: "https://api.example.com/geo/${country}?q=${address}"\n'
+    '    response_path: "results[0].formatted_address"\n'
+    "    timeout: 30s\n"
+    "FLOW geo\n"
+    '  geocode(address="123 Main St", country="US")\n'
+)
+
+
+def test_emit_rest_step_templates_takes_into_url(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_REST_TEMPLATED_SRC)), tmp_path)
+    body = (tmp_path / "geo" / "steps" / "geocode.py").read_text()
+    assert "_url = 'https://api.example.com/geo/${country}?q=${address}'" in body
+    assert "_url = _url.replace('${address}', str(address))" in body
+    assert "_url = _url.replace('${country}', str(country))" in body
+    assert "url=_url" in body
+    assert "_ = address" not in body
+    assert "_ = country" not in body
+
+
+def test_emit_rest_step_templated_parses_as_python(tmp_path):
+    import ast
+    PythonEmitter().emit(build_ir(parse(_REST_TEMPLATED_SRC)), tmp_path)
+    body = (tmp_path / "geo" / "steps" / "geocode.py").read_text()
+    ast.parse(body)
+
+
+def test_emit_rest_step_templated_runtime_substitution(tmp_path, monkeypatch):
+    import runpy
+    import sys
+    import types
+
+    PythonEmitter().emit(build_ir(parse(_REST_TEMPLATED_SRC)), tmp_path)
+
+    captured: dict[str, object] = {}
+
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return {"results": [{"formatted_address": "ok"}]}
+
+    fake = types.ModuleType("requests")
+    fake.request = lambda **kwargs: (captured.update(kwargs) or _FakeResp())
+    monkeypatch.setitem(sys.modules, "requests", fake)
+
+    step_path = tmp_path / "geo" / "steps" / "geocode.py"
+    ns = runpy.run_path(str(step_path))
+    ns["geocode"](address="123 Main St", country="US")
+    assert captured["url"] == "https://api.example.com/geo/US?q=123 Main St"
+    assert captured["method"] == "GET"
+
+
 # --- invoke: mode: api emission --------------------------------------------
 
 _OPENAI_SRC = (

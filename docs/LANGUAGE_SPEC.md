@@ -28,7 +28,7 @@ Where the table says *rejected at compile time*, the emitter raises a clear `Val
 
 v0 limitations carried forward, to be lifted in v0.3+:
 
-- `impl.rest` does not yet template TAKES into url/headers/body (`${var}` substitution).
+- `impl.rest` templates TAKES into the `url` via `${var}` substitution (since v0.4); headers/body templating is not yet supported.
 - `impl.rest` does not yet parse `query`/`headers`/`body` fields.
 - `impl.rest` `retries` is parsed but not honored at runtime.
 - `FOR EACH` body call results are not accumulated into state — the step is invoked for side effects only.

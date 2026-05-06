@@ -205,10 +205,25 @@ class PythonEmitter(BaseEmitter):
             if step.gives is not None else "(no GIVES)"
         )
 
-        # The function body is generated; TAKES are accepted in the signature
-        # for orchestrator parity but not yet wired into the request (no
-        # templating in this version — see LANGUAGE_SPEC v0.2).
-        unused_takes_lines = [f"    _ = {_to_field_name(t.name)}" for t in step.takes]
+        templating_active = "${" in impl.url
+        if templating_active:
+            url_lines = [f"    _url = {impl.url!r}"]
+            for t in step.takes:
+                fname = _to_field_name(t.name)
+                url_lines.append(
+                    f"    _url = _url.replace('${{{t.name}}}', str({fname}))"
+                )
+            url_block = "\n".join(url_lines) + "\n"
+            url_arg = "url=_url"
+            unused_takes_block = ""
+        else:
+            url_block = ""
+            url_arg = f"url={impl.url!r}"
+            unused_takes_block = (
+                "\n".join(f"    _ = {_to_field_name(t.name)}" for t in step.takes)
+                + "\n"
+                if step.takes else ""
+            )
 
         timeout_arg = (
             f"timeout={impl.timeout_seconds}"
@@ -237,27 +252,26 @@ class PythonEmitter(BaseEmitter):
             if impl.retries is not None else ""
         )
 
-        body_unused = ("\n".join(unused_takes_lines) + "\n") if unused_takes_lines else ""
-
         return (
             f'"""STEP {step.name} (exact, impl: rest)\n'
             f'TAKES:\n'
             f'    {takes_doc}\n'
             f'GIVES:\n'
             f'    {gives_doc}\n\n'
-            f'Auto-generated from `impl: mode: rest`. The HTTP request is hardcoded\n'
-            f'from the .clio source; templating of TAKES into the URL/headers/body\n'
-            f'is not yet supported (v0.2 limitation).\n'
+            f'Auto-generated from `impl: mode: rest`. TAKES are substituted into\n'
+            f'the URL via ${{var}} placeholders; templating of headers/body and\n'
+            f'parsing of query/headers/body fields is not yet supported.\n'
             f'"""\n'
             f'from __future__ import annotations\n\n'
             f'import requests\n'
             f'{extra_imports}\n\n'
             f'{retries_note}'
             f'def {step.name}({params}) -> {ret_type}:\n'
-            f'{body_unused}'
+            f'{unused_takes_block}'
+            f'{url_block}'
             f'    response = requests.request(\n'
             f'        method={impl.method!r},\n'
-            f'        url={impl.url!r},\n'
+            f'        {url_arg},\n'
             f'        {timeout_arg},\n'
             f'    )\n'
             f'    response.raise_for_status()\n'
