@@ -58,3 +58,38 @@ def test_strip_handles_leading_trailing_whitespace_around_fences():
     from clio.nl_to_clio import _strip_markdown_fences
     src = "\n\n```clio\nSTEP foo\n  MODE: exact\n```\n\n"
     assert _strip_markdown_fences(src) == "STEP foo\n  MODE: exact\n"
+
+
+def test_system_prompt_contains_role_intro():
+    from clio.nl_to_clio import _build_system_prompt
+    prompt = _build_system_prompt()
+    assert "CLIO" in prompt
+    assert ".clio" in prompt
+
+
+def test_system_prompt_contains_full_language_spec():
+    from clio.nl_to_clio import _build_system_prompt
+    prompt = _build_system_prompt()
+    # A few markers that should be present somewhere in LANGUAGE_SPEC.md
+    assert "Implementation status" in prompt
+    assert "EXACT" in prompt
+    assert "JUDGMENT" in prompt
+
+
+def test_system_prompt_contains_three_repo_examples():
+    from clio.nl_to_clio import _build_system_prompt
+    prompt = _build_system_prompt()
+    # mvp.clio markers
+    assert "detect_churn" in prompt
+    # entities.clio markers
+    assert "extract_entities" in prompt
+    # classify_corpus.clio markers
+    assert "classify_corpus" in prompt
+    assert "FOR EACH line IN lines" in prompt
+
+
+def test_system_prompt_contains_output_rules():
+    from clio.nl_to_clio import _build_system_prompt
+    prompt = _build_system_prompt()
+    assert "Output ONLY a valid .clio" in prompt
+    assert "ERROR:" in prompt  # the ambiguity-refusal escape hatch
