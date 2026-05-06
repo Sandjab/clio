@@ -75,52 +75,42 @@ pytest tests/ -v
 
 ## Example
 
+This is `examples/mvp.clio` — it compiles to both `claude-cli` and `python` with no edits beyond filling the EXACT step bodies.
+
 ```
-CONTRACT at_risk_account
-  SHAPE:      {client: str, risk: enum(low|mid|high), reason: str(max=300)}
-  ASSERT:     len(reason) > 0
+CONTRACT customer_risk
+  SHAPE:  {client: str, risk: enum(low|mid|high), reason: str(max=300)}
+  ASSERT: len(reason) > 0
 
 STEP load_customers
-  TAKES:     file: CSV
-  GIVES:     customers: List<{name: str, revenue: float, last_order: str}>
-  MODE:      exact
+  TAKES: file:      CSV
+  GIVES: customers: List<{name: str, revenue: float}>
+  MODE:  exact
+
+STEP detect_churn_naive
+  TAKES: customers: List<{name: str, revenue: float}>
+  GIVES: risks:     List<customer_risk>
+  MODE:  exact
 
 STEP detect_churn
-  TAKES:     customers: List<{name: str, revenue: float, last_order: str}>
-  GIVES:     risks: List<at_risk_account>
-  MODE:      judgment
-  CACHE:     ttl(24h)
-  VALIDATE:  each risk.reason cites a column from customers
-  ON_FAIL:   retry(3) then escalate
-
-STEP check_zendesk_ticket
-  TAKES:     client: str
-  GIVES:     last_ticket: {subject: str, date: str, status: str}
-  MODE:      exact
-
-STEP write_retention_email
-  TAKES:     risk: at_risk_account, ticket: {subject: str, date: str, status: str}
-  GIVES:     email: {subject: str, body: str}
-  MODE:      judgment
-  CACHE:     on
+  TAKES:    customers: List<{name: str, revenue: float}>
+  GIVES:    risks:     List<customer_risk>
+  MODE:     judgment
+  CACHE:    ttl(24h)
+  ON_FAIL:  retry(3) then escalate then fallback(detect_churn_naive) then abort("churn detection exhausted")
 
 FLOW customer_retention
   load_customers(file="customers.csv")
     -> detect_churn(customers)
-    -> FOR EACH risk IN risks:
-         check_zendesk_ticket(risk.client)
-           -> write_retention_email(risk, last_ticket)
-
-  IF detect_churn.FAILS:
-    -> abort("Cannot detect churn — check CSV format")
 
 RESOURCES
-  prefer:     quality
-  models:     [haiku, sonnet]
-  strategy:   escalate
-  target:     claude-cli
-  lang:       python
+  target:  claude-cli
+  models:  [haiku, sonnet, opus]
 ```
+
+The compiler reads this and emits a runnable project with: a typed `CustomerRisk` Pydantic model with the `len(reason) > 0` assertion, a `detect_churn` step that calls the LLM with the inlined JSON Schema and a 24-hour cache, and a resilience chain — three retry attempts on Haiku, escalation to Sonnet (one attempt), fallback to the deterministic `detect_churn_naive` step, and finally `abort` with an explicit message. None of that wiring is hand-written.
+
+See [`examples/`](examples/) for the full set: `mvp.clio` (above), `entities.clio` (NER + summary, two contracts, nested record types), and `classify_corpus.clio` (FOR EACH + OpenAI-compat via LiteLLM/Gemini).
 
 ## Project structure
 
