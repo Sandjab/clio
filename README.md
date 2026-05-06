@@ -64,6 +64,11 @@ python -m clio check examples/retention.clio
 python -m clio graph examples/retention.clio
 python -m clio graph examples/retention.clio --format dot --output flow.dot
 
+# Generate a .clio source from a natural-language description (requires anthropic[gen] extra)
+export ANTHROPIC_API_KEY=...
+python -m clio gen "Pour chaque article, extrais les entités et résume-les" > flow.clio
+python -m clio compile flow.clio --target python --output ./out
+
 # Run tests
 pytest tests/ -v
 ```

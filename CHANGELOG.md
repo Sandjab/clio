@@ -25,6 +25,7 @@
 ### CLI
 
 - New `clio graph <source>` subcommand that renders the FLOW as a Mermaid (default) or Graphviz DOT source. EXACT steps render as rectangles, JUDGMENT steps as parallelograms; FOR EACH renders as a labelled subgraph in Mermaid and as a dashed labelled edge in DOT (cluster-with-`lhead` machinery skipped on purpose). Output goes to stdout or to `--output FILE`. Designed for paste-into-GitHub-PR rendering since GitHub renders Mermaid natively.
+- New `clio gen <description>` subcommand that turns a natural-language description into a valid `.clio` source via Anthropic SDK (Sonnet 4.6 by default). Compile-correct loop: parse + IR build validate the LLM output; on failure, a single retry feeds the previous attempt and the line/column error back to the model. After the retry budget, `GenerationError` is raised — the CLI prints the failed attempt as `# `-commented stderr lines so the user can paste-and-fix. The `anthropic` package is an optional `[gen]` extra; `compile`/`check`/`graph` keep their zero-runtime-deps. Reads description from arg, `--from-file`, or stdin; writes to stdout or `--output FILE`. Auth via `ANTHROPIC_API_KEY` env var.
 
 ### Refactor
 
@@ -45,7 +46,7 @@
 
 ### Tests
 
-- 232 tests + 2 e2e gated (was 121 + 2). +111 tests covering LANG plumbing, impl/invoke block parsing and IR, REST emission and url templating in both targets, openai protocol emission, FOR EACH parsing/IR/emission in both targets, conditional anthropic/pydantic deps, `clio graph` rendering, `impl.mode: shell` parser/IR/both-emitters and runtime argv substitution smoke test, the `classify_corpus` FOR-EACH-plus-openai example end-to-end, and explicit-rejection paths.
+- 263 tests + 2 e2e gated (was 121 + 2). +142 tests covering LANG plumbing, impl/invoke block parsing and IR, REST emission and url templating in both targets, openai protocol emission, FOR EACH parsing/IR/emission in both targets, conditional anthropic/pydantic deps, `clio graph` rendering, `impl.mode: shell` parser/IR/both-emitters and runtime argv substitution smoke test, the `classify_corpus` FOR-EACH-plus-openai example end-to-end, explicit-rejection paths, NL→.clio compile-correct loop and CLI.
 
 ### Repo hygiene
 

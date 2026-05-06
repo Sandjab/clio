@@ -163,4 +163,8 @@ python -m clio check examples/analyse.clio
 # Render the FLOW as a Mermaid (default) or DOT graph (stdout, or --output FILE)
 python -m clio graph examples/analyse.clio
 python -m clio graph examples/analyse.clio --format dot
+
+# Generate a .clio source from natural language (requires `pip install -e .[gen]` and ANTHROPIC_API_KEY)
+python -m clio gen "describe a pipeline that ..."
+python -m clio gen --from-file desc.txt --output flow.clio --model claude-sonnet-4-6
 ```
