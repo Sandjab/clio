@@ -509,6 +509,26 @@ def test_emit_openai_step_imports_openai_not_anthropic(tmp_path):
     assert "import anthropic" not in body
 
 
+def test_emit_openai_only_no_anthropic_anywhere(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_OPENAI_SRC)), tmp_path)
+    offenders = [
+        str(p.relative_to(tmp_path))
+        for p in tmp_path.rglob("*.py")
+        if "anthropic" in p.read_text()
+    ]
+    assert offenders == [], f"unexpected anthropic mentions in: {offenders}"
+
+
+def test_emit_openai_only_no_pydantic_anywhere(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_OPENAI_SRC)), tmp_path)
+    offenders = [
+        str(p.relative_to(tmp_path))
+        for p in tmp_path.rglob("*.py")
+        if "pydantic" in p.read_text()
+    ]
+    assert offenders == [], f"unexpected pydantic mentions in: {offenders}"
+
+
 def test_emit_openai_step_uses_chat_completions(tmp_path):
     PythonEmitter().emit(build_ir(parse(_OPENAI_SRC)), tmp_path)
     body = (tmp_path / "classifier" / "steps" / "classify.py").read_text()
@@ -558,6 +578,20 @@ def test_emit_pyproject_includes_anthropic_when_judgment_step_present(tmp_path):
     PythonEmitter().emit(build_ir(parse(src)), tmp_path)
     pyproject = (tmp_path / "pyproject.toml").read_text()
     assert "anthropic>=0.40" in pyproject
+
+
+def test_emit_pyproject_omits_pydantic_when_no_contracts(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    pyproject = (tmp_path / "pyproject.toml").read_text()
+    assert "pydantic" not in pyproject
+
+
+def test_emit_pyproject_includes_pydantic_when_contracts_present(tmp_path):
+    src = (FIXTURES / "mvp_v03_contracts.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    pyproject = (tmp_path / "pyproject.toml").read_text()
+    assert "pydantic>=2" in pyproject
 
 
 def test_emit_pyproject_omits_openai_when_no_openai_protocol(tmp_path):

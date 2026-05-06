@@ -78,12 +78,14 @@ class PythonEmitter(BaseEmitter):
             )
             for s in graph.steps
         )
+        needs_pydantic = bool(graph.contracts)
         (output_dir / "pyproject.toml").write_text(
             self._pyproject(
                 pkg_name,
                 needs_requests=needs_requests,
                 needs_openai=needs_openai,
                 needs_anthropic=needs_anthropic,
+                needs_pydantic=needs_pydantic,
             )
         )
         (output_dir / "README.md").write_text(self._readme(pkg_name, graph))
@@ -606,8 +608,11 @@ class PythonEmitter(BaseEmitter):
         needs_requests: bool = False,
         needs_openai: bool = False,
         needs_anthropic: bool = False,
+        needs_pydantic: bool = False,
     ) -> str:
-        deps = ['    "pydantic>=2",']
+        deps: list[str] = []
+        if needs_pydantic:
+            deps.append('    "pydantic>=2",')
         if needs_anthropic:
             deps.insert(0, '    "anthropic>=0.40",')
         if needs_requests:
