@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import os
 import sys
@@ -111,6 +113,13 @@ def _cmd_gen(
     output: str | None,
     model: str,
 ) -> int:
+    if description is not None and from_file is not None:
+        print(
+            "clio gen: pass either DESCRIPTION inline or --from-file, not both",
+            file=sys.stderr, flush=True,
+        )
+        return 2
+
     if description is None and from_file is not None:
         description = Path(from_file).read_text()
     elif description is None:

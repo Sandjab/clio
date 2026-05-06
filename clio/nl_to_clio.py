@@ -3,6 +3,7 @@ loop: the model emits .clio, parse + build_ir validate it, and on failure
 the model gets one shot at correction before GenerationError is raised."""
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
 from clio.ir.builder import IRBuildError, build_ir
@@ -150,6 +151,7 @@ def _retry_message(previous_attempt: str, error: str) -> str:
     )
 
 
+@lru_cache(maxsize=None)
 def _build_system_prompt() -> str:
     """Build the system prompt for NL→.clio generation.
 

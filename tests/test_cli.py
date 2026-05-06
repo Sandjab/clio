@@ -177,3 +177,15 @@ def test_gen_generation_error_prints_last_attempt_commented(monkeypatch, capsys)
     assert "line 2:1: unexpected token" in captured.err
     assert "# STEP bad" in captured.err
     assert "# MODE: exact" in captured.err
+
+
+def test_gen_inline_and_from_file_conflict_returns_2(tmp_path, monkeypatch, capsys):
+    from clio.cli import main
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    desc_path = tmp_path / "desc.txt"
+    desc_path.write_text("from file body")
+
+    rc = main(["gen", "describe X", "--from-file", str(desc_path)])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "either" in err.lower() and "--from-file" in err

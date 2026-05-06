@@ -60,6 +60,36 @@ def test_strip_handles_leading_trailing_whitespace_around_fences():
     assert _strip_markdown_fences(src) == "STEP foo\n  MODE: exact\n"
 
 
+def test_strip_open_fence_without_closing_fence():
+    # Defensive: if the LLM emits an open fence but no close, drop the header
+    # and keep the body — the resulting string still parses if the body is valid.
+    from clio.nl_to_clio import _strip_markdown_fences
+    src = "```clio\nSTEP foo\n  MODE: exact\n"
+    assert _strip_markdown_fences(src) == "STEP foo\n  MODE: exact\n"
+
+
+def test_retry_message_contains_error_and_previous_attempt():
+    from clio.nl_to_clio import _retry_message
+    msg = _retry_message("STEP bad\n", "line 1: oops")
+    assert "did not parse" in msg
+    assert "line 1: oops" in msg
+    assert "STEP bad" in msg
+
+
+def test_validate_ir_build_error_string_includes_line_number():
+    # The IR-build path must surface a line number too — the model needs it
+    # to correct itself.
+    from clio.nl_to_clio import _validate
+    src = (
+        "STEP a\n  MODE: exact\n"
+        "FLOW f\n"
+        "  nope()\n"
+    )
+    err = _validate(src)
+    assert err is not None
+    assert "line" in err.lower()
+
+
 def test_system_prompt_contains_role_intro():
     from clio.nl_to_clio import _build_system_prompt
     prompt = _build_system_prompt()
@@ -232,3 +262,15 @@ def test_generation_error_str_mentions_underlying_error():
     client = _FakeClient([invalid, invalid])
     with pytest.raises(GenerationError, match="failed to generate valid .clio"):
         generate("describe X", client=client)
+
+
+def test_generate_treats_error_prefix_as_invalid_and_retries():
+    # The LLM is told to respond with a single line "ERROR: ..." when the
+    # request is too vague to disambiguate. That output is not valid .clio,
+    # so the compile-correct loop treats it as a parse failure and retries.
+    from clio.nl_to_clio import generate
+    error_response = "ERROR: cannot determine the input source\n"
+    client = _FakeClient([error_response, _VALID_CLIO])
+    out = generate("do something", client=client)
+    assert out == _VALID_CLIO
+    assert len(client.messages.calls) == 2
