@@ -212,3 +212,23 @@ def test_max_retries_zero_disables_retry():
     with pytest.raises(GenerationError):
         generate("describe X", client=client, max_retries=0)
     assert len(client.messages.calls) == 1
+
+
+def test_generate_raises_after_retry_budget_exhausted():
+    from clio.nl_to_clio import GenerationError, generate
+    invalid = "STEP\n  MODE: exact\n"
+    client = _FakeClient([invalid, invalid])
+    with pytest.raises(GenerationError) as exc_info:
+        generate("describe X", client=client, max_retries=1)
+    err = exc_info.value
+    assert err.last_attempt == invalid
+    assert err.last_error
+    assert len(client.messages.calls) == 2
+
+
+def test_generation_error_str_mentions_underlying_error():
+    from clio.nl_to_clio import GenerationError, generate
+    invalid = "STEP\n  MODE: exact\n"
+    client = _FakeClient([invalid, invalid])
+    with pytest.raises(GenerationError, match="failed to generate valid .clio"):
+        generate("describe X", client=client)
