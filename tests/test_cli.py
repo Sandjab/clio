@@ -91,3 +91,89 @@ def test_gen_passes_custom_model(tmp_path, monkeypatch):
     rc = main(["gen", "describe X", "--model", "claude-opus-4-7"])
     assert rc == 0
     assert captured["model"] == "claude-opus-4-7"
+
+
+def test_gen_from_stdin(tmp_path, monkeypatch, capsys):
+    import io
+    import sys
+    from clio.cli import main
+    from clio import nl_to_clio
+
+    captured: dict[str, str] = {}
+
+    def fake_generate(description, *, model, client=None):
+        captured["description"] = description
+        return "STEP s\n  MODE: exact\n"
+
+    monkeypatch.setattr(nl_to_clio, "generate", fake_generate)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(sys, "stdin", io.StringIO("from stdin"))
+
+    rc = main(["gen"])
+    assert rc == 0
+    assert captured["description"] == "from stdin"
+
+
+def test_gen_from_file(tmp_path, monkeypatch, capsys):
+    from clio.cli import main
+    from clio import nl_to_clio
+
+    captured: dict[str, str] = {}
+
+    def fake_generate(description, *, model, client=None):
+        captured["description"] = description
+        return "STEP f\n  MODE: exact\n"
+
+    monkeypatch.setattr(nl_to_clio, "generate", fake_generate)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    desc_path = tmp_path / "desc.txt"
+    desc_path.write_text("from file body")
+
+    rc = main(["gen", "--from-file", str(desc_path)])
+    assert rc == 0
+    assert captured["description"] == "from file body"
+
+
+def test_gen_missing_api_key(monkeypatch, capsys):
+    from clio.cli import main
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    rc = main(["gen", "describe X"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "ANTHROPIC_API_KEY" in err
+
+
+def test_gen_empty_description_returns_2(monkeypatch, capsys):
+    import io
+    import sys
+    from clio.cli import main
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+    rc = main(["gen"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "empty" in err.lower()
+
+
+def test_gen_generation_error_prints_last_attempt_commented(monkeypatch, capsys):
+    from clio.cli import main
+    from clio import nl_to_clio
+
+    def boom(description, *, model, client=None):
+        raise nl_to_clio.GenerationError(
+            last_attempt="STEP bad\nMODE: exact\n",
+            last_error="line 2:1: unexpected token",
+        )
+
+    monkeypatch.setattr(nl_to_clio, "generate", boom)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    rc = main(["gen", "describe X"])
+    assert rc == 1
+    captured = capsys.readouterr()
+    # stdout must be empty so a shell redirect doesn't get a partial file
+    assert captured.out == ""
+    # stderr carries the error and the failed attempt commented out
+    assert "line 2:1: unexpected token" in captured.err
+    assert "# STEP bad" in captured.err
+    assert "# MODE: exact" in captured.err
