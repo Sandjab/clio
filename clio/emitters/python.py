@@ -71,11 +71,19 @@ class PythonEmitter(BaseEmitter):
             isinstance(s.invoke, ApiInvokeIR) and s.invoke.protocol == "openai"
             for s in graph.steps
         )
+        needs_anthropic = any(
+            s.mode == "judgment" and (
+                s.invoke is None
+                or (isinstance(s.invoke, ApiInvokeIR) and s.invoke.protocol == "anthropic")
+            )
+            for s in graph.steps
+        )
         (output_dir / "pyproject.toml").write_text(
             self._pyproject(
                 pkg_name,
                 needs_requests=needs_requests,
                 needs_openai=needs_openai,
+                needs_anthropic=needs_anthropic,
             )
         )
         (output_dir / "README.md").write_text(self._readme(pkg_name, graph))
@@ -597,11 +605,11 @@ class PythonEmitter(BaseEmitter):
         *,
         needs_requests: bool = False,
         needs_openai: bool = False,
+        needs_anthropic: bool = False,
     ) -> str:
-        deps = [
-            '    "anthropic>=0.40",',
-            '    "pydantic>=2",',
-        ]
+        deps = ['    "pydantic>=2",']
+        if needs_anthropic:
+            deps.insert(0, '    "anthropic>=0.40",')
         if needs_requests:
             deps.append('    "requests>=2.31",')
         if needs_openai:
