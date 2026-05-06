@@ -103,19 +103,51 @@ def generate(
         }
     ]
 
-    msg = client.messages.create(
-        model=model,
-        max_tokens=_MAX_TOKENS,
-        system=system,
-        messages=[{"role": "user", "content": description}],
-    )
-    raw = msg.content[0].text if msg.content else ""
-    candidate = _strip_markdown_fences(raw)
-    err = _validate(candidate)
-    if err is None:
-        return candidate
+    messages: list[dict] = [{"role": "user", "content": description}]
+    last_attempt = ""
+    last_error = ""
 
-    raise GenerationError(last_attempt=candidate, last_error=err)
+    for attempt_idx in range(max_retries + 1):
+        msg = client.messages.create(
+            model=model,
+            max_tokens=_MAX_TOKENS,
+            system=system,
+            messages=messages,
+        )
+        raw = msg.content[0].text if msg.content else ""
+        candidate = _strip_markdown_fences(raw)
+        err = _validate(candidate)
+        if err is None:
+            return candidate
+
+        last_attempt = candidate
+        last_error = err
+
+        if attempt_idx == max_retries:
+            break
+
+        # Append assistant turn (the bad attempt) and a user correction.
+        messages = messages + [
+            {"role": "assistant", "content": candidate},
+            {
+                "role": "user",
+                "content": _retry_message(candidate, err),
+            },
+        ]
+
+    raise GenerationError(last_attempt=last_attempt, last_error=last_error)
+
+
+def _retry_message(previous_attempt: str, error: str) -> str:
+    return (
+        "The .clio you produced did not parse / build. Here is the error:\n\n"
+        f"{error}\n\n"
+        "Your previous output:\n\n"
+        "```\n"
+        f"{previous_attempt}\n"
+        "```\n\n"
+        "Please correct the .clio. Output only the corrected source, no commentary."
+    )
 
 
 def _build_system_prompt() -> str:

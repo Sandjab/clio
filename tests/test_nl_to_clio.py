@@ -165,3 +165,50 @@ def test_generate_strips_fences_from_llm_output():
     client = _FakeClient(["```clio\n" + _VALID_CLIO + "```\n"])
     out = generate("describe X", client=client)
     assert out == _VALID_CLIO
+
+
+def test_generate_retries_on_parse_error_then_succeeds():
+    from clio.nl_to_clio import generate
+    invalid = "STEP\n  MODE: exact\n"  # missing name → parse error
+    client = _FakeClient([invalid, _VALID_CLIO])
+    out = generate("describe X", client=client)
+    assert out == _VALID_CLIO
+    assert len(client.messages.calls) == 2
+
+
+def test_generate_retries_on_ir_build_error_then_succeeds():
+    from clio.nl_to_clio import generate
+    invalid = "STEP a\n  MODE: exact\nFLOW f\n  nope()\n"
+    client = _FakeClient([invalid, _VALID_CLIO])
+    out = generate("describe X", client=client)
+    assert out == _VALID_CLIO
+    assert len(client.messages.calls) == 2
+
+
+def test_retry_message_includes_previous_attempt_and_error():
+    from clio.nl_to_clio import generate
+    invalid = "STEP\n  MODE: exact\n"
+    client = _FakeClient([invalid, _VALID_CLIO])
+    generate("describe X", client=client)
+
+    second_messages = client.messages.calls[1]["messages"]
+    # First message: user (original description)
+    assert second_messages[0]["role"] == "user"
+    assert "describe X" in second_messages[0]["content"]
+    # Second message: assistant (previous attempt)
+    assert second_messages[1]["role"] == "assistant"
+    assert second_messages[1]["content"] == invalid
+    # Third message: user (correction request with error)
+    assert second_messages[2]["role"] == "user"
+    correction = second_messages[2]["content"]
+    assert "did not parse" in correction or "did not build" in correction
+    assert invalid in correction
+
+
+def test_max_retries_zero_disables_retry():
+    from clio.nl_to_clio import GenerationError, generate
+    invalid = "STEP\n  MODE: exact\n"
+    client = _FakeClient([invalid])
+    with pytest.raises(GenerationError):
+        generate("describe X", client=client, max_retries=0)
+    assert len(client.messages.calls) == 1
