@@ -50,6 +50,8 @@ def _strip_markdown_fences(raw: str) -> str:
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+_DEFAULT_MODEL = "claude-sonnet-4-6"
+_MAX_TOKENS = 4096
 
 
 _ROLE_INTRO = """You are CLIO, a compiler from natural language to .clio source.
@@ -69,6 +71,51 @@ _OUTPUT_RULES = """# Output rules
 - If the request is too vague to disambiguate, respond with a single line starting with "ERROR:" explaining what's missing.
 - Do not invent features that do not appear in the language specification.
 """
+
+
+def generate(
+    description: str,
+    *,
+    model: str = _DEFAULT_MODEL,
+    max_retries: int = 1,
+    client=None,
+) -> str:
+    """Compile-correct loop: returns a parseable + IR-buildable .clio source.
+
+    Pass `client=` to inject a fake; otherwise a default Anthropic client is
+    constructed (which requires the `anthropic` package and ANTHROPIC_API_KEY)."""
+    if client is None:
+        try:
+            import anthropic
+        except ImportError as e:
+            raise ImportError(
+                "clio gen requires the `anthropic` package. "
+                "Install with: pip install 'clio[gen]'"
+            ) from e
+        client = anthropic.Anthropic()
+
+    system_prompt = _build_system_prompt()
+    system = [
+        {
+            "type": "text",
+            "text": system_prompt,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+    msg = client.messages.create(
+        model=model,
+        max_tokens=_MAX_TOKENS,
+        system=system,
+        messages=[{"role": "user", "content": description}],
+    )
+    raw = msg.content[0].text if msg.content else ""
+    candidate = _strip_markdown_fences(raw)
+    err = _validate(candidate)
+    if err is None:
+        return candidate
+
+    raise GenerationError(last_attempt=candidate, last_error=err)
 
 
 def _build_system_prompt() -> str:
