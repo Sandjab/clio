@@ -437,6 +437,60 @@ def test_parse_impl_rest_full():
     assert step.impl.retries == 3
 
 
+def test_parse_impl_shell_minimal():
+    src = (
+        "STEP s\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: shell\n"
+        '    cmd: "pdftotext ${file} -"\n'
+    )
+    step = parse(src).decls[0]
+    assert step.impl.__class__.__name__ == "ShellImpl"
+    assert step.impl.cmd == "pdftotext ${file} -"
+    assert step.impl.timeout_seconds is None
+
+
+def test_parse_impl_shell_with_timeout():
+    src = (
+        "STEP s\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: shell\n"
+        '    cmd: "echo hi"\n'
+        "    timeout: 5s\n"
+    )
+    step = parse(src).decls[0]
+    assert step.impl.timeout_seconds == 5
+
+
+def test_parse_impl_shell_missing_cmd_raises():
+    src = (
+        "STEP s\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: shell\n"
+        "    timeout: 5s\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "cmd" in str(exc.value)
+
+
+def test_parse_impl_shell_unknown_field_raises():
+    src = (
+        "STEP s\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: shell\n"
+        '    cmd: "echo"\n'
+        '    stdin: "ignored"\n'
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "stdin" in str(exc.value)
+
+
 def test_parse_impl_on_judgment_step_raises():
     src = (
         "STEP s\n"

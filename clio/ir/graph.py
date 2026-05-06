@@ -43,6 +43,15 @@ class CodeImplIR(ImplIR):
 
 
 @dataclass(frozen=True)
+class ShellImplIR(ImplIR):
+    """impl.mode: shell — argv-style command. `argv` is the shlex-split
+    template; tokens may contain `${var}` placeholders that the emitters
+    substitute at runtime."""
+    argv: tuple[str, ...]
+    timeout_seconds: int | None
+
+
+@dataclass(frozen=True)
 class RestImplIR(ImplIR):
     """impl.mode: rest — HTTP call to an external endpoint."""
     method: str

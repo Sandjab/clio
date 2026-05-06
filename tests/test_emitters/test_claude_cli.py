@@ -292,6 +292,44 @@ def test_claude_cli_emit_rest_step_templated_parses_as_python(tmp_path):
     ast.parse(body)
 
 
+# --- impl: mode: shell emission --------------------------------------------
+
+_SHELL_SRC = (
+    "STEP extract_pdf\n"
+    "  TAKES: file: str\n"
+    "  GIVES: text: str\n"
+    "  MODE:  exact\n"
+    "  impl:\n"
+    "    mode: shell\n"
+    '    cmd: "pdftotext ${file} -"\n'
+    "    timeout: 60s\n"
+    "FLOW pipe\n"
+    '  extract_pdf(file="a.pdf")\n'
+)
+
+
+def test_claude_cli_emit_shell_step_imports_subprocess(tmp_path):
+    ClaudeCLIEmitter().emit(build_ir(parse(_SHELL_SRC)), tmp_path)
+    body = (tmp_path / "steps" / "01_extract_pdf.py").read_text()
+    assert "import subprocess" in body
+    assert "subprocess.run(argv, capture_output=True, text=True, check=True, timeout=60)" in body
+
+
+def test_claude_cli_emit_shell_step_emits_argv_and_substitution(tmp_path):
+    ClaudeCLIEmitter().emit(build_ir(parse(_SHELL_SRC)), tmp_path)
+    body = (tmp_path / "steps" / "01_extract_pdf.py").read_text()
+    assert "argv = ['pdftotext', '${file}', '-']" in body
+    assert "argv = [_t.replace('${file}', str(args.file)) for _t in argv]" in body
+    assert 'state["text"] = text' in body
+
+
+def test_claude_cli_emit_shell_step_parses_as_python(tmp_path):
+    import ast
+    ClaudeCLIEmitter().emit(build_ir(parse(_SHELL_SRC)), tmp_path)
+    body = (tmp_path / "steps" / "01_extract_pdf.py").read_text()
+    ast.parse(body)
+
+
 # --- FOR EACH bash emission ------------------------------------------------
 
 _FOREACH_BASH_SRC = (

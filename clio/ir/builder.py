@@ -16,6 +16,7 @@ from clio.ir.graph import (
     OnFailStrategyIR,
     ResourcesIR,
     RestImplIR,
+    ShellImplIR,
     StepIR,
 )
 from clio.ir.types import names_equal, types_equal
@@ -37,6 +38,7 @@ from clio.parser.ast_nodes import (
     RecordType,
     ResourcesDecl,
     RestImpl,
+    ShellImpl,
     StepCall,
     StepDecl,
     TypeExpr,
@@ -241,6 +243,20 @@ def _build_impl(decl: ImplBlock) -> ImplIR:
             timeout_seconds=decl.timeout_seconds,
             retries=decl.retries,
         )
+    if isinstance(decl, ShellImpl):
+        import shlex
+        try:
+            argv = tuple(shlex.split(decl.cmd))
+        except ValueError as e:
+            raise IRBuildError(
+                f"line {decl.line}: impl.cmd is not a valid shell tokenization "
+                f"({e}); fix unbalanced quotes or escapes"
+            ) from e
+        if not argv:
+            raise IRBuildError(
+                f"line {decl.line}: impl.cmd must contain at least one token"
+            )
+        return ShellImplIR(argv=argv, timeout_seconds=decl.timeout_seconds)
     raise IRBuildError(f"unknown ImplBlock subtype: {type(decl).__name__}")
 
 

@@ -15,7 +15,8 @@ Also lifts `FOR EACH <var> IN <collection>:` from spec-only to implemented contr
 | `LANG:` per step | ✅ | ✅ | ignored (still emits Python on every EXACT) | ignored |
 | `impl.mode: code` | ✅ | ✅ | (default behavior — Python stub) | (default behavior — Python stub) |
 | `impl.mode: rest` | ✅ | ✅ | ✅ `requests.request(...)` | ✅ standalone Python step with `requests` |
-| `impl.mode: shell` / `sql` / `mcp_tool` / `binary` | ❌ | ❌ | ❌ | ❌ |
+| `impl.mode: shell` | ✅ | ✅ | ✅ `subprocess.run([...], shell=False)` | ✅ standalone Python step with `subprocess` |
+| `impl.mode: sql` / `mcp_tool` / `binary` | ❌ | ❌ | ❌ | ❌ |
 | `invoke.mode: cli` | ✅ | ✅ | rejected at compile time | (default behavior — `claude -p`) |
 | `invoke.mode: api` (`anthropic`) | ✅ | ✅ | ✅ with overrides | (uses RESOURCES.models chain) |
 | `invoke.mode: api` (`openai`) | ✅ | ✅ | ✅ — covers LiteLLM / OpenRouter / Ollama / vLLM via OpenAI-compat | rejected |
@@ -31,6 +32,7 @@ v0 limitations carried forward, to be lifted in v0.3+:
 - `impl.rest` templates TAKES into the `url` via `${var}` substitution (since v0.4); headers/body templating is not yet supported.
 - `impl.rest` does not yet parse `query`/`headers`/`body` fields.
 - `impl.rest` `retries` is parsed but not honored at runtime.
+- `impl.shell` invokes argv-style (no shell pipes/redirections); the `cmd` string is `shlex.split` at compile time. Stdout is returned as a string. To use a pipeline (`cmd1 | cmd2`), wrap in a script and call that script.
 - `FOR EACH` body call results are not accumulated into state — the step is invoked for side effects only.
 - `invoke.api` requires single-model overrides (no escalate chain when `invoke.model` is set).
 
@@ -160,11 +162,11 @@ STEP extract_pdf
   GIVES:   text: str
   impl:
     mode:    shell
-    cmd:     pdftotext ${file} -
+    cmd:     "pdftotext ${file} -"
     timeout: 60s
 ```
 
-Non-zero exit codes trigger `ON_FAIL`.
+The `cmd` is a quoted string. The compiler `shlex.split`s it at compile time, then templates `${var}` per token at runtime — `subprocess.run([...], shell=False)` runs the resulting argv. No pipes/redirections (wrap a pipeline in a script if needed). Non-zero exit codes raise `subprocess.CalledProcessError`, which `ON_FAIL` will see.
 
 #### `impl.mode: sql`
 

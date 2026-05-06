@@ -200,6 +200,16 @@ class CodeImpl(ImplBlock):
 
 
 @dataclass(frozen=True)
+class ShellImpl(ImplBlock):
+    """impl.mode: shell — argv-style invocation of a shell command. The
+    `cmd` is shlex-split at compile time; templating substitutes TAKES
+    into per-token slots. No pipes/redirections (those need shell=True
+    which is unsafe with user-provided strings)."""
+    cmd: str
+    timeout_seconds: int | None
+
+
+@dataclass(frozen=True)
 class RestImpl(ImplBlock):
     """impl.mode: rest — HTTP call to an external endpoint."""
     method: str                    # GET | POST | PUT | PATCH | DELETE

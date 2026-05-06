@@ -516,6 +516,74 @@ def test_emit_rest_step_templated_parses_as_python(tmp_path):
     ast.parse(body)
 
 
+_SHELL_SRC = (
+    "STEP extract_pdf\n"
+    "  TAKES: file: str\n"
+    "  GIVES: text: str\n"
+    "  MODE:  exact\n"
+    "  impl:\n"
+    "    mode: shell\n"
+    '    cmd: "pdftotext ${file} -"\n'
+    "    timeout: 60s\n"
+    "FLOW pipe\n"
+    '  extract_pdf(file="a.pdf")\n'
+)
+
+
+def test_emit_shell_step_imports_subprocess(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_SHELL_SRC)), tmp_path)
+    body = (tmp_path / "pipe" / "steps" / "extract_pdf.py").read_text()
+    assert "import subprocess" in body
+    assert "subprocess.run(_argv, capture_output=True, text=True, check=True, timeout=60)" in body
+
+
+def test_emit_shell_step_emits_argv_list_and_substitutions(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_SHELL_SRC)), tmp_path)
+    body = (tmp_path / "pipe" / "steps" / "extract_pdf.py").read_text()
+    assert "_argv = ['pdftotext', '${file}', '-']" in body
+    assert "_argv = [_t.replace('${file}', str(file)) for _t in _argv]" in body
+    assert "return result.stdout" in body
+
+
+def test_emit_shell_step_parses_as_python(tmp_path):
+    import ast
+    PythonEmitter().emit(build_ir(parse(_SHELL_SRC)), tmp_path)
+    body = (tmp_path / "pipe" / "steps" / "extract_pdf.py").read_text()
+    ast.parse(body)
+
+
+def test_emit_shell_step_runtime_substitution(tmp_path, monkeypatch):
+    import runpy
+    import sys
+    import types
+
+    PythonEmitter().emit(build_ir(parse(_SHELL_SRC)), tmp_path)
+
+    captured: dict[str, object] = {}
+
+    class _FakeResult:
+        stdout = "extracted text"
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = list(argv)
+        captured.update(kwargs)
+        return _FakeResult()
+
+    fake = types.ModuleType("subprocess")
+    fake.run = fake_run
+    monkeypatch.setitem(sys.modules, "subprocess", fake)
+
+    step_path = tmp_path / "pipe" / "steps" / "extract_pdf.py"
+    ns = runpy.run_path(str(step_path))
+    out = ns["extract_pdf"](file="report.pdf")
+    assert out == "extracted text"
+    assert captured["argv"] == ["pdftotext", "report.pdf", "-"]
+    assert captured["timeout"] == 60
+    assert captured["check"] is True
+    assert captured["capture_output"] is True
+    assert captured["text"] is True
+
+
 def test_emit_rest_step_templated_runtime_substitution(tmp_path, monkeypatch):
     import runpy
     import sys

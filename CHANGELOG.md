@@ -4,7 +4,7 @@
 
 ### Language — v0.2 spec landed
 
-- New per-step `impl:` block on EXACT steps: `mode: code | rest`. `impl.mode: rest` describes an HTTP call with `method`, `url`, optional `response_path`, `timeout`, `retries`. Other modes (`shell`, `sql`, `mcp_tool`, `binary`) are specified but not yet parsed.
+- New per-step `impl:` block on EXACT steps: `mode: code | rest | shell`. `impl.mode: rest` describes an HTTP call with `method`, `url`, optional `response_path`, `timeout`, `retries`. `impl.mode: shell` runs an argv-style command with `cmd` (quoted, `shlex.split` at compile time) and optional `timeout`. The remaining modes (`sql`, `mcp_tool`, `binary`) are specified but not yet parsed.
 - New per-step `invoke:` block on JUDGMENT steps: `mode: cli | api`. `invoke.mode: api` decomposes into `protocol` (`anthropic | openai | bedrock | vertex`), `base_url`, `model`, `auth`, `temperature`, `max_tokens`, `timeout`, `retries`. The protocol/base_url/model/auth split handles cases like Gemini-via-LiteLLM-via-OpenAI-compat.
 - New per-step `LANG:` field accepted by the parser (`python | rust | go | node | bash | auto`). Specced since v0.1, now actually wired through AST and IR.
 - New control flow: `FOR EACH <var> IN <collection>:` with an indented body. Loop variable binds to the collection's inner type and is visible to `step(x=item)` kwargs as a state-like reference.
@@ -19,6 +19,7 @@
 - claude-cli emitter: emits `FOR EACH` as `mapfile -t _CLIO_ITER_N < <(jq <flag> '.<coll>[]' state.json)` then a bash `for` loop. `jq -r` is used for primitive collections (`List<str>`, etc.) and `jq -c` for object/list collections, so values arrive at body steps in the right shape. Body calls reference loop variables via `$var` rather than re-querying `state.json`.
 - Both emitters reject explicitly at compile time the unsupported combinations: `protocol: bedrock`/`vertex`, `invoke.mode: cli` on python target, judgment steps inside `FOR EACH` on claude-cli target.
 - Both emitters: `impl.mode: rest` substitutes TAKES into the `url` via `${var}` placeholders (`url.replace('${name}', str(name))` per TAKES). Templating is skipped when the url has no placeholder, preserving the existing static-url emission shape. Headers/body templating and `query`/`headers`/`body` field parsing remain on the v0.4+ backlog.
+- Both emitters: `impl.mode: shell` emits a step that calls `subprocess.run([...], capture_output=True, text=True, check=True, timeout=...)`. The argv list is `shlex.split` at compile time and `${var}` placeholders are substituted token-by-token at runtime — `shell=False` keeps shell-injection out of the picture by construction. Stdout becomes the step's `GIVES`. No pipes/redirections (wrap a pipeline in a script).
 - Python emitter: `pydantic>=2` is added to the emitted `pyproject.toml` only when at least one CONTRACT is declared. Skeleton flows (no contracts) no longer pull in an unused dependency.
 
 ### CLI
@@ -43,7 +44,7 @@
 
 ### Tests
 
-- 217 tests + 2 e2e gated (was 121 + 2). +96 tests covering LANG plumbing, impl/invoke block parsing and IR, REST emission and url templating in both targets, openai protocol emission, FOR EACH parsing/IR/emission in both targets, conditional anthropic/pydantic deps, `clio graph` rendering, and explicit-rejection paths.
+- 231 tests + 2 e2e gated (was 121 + 2). +110 tests covering LANG plumbing, impl/invoke block parsing and IR, REST emission and url templating in both targets, openai protocol emission, FOR EACH parsing/IR/emission in both targets, conditional anthropic/pydantic deps, `clio graph` rendering, `impl.mode: shell` parser/IR/both-emitters and runtime argv substitution smoke test, and explicit-rejection paths.
 
 ### Repo hygiene
 

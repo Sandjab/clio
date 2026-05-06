@@ -35,6 +35,7 @@ from clio.ir.graph import (
     FlowGraph,
     ForEachIR,
     RestImplIR,
+    ShellImplIR,
     StepIR,
 )
 
@@ -153,6 +154,8 @@ class PythonEmitter(BaseEmitter):
     def _emit_exact_step(self, step: StepIR, contracts_by_name: dict[str, "ContractIR"]) -> str:
         if isinstance(step.impl, RestImplIR):
             return self._emit_rest_step(step, contracts_by_name, step.impl)
+        if isinstance(step.impl, ShellImplIR):
+            return self._emit_shell_step(step, contracts_by_name, step.impl)
 
         params = _step_signature(step, contracts_by_name)
         ret_type = (
@@ -276,6 +279,57 @@ class PythonEmitter(BaseEmitter):
             f'    )\n'
             f'    response.raise_for_status()\n'
             f'{traversal_block}'
+        )
+
+    def _emit_shell_step(
+        self,
+        step: StepIR,
+        contracts_by_name: dict[str, "ContractIR"],
+        impl: ShellImplIR,
+    ) -> str:
+        params = _step_signature(step, contracts_by_name)
+        ret_type = (
+            _type_to_python(step.gives.type, contracts_by_name)
+            if step.gives is not None else "None"
+        )
+        takes_doc = (
+            "\n    ".join(f"{t.name}: {_render_type_short(t.type)}" for t in step.takes)
+            if step.takes else "(no TAKES)"
+        )
+        gives_doc = (
+            f"{step.gives.name}: {_render_type_short(step.gives.type)}"
+            if step.gives is not None else "(no GIVES)"
+        )
+
+        argv_repr = "[" + ", ".join(repr(t) for t in impl.argv) + "]"
+        sub_lines = [
+            f"    _argv = [_t.replace('${{{t.name}}}', str({_to_field_name(t.name)})) for _t in _argv]"
+            for t in step.takes
+        ]
+        sub_block = ("\n".join(sub_lines) + "\n") if sub_lines else ""
+
+        timeout_arg = (
+            f"timeout={impl.timeout_seconds}"
+            if impl.timeout_seconds is not None else "timeout=None"
+        )
+
+        return (
+            f'"""STEP {step.name} (exact, impl: shell)\n'
+            f'TAKES:\n'
+            f'    {takes_doc}\n'
+            f'GIVES:\n'
+            f'    {gives_doc}\n\n'
+            f'Auto-generated from `impl: mode: shell`. Argv-style invocation —\n'
+            f'no shell pipes/redirections (subprocess.run is called with shell=False).\n'
+            f'TAKES are substituted into argv tokens via ${{var}} placeholders.\n'
+            f'"""\n'
+            f'from __future__ import annotations\n\n'
+            f'import subprocess\n\n\n'
+            f'def {step.name}({params}) -> {ret_type}:\n'
+            f'    _argv = {argv_repr}\n'
+            f'{sub_block}'
+            f'    result = subprocess.run(_argv, capture_output=True, text=True, check=True, {timeout_arg})\n'
+            f'    return result.stdout\n'
         )
 
     def _emit_judgment_step(

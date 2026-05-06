@@ -19,6 +19,7 @@ from clio.parser.ast_nodes import (
     Program,
     RecordType,
     RestImpl,
+    ShellImpl,
     StepCall,
     StepDecl,
     TypeExpr,
@@ -37,7 +38,7 @@ class ParseError(Exception):
 _PRIMITIVE_TYPES = {"int", "float", "str", "bool"}
 _VALID_MODES = {"exact", "judgment"}
 _VALID_LANGS = {"python", "rust", "go", "node", "bash", "auto"}
-_VALID_IMPL_MODES = {"code", "rest"}
+_VALID_IMPL_MODES = {"code", "rest", "shell"}
 _VALID_HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 _VALID_INVOKE_MODES = {"cli", "api"}
 _VALID_PROTOCOLS = {"anthropic", "openai", "bedrock", "vertex"}
@@ -371,6 +372,8 @@ class _Parser:
             return self._build_code_impl(fields, line, col)
         if mode_value == "rest":
             return self._build_rest_impl(fields, line, col, mode_line, mode_col)
+        if mode_value == "shell":
+            return self._build_shell_impl(fields, line, col, mode_line, mode_col)
         # unreachable: mode validation happened above
         raise ParseError(f"impl.mode {mode_value!r} not yet implemented", mode_line, mode_col)
 
@@ -417,6 +420,50 @@ class _Parser:
                 )
             lang = lang_value
         return CodeImpl(line=line, col=col, lang=lang)
+
+    def _build_shell_impl(
+        self,
+        fields: dict[str, tuple[object, int, int]],
+        line: int, col: int,
+        mode_line: int, mode_col: int,
+    ) -> ShellImpl:
+        allowed = {"cmd", "timeout"}
+        unknown = set(fields.keys()) - allowed
+        if unknown:
+            sample = sorted(unknown)[0]
+            _, fline, fcol = fields[sample]
+            raise ParseError(
+                f"unknown field {sample!r} for impl.mode: shell "
+                f"(allowed: {sorted(allowed)})",
+                fline, fcol,
+            )
+        if "cmd" not in fields:
+            raise ParseError(
+                "impl.mode: shell requires 'cmd' (a quoted string, e.g. \"pdftotext ${file} -\")",
+                mode_line, mode_col,
+            )
+        cmd_value, cline, ccol = fields["cmd"]
+        if not isinstance(cmd_value, str):
+            raise ParseError(
+                f"impl.cmd must be a quoted string, got {type(cmd_value).__name__}",
+                cline, ccol,
+            )
+
+        timeout_seconds = None
+        if "timeout" in fields:
+            to, tline, tcol = fields["timeout"]
+            if not isinstance(to, int):
+                raise ParseError(
+                    f"impl.timeout must be a duration (e.g. 30s, 2m), got {to!r}",
+                    tline, tcol,
+                )
+            timeout_seconds = to
+
+        return ShellImpl(
+            line=line, col=col,
+            cmd=cmd_value,
+            timeout_seconds=timeout_seconds,
+        )
 
     def _build_rest_impl(
         self,

@@ -13,6 +13,7 @@ from clio.emitters._claude_cli_helpers import (
     _EXACT_STEP_TEMPLATE,
     _JUDGMENT_PROMPT_TEMPLATE,
     _REST_STEP_TEMPLATE,
+    _SHELL_STEP_TEMPLATE,
     _STEP_NO_FIELDS,
     _chain_has_for_each,
     _field_doc,
@@ -32,6 +33,7 @@ from clio.ir.graph import (
     FlowGraph,
     ForEachIR,
     RestImplIR,
+    ShellImplIR,
     StepIR,
 )
 
@@ -472,6 +474,30 @@ class ClaudeCLIEmitter(BaseEmitter):
                 method=step.impl.method,
                 timeout_repr=repr(step.impl.timeout_seconds),
                 response_path_repr=repr(step.impl.response_path),
+                out_name=out_name,
+            )
+        elif isinstance(step.impl, ShellImplIR):
+            io_doc = "\n".join(_field_doc(f) for f in step.takes)
+            if step.gives:
+                io_doc += f"\nGIVES: {step.gives.name}: {_render_type(step.gives.type)}"
+            argparse_block = "\n".join(
+                f'    parser.add_argument("--{f.name}", required=True)'
+                for f in step.takes
+            ) or "    pass"
+            argv_repr = "[" + ", ".join(repr(t) for t in step.impl.argv) + "]"
+            sub_lines = [
+                f"    argv = [_t.replace('${{{f.name}}}', str(args.{f.name})) for _t in argv]"
+                for f in step.takes
+            ]
+            sub_block = ("\n".join(sub_lines) + "\n") if sub_lines else ""
+            out_name = step.gives.name if step.gives else "result"
+            body = _SHELL_STEP_TEMPLATE.format(
+                name=step.name,
+                io_doc=io_doc,
+                argparse_block=argparse_block,
+                argv_repr=argv_repr,
+                sub_block=sub_block,
+                timeout_repr=repr(step.impl.timeout_seconds),
                 out_name=out_name,
             )
         elif not step.takes and step.gives is None:

@@ -50,6 +50,7 @@ class Keyword(str, Enum):
     IMPL = "impl"
     REST = "rest"
     CODE = "code"
+    SHELL = "shell"
     GET = "GET"
     POST = "POST"
     PUT = "PUT"

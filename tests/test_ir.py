@@ -292,6 +292,49 @@ def test_build_ir_propagates_impl_rest():
     assert step.impl.retries == 3
 
 
+def test_build_ir_propagates_impl_shell_shlex_split():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: shell\n"
+        '    cmd: "pdftotext ${file} -"\n'
+        "    timeout: 60s\n"
+    )
+    step = build_ir(parse(src)).steps[0]
+    assert step.impl.__class__.__name__ == "ShellImplIR"
+    assert step.impl.argv == ("pdftotext", "${file}", "-")
+    assert step.impl.timeout_seconds == 60
+
+
+def test_build_ir_impl_shell_preserves_quoted_argv_token():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: shell\n"
+        '    cmd: "/bin/echo \'hello world\'"\n'
+    )
+    step = build_ir(parse(src)).steps[0]
+    # shlex preserves the quoted argument as a single token
+    assert step.impl.argv == ("/bin/echo", "hello world")
+
+
+def test_build_ir_impl_shell_empty_cmd_raises():
+    import pytest
+    from clio.ir.builder import IRBuildError
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: shell\n"
+        '    cmd: ""\n'
+    )
+    with pytest.raises(IRBuildError) as exc:
+        build_ir(parse(src))
+    assert "at least one token" in str(exc.value)
+
+
 def test_build_ir_propagates_impl_code():
     src = (
         "STEP foo\n"
