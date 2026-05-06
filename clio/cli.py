@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -26,6 +27,12 @@ def main(argv: list[str] | None = None) -> int:
     graph_p.add_argument("--format", choices=["mermaid", "dot"], default="mermaid")
     graph_p.add_argument("--output", default=None)
 
+    gen_p = sub.add_parser("gen")
+    gen_p.add_argument("description", nargs="?")
+    gen_p.add_argument("--from-file", dest="from_file")
+    gen_p.add_argument("--output")
+    gen_p.add_argument("--model", default="claude-sonnet-4-6")
+
     args = parser.parse_args(argv)
     if args.cmd == "compile":
         return _cmd_compile(args.source, args.target, args.output)
@@ -33,6 +40,13 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_check(args.source)
     if args.cmd == "graph":
         return _cmd_graph(args.source, args.format, args.output)
+    if args.cmd == "gen":
+        return _cmd_gen(
+            description=args.description,
+            from_file=args.from_file,
+            output=args.output,
+            model=args.model,
+        )
     return 2
 
 
@@ -87,4 +101,44 @@ def _cmd_graph(source: str, fmt: str, output: str | None) -> int:
         sys.stdout.write(rendered)
     else:
         Path(output).write_text(rendered)
+    return 0
+
+
+def _cmd_gen(
+    *,
+    description: str | None,
+    from_file: str | None,
+    output: str | None,
+    model: str,
+) -> int:
+    if description is None and from_file is not None:
+        description = Path(from_file).read_text()
+    elif description is None:
+        description = sys.stdin.read()
+
+    if not description.strip():
+        print("clio gen: empty description", file=sys.stderr, flush=True)
+        return 2
+
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        print(
+            "clio gen: ANTHROPIC_API_KEY env var is not set",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 1
+
+    from clio import nl_to_clio
+    try:
+        source = nl_to_clio.generate(description, model=model)
+    except nl_to_clio.GenerationError as e:
+        print(f"clio gen: {e.last_error}", file=sys.stderr, flush=True)
+        for line in e.last_attempt.splitlines():
+            print(f"# {line}", file=sys.stderr, flush=True)
+        return 1
+
+    if output is None:
+        sys.stdout.write(source)
+    else:
+        Path(output).write_text(source)
     return 0
