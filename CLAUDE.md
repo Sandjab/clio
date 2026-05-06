@@ -159,4 +159,8 @@ pytest tests/ -v
 
 # Validate a .clio file without emitting
 python -m clio check examples/analyse.clio
+
+# Render the FLOW as a Mermaid (default) or DOT graph (stdout, or --output FILE)
+python -m clio graph examples/analyse.clio
+python -m clio graph examples/analyse.clio --format dot
 ```

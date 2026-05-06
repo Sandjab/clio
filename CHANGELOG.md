@@ -21,6 +21,10 @@
 - Both emitters: `impl.mode: rest` substitutes TAKES into the `url` via `${var}` placeholders (`url.replace('${name}', str(name))` per TAKES). Templating is skipped when the url has no placeholder, preserving the existing static-url emission shape. Headers/body templating and `query`/`headers`/`body` field parsing remain on the v0.4+ backlog.
 - Python emitter: `pydantic>=2` is added to the emitted `pyproject.toml` only when at least one CONTRACT is declared. Skeleton flows (no contracts) no longer pull in an unused dependency.
 
+### CLI
+
+- New `clio graph <source>` subcommand that renders the FLOW as a Mermaid (default) or Graphviz DOT source. EXACT steps render as rectangles, JUDGMENT steps as parallelograms; FOR EACH renders as a labelled subgraph in Mermaid and as a dashed labelled edge in DOT (cluster-with-`lhead` machinery skipped on purpose). Output goes to stdout or to `--output FILE`. Designed for paste-into-GitHub-PR rendering since GitHub renders Mermaid natively.
+
 ### Refactor
 
 - Split `clio/emitters/python.py` (was 991 lines): module-level helpers moved to `clio/emitters/_python_helpers.py` (375 lines). The `PythonEmitter` class stays in `python.py` (now 649 lines).
@@ -39,7 +43,7 @@
 
 ### Tests
 
-- 204 tests + 2 e2e gated (was 121 + 2). +83 tests covering LANG plumbing, impl/invoke block parsing and IR, REST emission and url templating in both targets, openai protocol emission, FOR EACH parsing/IR/emission in both targets, conditional anthropic/pydantic deps, and explicit-rejection paths.
+- 217 tests + 2 e2e gated (was 121 + 2). +96 tests covering LANG plumbing, impl/invoke block parsing and IR, REST emission and url templating in both targets, openai protocol emission, FOR EACH parsing/IR/emission in both targets, conditional anthropic/pydantic deps, `clio graph` rendering, and explicit-rejection paths.
 
 ### Repo hygiene
 

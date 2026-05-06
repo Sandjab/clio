@@ -60,6 +60,10 @@ python -m clio compile examples/retention.clio --target claude-cli --output ./ou
 # Validate syntax without emitting
 python -m clio check examples/retention.clio
 
+# Render the FLOW as a Mermaid diagram (paste into a GitHub PR)
+python -m clio graph examples/retention.clio
+python -m clio graph examples/retention.clio --format dot --output flow.dot
+
 # Run tests
 pytest tests/ -v
 ```
