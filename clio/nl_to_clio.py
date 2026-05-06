@@ -28,3 +28,20 @@ def _validate(source: str) -> str | None:
     except IRBuildError as e:
         return str(e)
     return None
+
+
+def _strip_markdown_fences(raw: str) -> str:
+    """Remove leading ```clio/``` and trailing ``` fences if present.
+    The model is told not to add fences, but Sonnet sometimes does anyway."""
+    text = raw.strip()
+    if not text.startswith("```"):
+        return raw
+    # First line is ```clio or ```; drop it
+    first_newline = text.find("\n")
+    if first_newline == -1:
+        return raw
+    body = text[first_newline + 1:]
+    # Trailing fence: last line is ```
+    if body.rstrip().endswith("```"):
+        body = body.rstrip()[:-3]
+    return body.lstrip("\n").rstrip() + "\n"

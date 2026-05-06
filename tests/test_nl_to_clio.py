@@ -34,3 +34,27 @@ def test_validate_returns_error_string_for_ir_build_error():
     )
     err = _validate(src)
     assert err is not None
+
+
+def test_strip_no_fences_returns_input_unchanged():
+    from clio.nl_to_clio import _strip_markdown_fences
+    src = "STEP foo\n  MODE: exact\n"
+    assert _strip_markdown_fences(src) == src
+
+
+def test_strip_fenced_with_lang_tag():
+    from clio.nl_to_clio import _strip_markdown_fences
+    src = "```clio\nSTEP foo\n  MODE: exact\n```\n"
+    assert _strip_markdown_fences(src) == "STEP foo\n  MODE: exact\n"
+
+
+def test_strip_fenced_without_lang_tag():
+    from clio.nl_to_clio import _strip_markdown_fences
+    src = "```\nSTEP foo\n  MODE: exact\n```\n"
+    assert _strip_markdown_fences(src) == "STEP foo\n  MODE: exact\n"
+
+
+def test_strip_handles_leading_trailing_whitespace_around_fences():
+    from clio.nl_to_clio import _strip_markdown_fences
+    src = "\n\n```clio\nSTEP foo\n  MODE: exact\n```\n\n"
+    assert _strip_markdown_fences(src) == "STEP foo\n  MODE: exact\n"
