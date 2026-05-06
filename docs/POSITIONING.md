@@ -73,6 +73,43 @@ LangGraph approaches this with TypedDict, but it's a Python convention, not a la
 
 ---
 
+## DSL-style competitors: BAML and LMQL
+
+LangGraph and n8n are the most common reference points by *audience*, but a smaller cluster of projects shares CLIO's premise that LLM workflows deserve a dedicated language: **BAML** (BoundaryML) and **LMQL**. Each is genuinely interesting; CLIO differs from both on the same three structural axes.
+
+| Dimension | BAML | LMQL | CLIO |
+|---|---|---|---|
+| **Form** | DSL files (`.baml`) compiled to client SDKs (Python / TS / Ruby / Go) for typed LLM functions | Embedded query language (Python superset); programs run inside the LMQL interpreter | **DSL files** (`.clio`) compiled to standalone projects, no CLIO at runtime |
+| **Unit of composition** | A typed *function* (input schema → LLM call → output schema) | A *prompt program* with constraints, control flow, and decoding directives | A **STEP** that may be EXACT (deterministic code/REST/shell) or JUDGMENT (LLM-by-prompt) |
+| **Code/LLM distinction** | Implicit — every BAML function is a JUDGMENT call | Implicit — every LMQL program is a JUDGMENT prompt | **Explicit primitive**: EXACT vs JUDGMENT is a compile-time MODE on each step |
+| **Targets** | Client SDKs in fixed languages, plus a runtime reference | The LMQL Python interpreter | **Multi-target** by design: `claude-cli`, `python`, planned `mcp-server`, `temporal`, … |
+| **Pipeline scope** | One typed function per file; composition happens in the host language | One program with constraints and decoding control | **Whole pipelines** in the language: `FOR EACH`, `CACHE`, `ON_FAIL`, `RESOURCES` |
+| **Runtime dependency** | Generated client + BAML runtime at inference time | LMQL interpreter | **None** — emitted projects compile to standalone Python or bash with provider SDKs only |
+
+### The CLIO differentiator stated explicitly
+
+Against both BAML and LMQL, three things pull CLIO apart:
+
+1. **Compiler, not runtime.** BAML's generated SDK depends on BAML at request time (its own typed-function runtime); LMQL programs run inside the LMQL interpreter. CLIO emits a runnable project — you ship Python or bash, not a CLIO call. The day CLIO is gone, your generated project still runs.
+
+2. **Multi-target from one source.** BAML's targets are SDK *languages* (Python, TS, Ruby, Go) for the same use case (typed LLM functions). LMQL has one target: its interpreter. CLIO's targets are *deployment shapes* (a Claude Code project, a Python package, a future MCP server, a future Temporal workflow) — the same `.clio` becomes a different artifact for a different runtime context.
+
+3. **EXACT/JUDGMENT as a language primitive, not a convention.** In BAML and LMQL the LLM call is the unit; deterministic code lives outside, in the host language. In CLIO the language *separates* deterministic steps (REST, shell, code, SQL — the compiler can name the function) from LLM-by-prompt steps (validated against a CONTRACT). This split is checked at compile time and drives optimizations (the compiler may batch judgment steps, route models, cache differently per mode) that BAML and LMQL cannot make because their model erases the distinction.
+
+### Where they converge with CLIO (honest acknowledgment)
+
+- **Typed LLM output**: BAML's typed-function-with-schema and CLIO's CONTRACT solve the same problem (structured stochastic output). BAML is more polished on this single axis today.
+- **DSL over framework**: all three projects refuse the "LLM workflows are just Python with libraries" framing. That's a real shared stance against LangGraph / DSPy / LangChain.
+- **Compile-time validation**: BAML, LMQL, and CLIO all check schemas/types before the LLM is ever called. None of the framework-style competitors do.
+
+### When BAML or LMQL is the better choice
+
+- If your problem **is** a single typed LLM function (input → schema-validated output), with composition handled in your application's host language, BAML is more mature on that exact slice.
+- If your problem is **prompt-as-program** with non-trivial constrained decoding (regex constraints, beam search with type guards, multi-turn LLM dialog as control flow), LMQL has years of head start on that specific design.
+- CLIO is the better choice when **the workflow itself** — multiple steps, mixed deterministic and stochastic, with caching, fallbacks, and a chosen deployment target — is what you want to express in the language.
+
+---
+
 ## The honest weaknesses
 
 | Weakness | LangGraph / n8n | CLIO today |
