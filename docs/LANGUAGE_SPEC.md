@@ -10,20 +10,20 @@ Also lifts `FOR EACH <var> IN <collection>:` from spec-only to implemented contr
 
 ### Implementation status (as of v0.2)
 
-| Feature | Parser | IR | python target | claude-cli target |
-|---|---|---|---|---|
-| `LANG:` per step | ✅ | ✅ | ignored (still emits Python on every EXACT) | ignored |
-| `impl.mode: code` | ✅ | ✅ | (default behavior — Python stub) | (default behavior — Python stub) |
-| `impl.mode: rest` | ✅ | ✅ | ✅ `requests.request(...)` | ✅ standalone Python step with `requests` |
-| `impl.mode: shell` | ✅ | ✅ | ✅ `subprocess.run([...], shell=False)` | ✅ standalone Python step with `subprocess` |
-| `impl.mode: sql` / `mcp_tool` / `binary` | ❌ | ❌ | ❌ | ❌ |
-| `invoke.mode: cli` | ✅ | ✅ | rejected at compile time | (default behavior — `claude -p`) |
-| `invoke.mode: api` (`anthropic`) | ✅ | ✅ | ✅ with overrides | (uses RESOURCES.models chain) |
-| `invoke.mode: api` (`openai`) | ✅ | ✅ | ✅ — covers LiteLLM / OpenRouter / Ollama / vLLM via OpenAI-compat | rejected |
-| `invoke.mode: api` (`bedrock` / `vertex`) | ✅ | ✅ | rejected at compile time | rejected |
-| `invoke.mode: embedded` / `mcp_sampling` | ❌ | ❌ | ❌ | ❌ |
-| `FOR EACH ... IN ...:` | ✅ | ✅ | ✅ `for x in state[...]:` | ✅ `mapfile` + bash `for` loop |
-| Judgment step inside FOR EACH | parses fine | builds fine | works | rejected at emit |
+| Feature | Parser | IR | python target | claude-cli target | mcp-server target |
+|---|---|---|---|---|---|
+| `LANG:` per step | ✅ | ✅ | ignored (still emits Python on every EXACT) | ignored | ignored |
+| `impl.mode: code` | ✅ | ✅ | (default behavior — Python stub) | (default behavior — Python stub) | (default behavior — Python stub) |
+| `impl.mode: rest` | ✅ | ✅ | ✅ `requests.request(...)` | ✅ standalone Python step with `requests` | ✅ `requests.request(...)` |
+| `impl.mode: shell` | ✅ | ✅ | ✅ `subprocess.run([...], shell=False)` | ✅ standalone Python step with `subprocess` | ✅ `subprocess.run([...], shell=False)` |
+| `impl.mode: sql` / `mcp_tool` / `binary` | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `invoke.mode: cli` | ✅ | ✅ | rejected at compile time | (default behavior — `claude -p`) | rejected at compile time |
+| `invoke.mode: api` (`anthropic`) | ✅ | ✅ | ✅ with overrides | (uses RESOURCES.models chain) | rejected at compile time |
+| `invoke.mode: api` (`openai`) | ✅ | ✅ | ✅ — covers LiteLLM / OpenRouter / Ollama / vLLM via OpenAI-compat | rejected | rejected at compile time |
+| `invoke.mode: api` (`bedrock` / `vertex`) | ✅ | ✅ | rejected at compile time | rejected | rejected at compile time |
+| `invoke.mode: embedded` / `mcp_sampling` | ❌ | ❌ | ❌ | ❌ | ✅ — `sampling/createMessage` via MCP client |
+| `FOR EACH ... IN ...:` | ✅ | ✅ | ✅ `for x in state[...]:` | ✅ `mapfile` + bash `for` loop | ✅ `for x in state[...]:` |
+| Judgment step inside FOR EACH | parses fine | builds fine | works | rejected at emit | works |
 
 Where the table says *rejected at compile time*, the emitter raises a clear `ValueError` / `NotImplementedError` rather than producing silent or broken code.
 

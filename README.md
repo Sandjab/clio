@@ -47,6 +47,7 @@ The same `.clio` source compiles to different targets:
 | Target       | Output                                              |
 |--------------|------------------------------------------------------|
 | `claude-cli` | Claude Code project (CLAUDE.md, hooks, bash scripts) |
+| `mcp-server` | MCP server (FLOW = tool, judgment via `sampling/createMessage`) |
 | `python`     | Python package (Pydantic + Anthropic SDK)            |
 | `rust`       | Cargo project + API calls for judgment steps         |
 | `docker`     | Multi-stage Dockerfile (mixed languages)             |
@@ -68,6 +69,11 @@ python -m clio graph examples/retention.clio --format dot --output flow.dot
 export ANTHROPIC_API_KEY=...
 python -m clio gen "Pour chaque article, extrais les entités et résume-les" > flow.clio
 python -m clio compile flow.clio --target python --output ./out
+
+# Compile to a runnable MCP server (each FLOW becomes a tool)
+python -m clio compile examples/mvp.clio --target mcp-server --output ./mcp-out
+pip install -e ./mcp-out
+# then add the server to your MCP client config — see ./mcp-out/README.md
 
 # Run tests
 pytest tests/ -v

@@ -154,6 +154,9 @@ docs/
 # Parse and compile a .clio file to claude-cli target
 python -m clio compile examples/analyse.clio --target claude-cli --output ./output
 
+# Compile to MCP server target
+python -m clio compile examples/mvp.clio --target mcp-server --output ./mcp-out
+
 # Run tests
 pytest tests/ -v
 

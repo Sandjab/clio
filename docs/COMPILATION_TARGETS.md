@@ -12,7 +12,7 @@ Each target is an emitter module that transforms the IR graph into a runnable pr
 | `rust` | Future | Cargo async project | Performance-critical `exact` steps | High |
 | `docker` | Future | Multi-stage Dockerfile + compose | Mixed-language flows | Medium |
 | `hybrid` | Future | Claude CLI + precompiled binaries for `exact` | Heavy `exact` within CLI orchestration | Medium |
-| `mcp-server` | Candidate | MCP server, each FLOW exposed as a tool | Native Anthropic ecosystem integration; turn a `.clio` into a structured MCP tool | Low |
+| `mcp-server` | Implemented | MCP server, each FLOW exposed as a tool with sampling-based judgment | Native Anthropic ecosystem integration; turn a `.clio` into a structured MCP tool | — |
 | `fastapi` | Candidate | HTTP server (FLOW = endpoint, CONTRACT = `response_model`) | Deploy a `.clio` as a microservice | Low–Medium |
 | `temporal` | Candidate | Temporal workflow (Python/Go), STEPs = activities | Enterprise durability, retry, observability — maps 1:1 onto `ON_FAIL` semantics | Medium–High |
 | `typescript` | Candidate | TS/Node package with `@anthropic-ai/sdk` | Frontend / Vercel / edge audiences | Medium |
@@ -110,6 +110,68 @@ Both targets read/write `<output>/.cache/<step_name>/<sha256>.json` with the sam
 ### System prompt
 
 Each judgment step's SDK call sends a strict JSON-only system prompt that aligns the model's behavior with `claude -p`'s built-in scaffolding. Ensures contract validation succeeds reliably.
+
+---
+
+## `target: mcp-server`
+
+Produces a runnable MCP (Model Context Protocol) server. Each `FLOW` becomes a tool registered with the official `mcp` Python SDK. Judgment steps are handled by the MCP client via `sampling/createMessage` — the server itself carries no API key and no `anthropic`/`openai` dependency.
+
+### Layout
+
+```
+output/
+  pyproject.toml
+  README.md                  # includes client-config snippet (stdio + args)
+  <pkg>/
+    __init__.py
+    contracts.py             # Pydantic v2 BaseModel per CONTRACT
+    server.py                # MCP server entry point; registers one tool per FLOW
+    __main__.py              # CLI: `python -m <pkg>` (starts the MCP server)
+    steps/
+      <exact>.py             # NotImplementedError stub (user fills body)
+      <judgment>.py          # auto-generated: sampling/createMessage + cache + ON_FAIL chain
+    clio_runtime/
+      cache.py               # copied verbatim from clio/runtime/cache.py
+```
+
+### Use
+
+```bash
+pip install -e ./output
+python -m <pkg>              # starts the MCP server on stdio
+```
+
+Then add it to your MCP client config (Claude Desktop, Claude Code, etc.) — see the emitted `README.md` for the exact snippet.
+
+### Sampling differentiator
+
+Judgment steps use `sampling/createMessage` instead of a direct SDK call. The MCP client (e.g. Claude Desktop) executes the LLM call with its own credentials — the server never sees an API key. This makes the emitted package safe to ship as a tool: no credential management, no API-key rotation, no SDK version pinning.
+
+### inputSchema / outputSchema derivation
+
+- **inputSchema**: derived from the first step's `TAKES`. Literal kwargs in the FLOW call become `default` values in the JSON Schema; required fields are those with no default.
+- **outputSchema**: derived from the last step's `GIVES`. Inline types and CONTRACT refs both resolve to JSON Schema objects.
+
+### Refused combinations
+
+The following are rejected at compile time with a clear error and a pointer to `--target python`:
+
+- `invoke.protocol: anthropic` — use `--target python` for direct SDK calls.
+- `invoke.protocol: openai` — use `--target python`.
+- `invoke.protocol: bedrock` / `vertex` — use `--target python`.
+- `invoke.mode: cli` — no `claude -p` subprocess on an MCP server.
+- Source with no `FLOW` declaration — an MCP server with no tools is a no-op.
+
+### Inherited features
+
+These work identically to the `python` target (shared helpers in `_python_helpers.py`):
+
+- `FOR EACH ... IN ...:` — emits `for var in state[...]:` with body step calls.
+- `CACHE: ttl(...)` — same on-disk layout as `python` and `claude-cli`; cache files are interchangeable.
+- `ON_FAIL: retry / escalate / fallback / abort` — full strategy chain.
+- `impl.mode: rest` — emits `requests.request(...)` with `${var}` URL templating.
+- `impl.mode: shell` — emits `subprocess.run([...], shell=False)`.
 
 ---
 

@@ -12,6 +12,7 @@
 
 ### Emitters
 
+- New `target: mcp-server` emitter compiles a `.clio` source into a runnable MCP (Model Context Protocol) server. Each `FLOW` becomes a tool registered with the official `mcp` Python SDK. Judgment steps delegate to the MCP client via `sampling/createMessage` — no API key on the server, no `anthropic`/`openai` SDK dep. inputSchema derives from the first step's TAKES (literal FLOW kwargs become defaults); outputSchema derives from the last step's GIVES. Steps with `invoke.protocol: anthropic|openai|bedrock|vertex` are rejected at compile time with a pointer to `--target python`. Reuses the python emitter's helpers for FOR EACH, CACHE, ON_FAIL, impl.rest, impl.shell. Emitted package ships a README with the client-config snippet.
 - Python emitter: routes `invoke.protocol` between Anthropic SDK (default) and OpenAI SDK (chat.completions API). With `protocol: openai` + `base_url`, the same emission unblocks LiteLLM, OpenRouter, Ollama, vLLM, Together, Groq via OpenAI-compat. `pyproject.toml` adds `openai>=1.0` only when needed.
 - Python emitter: emits `impl.mode: rest` as a step that calls `requests.request(...)` with optional `response_path` traversal (regex-walked, supports `.field` and `[N]` segments). `pyproject.toml` adds `requests>=2.31` only when needed.
 - Python emitter: emits `FOR EACH` as `for var in state['coll']:` with body calls binding the loop variable as a local kwarg (not via `state[...]`). Nested loops supported.
@@ -46,7 +47,7 @@
 
 ### Tests
 
-- 263 tests + 2 e2e gated (was 121 + 2). +142 tests covering LANG plumbing, impl/invoke block parsing and IR, REST emission and url templating in both targets, openai protocol emission, FOR EACH parsing/IR/emission in both targets, conditional anthropic/pydantic deps, `clio graph` rendering, `impl.mode: shell` parser/IR/both-emitters and runtime argv substitution smoke test, the `classify_corpus` FOR-EACH-plus-openai example end-to-end, explicit-rejection paths, NL→.clio compile-correct loop and CLI.
+- 294 tests + 2 e2e gated (was 263 + 2). +31 tests covering mcp-server emitter: file-tree structure, tool registration, sampling/createMessage judgment emission, inputSchema/outputSchema derivation, refused protocol combinations, FOR EACH and CACHE and ON_FAIL and impl.rest/shell wiring, emitted README content, and pyproject.toml dependency shape.
 
 ### Repo hygiene
 
