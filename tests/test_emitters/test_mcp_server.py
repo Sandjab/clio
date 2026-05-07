@@ -115,3 +115,19 @@ def test_flow_module_for_each_uses_async_for(tmp_path):
     flow_py = (tmp_path / "pipe" / "flow.py").read_text()
     assert "for item in state['items']:" in flow_py or 'for item in state["items"]:' in flow_py
     assert "work_mod.work(x=item)" in flow_py
+
+
+def test_emit_default_exact_step_has_signature_and_stub(tmp_path):
+    src = (
+        "STEP greet\n"
+        "  TAKES: name: str\n"
+        "  GIVES: msg: str\n"
+        "  MODE:  exact\n"
+        "FLOW hello\n"
+        "  greet(name=\"World\")\n"
+    )
+    MCPServerEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "hello" / "steps" / "greet.py").read_text()
+    assert "def greet(*, name: str) -> str:" in body
+    assert "raise NotImplementedError" in body
+    assert "exact (deterministic) step" in body

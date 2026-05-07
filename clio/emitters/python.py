@@ -157,36 +157,9 @@ class PythonEmitter(BaseEmitter):
         if isinstance(step.impl, ShellImplIR):
             return self._emit_shell_step(step, contracts_by_name, step.impl)
 
-        params = _step_signature(step, contracts_by_name)
-        ret_type = (
-            _type_to_python(step.gives.type, contracts_by_name)
-            if step.gives is not None else "None"
-        )
-        takes_doc = (
-            "\n    ".join(f"{t.name}: {_render_type_short(t.type)}" for t in step.takes)
-            if step.takes else "(no TAKES)"
-        )
-        gives_doc = (
-            f"{step.gives.name}: {_render_type_short(step.gives.type)}"
-            if step.gives is not None else "(no GIVES)"
-        )
-
-        return (
-            f'"""STEP {step.name} (exact)\n'
-            f'TAKES:\n'
-            f'    {takes_doc}\n'
-            f'GIVES:\n'
-            f'    {gives_doc}\n\n'
-            f'Implement the body below. The orchestrator passes arguments by keyword\n'
-            f'and expects the return value to conform to the GIVES type.\n'
-            f'"""\n'
-            f'from __future__ import annotations\n'
-            f'\n\n'
-            f'def {step.name}({params}) -> {ret_type}:\n'
-            f'    raise NotImplementedError(\n'
-            f'        "Implement steps/{step.name}.py: this is an exact (deterministic) step."\n'
-            f'    )\n'
-        )
+        # default branch (no impl, or impl.mode: code)
+        from clio.emitters._python_helpers import emit_default_exact_step
+        return emit_default_exact_step(step, contracts_by_name)
 
     def _emit_rest_step(
         self,

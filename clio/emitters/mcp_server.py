@@ -37,5 +37,11 @@ class MCPServerEmitter(BaseEmitter):
         (pkg_dir / "server.py").write_text(_emit_server_module(pkg_name, graph))
         (pkg_dir / "flow.py").write_text(_emit_flow_module_async(graph))
 
+        from clio.emitters._python_helpers import emit_default_exact_step
+        contracts_by_name = {c.name: c for c in graph.contracts}
         for step in graph.steps:
-            (steps_dir / f"{step.name}.py").write_text(_emit_exact_step_stub(step.name))
+            if step.mode == "exact":
+                body = emit_default_exact_step(step, contracts_by_name)
+            else:
+                body = _emit_exact_step_stub(step.name)  # judgment placeholder; Task 6
+            (steps_dir / f"{step.name}.py").write_text(body)
