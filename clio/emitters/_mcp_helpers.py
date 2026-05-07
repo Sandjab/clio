@@ -151,17 +151,80 @@ def _emit_server_module(pkg_name: str, graph: FlowGraph) -> str:
     )
 
 
-def _emit_flow_module_async_minimal(graph: FlowGraph) -> str:
-    """Placeholder flow.py: just an async run() that returns the initial dict.
-    Task 3 fills it in with real dispatching."""
+def _emit_flow_module_async(graph: FlowGraph) -> str:
+    """Emit flow.py: an async run() that chains steps in flow order."""
+    if graph.flow is None:
+        return (
+            '"""Async FLOW orchestrator. Auto-generated; do not edit."""\n'
+            "from __future__ import annotations\n"
+            "\n"
+            "\n"
+            "async def run(*, _session=None, **initial: object) -> dict:\n"
+            "    return dict(initial)\n"
+        )
+
+    chain_lines: list[str] = []
+    imported_steps: list[str] = []
+
+    def _emit_call(call: CallIR, indent: str, scope_local: set[str]) -> None:
+        step = next(s for s in graph.steps if s.name == call.step_name)
+        if step.name not in imported_steps:
+            imported_steps.append(step.name)
+        kw_parts = []
+        for name, value in call.kwargs:
+            if isinstance(value, str) and value.startswith("@"):
+                ref = value[1:]
+                if ref in scope_local:
+                    kw_parts.append(f"{name}={ref}")
+                else:
+                    kw_parts.append(f"{name}=state[{ref!r}]")
+            else:
+                kw_parts.append(f"{name}={value!r}")
+        kwargs_str = ", ".join(kw_parts)
+        out_name = step.gives.name if step.gives is not None else "_result"
+        if scope_local:
+            chain_lines.append(f"{indent}{step.name}_mod.{step.name}({kwargs_str})")
+        else:
+            chain_lines.append(
+                f"{indent}state[{out_name!r}] = {step.name}_mod.{step.name}({kwargs_str})"
+            )
+
+    def _emit_item(item, indent: str, scope_local: set[str]) -> None:
+        if isinstance(item, ForEachIR):
+            source = (
+                item.collection
+                if item.collection in scope_local
+                else f"state[{item.collection!r}]"
+            )
+            chain_lines.append(f"{indent}for {item.loop_var} in {source}:")
+            inner_scope = scope_local | {item.loop_var}
+            inner_indent = indent + "    "
+            if not item.body:
+                chain_lines.append(f"{inner_indent}pass")
+            for sub in item.body:
+                _emit_item(sub, inner_indent, inner_scope)
+            return
+        if isinstance(item, CallIR):
+            _emit_call(item, indent, scope_local)
+            return
+        raise ValueError(f"unknown flow item: {type(item).__name__}")
+
+    for item in graph.flow.chain:
+        _emit_item(item, "    ", set())
+
+    imports = "\n".join(f"from .steps import {n} as {n}_mod" for n in imported_steps)
+
     return (
         '"""Async FLOW orchestrator. Auto-generated; do not edit."""\n'
         "from __future__ import annotations\n"
         "\n"
+        f"{imports}\n"
+        "\n"
         "\n"
         "async def run(*, _session=None, **initial: object) -> dict:\n"
         "    state: dict = dict(initial)\n"
-        "    return state\n"
+        + "\n".join(chain_lines)
+        + "\n    return state\n"
     )
 
 

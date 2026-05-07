@@ -9,7 +9,7 @@ from pathlib import Path
 
 from clio.emitters._mcp_helpers import (
     _emit_exact_step_stub,
-    _emit_flow_module_async_minimal,
+    _emit_flow_module_async,
     _emit_main_module,
     _emit_server_module,
     _pyproject_for_mcp,
@@ -35,7 +35,7 @@ class MCPServerEmitter(BaseEmitter):
         (pkg_dir / "__init__.py").write_text("")
         (pkg_dir / "__main__.py").write_text(_emit_main_module(pkg_name))
         (pkg_dir / "server.py").write_text(_emit_server_module(pkg_name, graph))
-        (pkg_dir / "flow.py").write_text(_emit_flow_module_async_minimal(graph))
+        (pkg_dir / "flow.py").write_text(_emit_flow_module_async(graph))
 
         for step in graph.steps:
             (steps_dir / f"{step.name}.py").write_text(_emit_exact_step_stub(step.name))
