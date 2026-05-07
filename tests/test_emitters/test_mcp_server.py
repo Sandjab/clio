@@ -23,6 +23,17 @@ def test_emit_creates_expected_file_tree(tmp_path):
     assert (tmp_path / "hello" / "server.py").exists()
     assert (tmp_path / "hello" / "flow.py").exists()
     assert (tmp_path / "hello" / "steps" / "greet.py").exists()
+    assert (tmp_path / "hello" / "steps" / "__init__.py").exists()
+
+
+def test_emit_no_flow_server_has_no_duplicate_raise(tmp_path):
+    """When the source has no FLOW, server.py must not emit two consecutive raises."""
+    src_no_flow = "STEP solo\n  GIVES: x: int\n  MODE: exact\n"
+    MCPServerEmitter().emit(build_ir(parse(src_no_flow)), tmp_path)
+    # Package name is the fallback "clio_mcp" when no FLOW
+    server_py = (tmp_path / "clio_mcp" / "server.py").read_text()
+    # Count occurrences of the raise line — should be exactly 1.
+    assert server_py.count("raise ValueError(f'unknown tool:") == 1
 
 
 def test_cli_accepts_mcp_server_target(tmp_path):

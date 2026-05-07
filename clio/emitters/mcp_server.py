@@ -27,6 +27,7 @@ class MCPServerEmitter(BaseEmitter):
         steps_dir = pkg_dir / "steps"
         pkg_dir.mkdir(parents=True, exist_ok=True)
         steps_dir.mkdir(parents=True, exist_ok=True)
+        (steps_dir / "__init__.py").write_text("")
 
         (output_dir / "pyproject.toml").write_text(
             _pyproject_for_mcp(pkg_name, needs_pydantic=False, needs_requests=False)

@@ -76,6 +76,7 @@ def _emit_server_module_minimal(pkg_name: str, graph: FlowGraph) -> str:
         '        return [TextContent(type="text", text="not yet implemented")]'
         for n in flow_names
     ) or "    raise ValueError(f'unknown tool: {name}')"
+    trailing_raise = "    raise ValueError(f'unknown tool: {name}')\n" if flow_names else ""
     return (
         '"""MCP server for this CLIO-compiled package."""\n'
         "from __future__ import annotations\n"
@@ -96,7 +97,7 @@ def _emit_server_module_minimal(pkg_name: str, graph: FlowGraph) -> str:
         "@server.call_tool()\n"
         "async def call_tool(name: str, arguments: dict) -> list[TextContent]:\n"
         f"{dispatch}\n"
-        "    raise ValueError(f'unknown tool: {name}')\n"
+        f"{trailing_raise}"
     )
 
 
