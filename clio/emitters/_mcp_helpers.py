@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json as _json
 
+from clio.emitters._python_helpers import _has_parallel
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import CallIR, FlowGraph, ForEachIR, StepIR
 from clio.parser.ast_nodes import ContractRef, ListType
@@ -348,16 +349,6 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
         + "\n".join(chain_lines)
         + "\n    return state\n"
     )
-
-
-def _has_parallel(chain) -> bool:
-    for elem in chain:
-        if isinstance(elem, ForEachIR):
-            if elem.parallel:
-                return True
-            if _has_parallel(elem.body):
-                return True
-    return False
 
 
 def emit_parallel_for_each_mcp(

@@ -27,6 +27,7 @@ from clio.emitters._python_helpers import (
     _type_to_python,
     emit_contracts,
     emit_default_exact_step,
+    _has_parallel,
     emit_parallel_for_each_python,
     emit_rest_step,
     emit_shell_step,
@@ -427,15 +428,6 @@ class PythonEmitter(BaseEmitter):
 
         for item in graph.flow.chain:
             _emit_item(item, "    ", set())
-
-        def _has_parallel(chain) -> bool:
-            for elem in chain:
-                if isinstance(elem, ForEachIR):
-                    if elem.parallel:
-                        return True
-                    if _has_parallel(elem.body):
-                        return True
-            return False
 
         needs_concurrent = _has_parallel(graph.flow.chain)
         cf_import = "import concurrent.futures\n\n" if needs_concurrent else ""

@@ -654,3 +654,17 @@ def emit_parallel_for_each_python(
         f"{indent}        _results[_idx] = _fut.result()\n"
         f"{indent}state[{elem.collector!r}] = _results"
     )
+
+
+def _has_parallel(chain) -> bool:
+    """Return True if any ForEachIR in the chain (or nested) has parallel=True.
+    Used by emitters to decide whether to emit `import concurrent.futures` /
+    `import asyncio` at module top of the emitted flow.py."""
+    from clio.ir.graph import ForEachIR  # avoid top-level circular import
+    for elem in chain:
+        if isinstance(elem, ForEachIR):
+            if elem.parallel:
+                return True
+            if _has_parallel(elem.body):
+                return True
+    return False
