@@ -404,6 +404,8 @@ def _build_for_each(
         collection=decl.collection,
         body=tuple(body_items),
         line=decl.line,
+        parallel=decl.parallel,
+        collector=decl.collector,
     )
 
 

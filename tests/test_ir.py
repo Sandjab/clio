@@ -458,3 +458,33 @@ def test_build_ir_for_each_loop_var_in_kwarg_resolution():
     flow = build_ir(parse(src)).flow
     body_call = flow.chain[1].body[0]
     assert body_call.kwargs == (("x", "@item"),)
+
+
+def test_ir_propagates_parallel_for_each_fields():
+    src = (
+        "STEP load\n  GIVES: items: List<str>\n  MODE: exact\n"
+        "STEP process\n  TAKES: x: str\n  GIVES: r: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH item IN items PARALLEL AS results:\n"
+        "         process(x=item)\n"
+    )
+    g = build_ir(parse(src))
+    fe = next(elem for elem in g.flow.chain if elem.__class__.__name__ == "ForEachIR")
+    assert fe.parallel is True
+    assert fe.collector == "results"
+
+
+def test_ir_sequential_for_each_defaults_unchanged():
+    src = (
+        "STEP load\n  GIVES: items: List<str>\n  MODE: exact\n"
+        "STEP process\n  TAKES: x: str\n  GIVES: r: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH item IN items:\n"
+        "         process(x=item)\n"
+    )
+    g = build_ir(parse(src))
+    fe = next(elem for elem in g.flow.chain if elem.__class__.__name__ == "ForEachIR")
+    assert fe.parallel is False
+    assert fe.collector is None
