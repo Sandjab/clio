@@ -16,11 +16,12 @@ from clio.emitters._mcp_helpers import (
 )
 from clio.emitters._python_helpers import emit_default_exact_step
 from clio.emitters.base import BaseEmitter
-from clio.ir.graph import FlowGraph
+from clio.ir.graph import ApiInvokeIR, CliInvokeIR, FlowGraph
 
 
 class MCPServerEmitter(BaseEmitter):
     def emit(self, graph: FlowGraph, output_dir: Path) -> None:
+        self._validate_for_mcp(graph)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         pkg_name = graph.flow.name if graph.flow is not None else "clio_mcp"
@@ -45,3 +46,27 @@ class MCPServerEmitter(BaseEmitter):
             else:
                 body = _emit_exact_step_stub(step.name)  # judgment placeholder; Task 6
             (steps_dir / f"{step.name}.py").write_text(body)
+
+    def _validate_for_mcp(self, graph: FlowGraph) -> None:
+        if graph.flow is None:
+            raise ValueError(
+                "mcp-server target requires at least one FLOW (each FLOW becomes a tool)"
+            )
+        for step in graph.steps:
+            if isinstance(step.invoke, CliInvokeIR):
+                raise ValueError(
+                    f"step {step.name!r}: invoke.mode: cli is not supported by mcp-server "
+                    "(use --target claude-cli for CLI invocation)"
+                )
+            if isinstance(step.invoke, ApiInvokeIR):
+                if step.invoke.protocol in ("anthropic", "openai"):
+                    raise ValueError(
+                        f"step {step.name!r}: invoke.protocol: {step.invoke.protocol!r} is not "
+                        "supported by mcp-server (sampling-only); use --target python for "
+                        "direct SDK access"
+                    )
+                if step.invoke.protocol in ("bedrock", "vertex"):
+                    raise ValueError(
+                        f"step {step.name!r}: invoke.protocol: {step.invoke.protocol!r} is not "
+                        "yet supported by any target"
+                    )
