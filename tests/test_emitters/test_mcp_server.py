@@ -160,3 +160,40 @@ def test_emit_default_exact_step_has_signature_and_stub(tmp_path):
     assert "def greet(*, name: str) -> str:" in body
     assert "raise NotImplementedError" in body
     assert "exact (deterministic) step" in body
+
+
+def test_emit_judgment_step_uses_session_create_message(tmp_path):
+    src = (
+        "STEP classify\n"
+        "  TAKES: text: str\n"
+        "  GIVES: label: str\n"
+        "  MODE:  judgment\n"
+        "FLOW f\n  classify(text=\"hi\")\n"
+    )
+    MCPServerEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "f" / "steps" / "classify.py").read_text()
+    assert "session.create_message" in body
+    assert "import anthropic" not in body
+    assert "import openai" not in body
+    assert "async def classify" in body
+
+
+def test_emit_flow_awaits_judgment_steps(tmp_path):
+    src = (
+        "STEP classify\n  TAKES: text: str\n  GIVES: label: str\n  MODE: judgment\n"
+        "FLOW f\n  classify(text=\"hi\")\n"
+    )
+    MCPServerEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = (tmp_path / "f" / "flow.py").read_text()
+    assert "await classify_mod.classify" in flow_py
+
+
+def test_emit_server_threads_session_to_flow_run(tmp_path):
+    src = (
+        "STEP classify\n  TAKES: text: str\n  GIVES: label: str\n  MODE: judgment\n"
+        "FLOW f\n  classify(text=\"hi\")\n"
+    )
+    MCPServerEmitter().emit(build_ir(parse(src)), tmp_path)
+    server_py = (tmp_path / "f" / "server.py").read_text()
+    assert "_session=" in server_py
+    assert "ctx.session" in server_py or "request_context.session" in server_py

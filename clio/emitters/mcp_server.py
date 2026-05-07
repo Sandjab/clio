@@ -8,11 +8,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from clio.emitters._mcp_helpers import (
-    _emit_exact_step_stub,
     _emit_flow_module_async,
     _emit_main_module,
     _emit_server_module,
     _pyproject_for_mcp,
+    emit_judgment_step_via_sampling,
 )
 from clio.emitters._python_helpers import emit_default_exact_step
 from clio.emitters.base import BaseEmitter
@@ -44,7 +44,7 @@ class MCPServerEmitter(BaseEmitter):
             if step.mode == "exact":
                 body = emit_default_exact_step(step, contracts_by_name)
             else:
-                body = _emit_exact_step_stub(step.name)  # judgment placeholder; Task 6
+                body = emit_judgment_step_via_sampling(step, graph, contracts_by_name)
             (steps_dir / f"{step.name}.py").write_text(body)
 
     def _validate_for_mcp(self, graph: FlowGraph) -> None:

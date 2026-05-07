@@ -2,6 +2,8 @@
 import from here, never from each other."""
 from __future__ import annotations
 
+import json as _json
+
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import CallIR, FlowGraph, ForEachIR, StepIR
 
@@ -144,8 +146,9 @@ def _emit_server_module(pkg_name: str, graph: FlowGraph) -> str:
         "\n"
         "@server.call_tool()\n"
         "async def call_tool(name: str, arguments: dict) -> list[TextContent]:\n"
+        "    ctx = server.request_context\n"
         f"    if name == {flow_name!r}:\n"
-        "        result = await _flow.run(**arguments)\n"
+        "        result = await _flow.run(_session=ctx.session, **arguments)\n"
         '        return [TextContent(type="text", text=json.dumps(result, default=str))]\n'
         "    raise ValueError(f'unknown tool: {name}')\n"
     )
@@ -182,12 +185,19 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
                 kw_parts.append(f"{name}={value!r}")
         kwargs_str = ", ".join(kw_parts)
         out_name = step.gives.name if step.gives is not None else "_result"
-        if scope_local:
-            chain_lines.append(f"{indent}{step.name}_mod.{step.name}({kwargs_str})")
+        is_judgment = step.mode == "judgment"
+        if is_judgment:
+            if kwargs_str:
+                call_expr = f"{step.name}_mod.{step.name}({kwargs_str}, _session=_session)"
+            else:
+                call_expr = f"{step.name}_mod.{step.name}(_session=_session)"
+            call_expr = f"await {call_expr}"
         else:
-            chain_lines.append(
-                f"{indent}state[{out_name!r}] = {step.name}_mod.{step.name}({kwargs_str})"
-            )
+            call_expr = f"{step.name}_mod.{step.name}({kwargs_str})"
+        if scope_local:
+            chain_lines.append(f"{indent}{call_expr}")
+        else:
+            chain_lines.append(f"{indent}state[{out_name!r}] = {call_expr}")
 
     def _emit_item(item, indent: str, scope_local: set[str]) -> None:
         if isinstance(item, ForEachIR):
@@ -239,4 +249,103 @@ def _emit_exact_step_stub(step_name: str) -> str:
         "    raise NotImplementedError(\n"
         f"        \"Implement steps/{step_name}.py: this is an exact (deterministic) step.\"\n"
         "    )\n"
+    )
+
+
+def emit_judgment_step_via_sampling(
+    step: StepIR, graph: FlowGraph, contracts_by_name: dict
+) -> str:
+    """Emit a judgment step that delegates to the MCP client via
+    session.create_message(...). No anthropic/openai SDK in the emitted code."""
+    from clio.emitters._claude_cli_helpers import _inline_schema, _render_prompt
+    from clio.emitters._python_helpers import _step_signature, _to_class_name, _type_to_python
+    from clio.parser.ast_nodes import ContractRef, ListType
+
+    params = _step_signature(step, contracts_by_name)
+    # Append _session keyword argument to the existing kwargs-only signature.
+    if params:
+        params_with_session = f"{params}, _session"
+    else:
+        params_with_session = "*, _session"
+
+    ret_type = (
+        _type_to_python(step.gives.type, contracts_by_name)
+        if step.gives is not None else "None"
+    )
+
+    prompt_template = _render_prompt(step)
+
+    # Bug fix #1: schema must be JSON string at emit time so str.replace works at runtime.
+    # Bug fix #2: pass contracts_by_name (dict), not graph.contracts (tuple).
+    if step.gives is not None:
+        inlined = _inline_schema(step.gives.type, contracts_by_name)
+        inlined_json = _json.dumps(inlined, separators=(",", ":"))
+    else:
+        inlined_json = "{}"
+
+    sub_lines = [
+        f"    prompt = prompt.replace('${{{t.name}}}', json.dumps({t.name}))"
+        for t in step.takes
+    ]
+    sub_lines.append("    prompt = prompt.replace('${schema}', _INLINED_SCHEMA)")
+    sub_block = "\n".join(sub_lines)
+
+    if step.gives is None:
+        validate_block = "    return None"
+    else:
+        t = step.gives.type
+        if isinstance(t, ContractRef):
+            cls = _to_class_name(t.name)
+            validate_block = (
+                f"    return contracts.{cls}.model_validate(json.loads(cleaned))"
+            )
+        elif isinstance(t, ListType) and isinstance(t.inner, ContractRef):
+            cls = _to_class_name(t.inner.name)
+            validate_block = (
+                f"    return [contracts.{cls}.model_validate(item) "
+                f"for item in json.loads(cleaned)]"
+            )
+        else:
+            validate_block = "    return json.loads(cleaned)"
+
+    has_contracts = bool(graph.contracts)
+    contracts_import = "from .. import contracts\n" if has_contracts else ""
+
+    return (
+        f'"""STEP {step.name} (judgment, mcp_sampling).\n'
+        f'Auto-generated. Do not edit; regenerate via `clio compile`.\n'
+        f'"""\n'
+        "from __future__ import annotations\n"
+        "\n"
+        "import json\n"
+        "\n"
+        f"{contracts_import}"
+        "\n"
+        f"_PROMPT_TEMPLATE = {prompt_template!r}\n"
+        f"_INLINED_SCHEMA = {inlined_json!r}\n"
+        "_SYSTEM_PROMPT = (\n"
+        "    'You are a strict JSON-only API. Output exactly one JSON document matching '\n"
+        "    'the requested schema, with no prose, no markdown code fences, no commentary, '\n"
+        "    'and no leading or trailing whitespace beyond the JSON itself.'\n"
+        ")\n"
+        "_MAX_TOKENS = 4096\n"
+        "\n"
+        "\n"
+        f"async def {step.name}({params_with_session}) -> {ret_type}:\n"
+        "    prompt = _PROMPT_TEMPLATE\n"
+        f"{sub_block}\n"
+        "    from mcp.types import SamplingMessage, TextContent\n"
+        "    msg = await _session.create_message(\n"
+        "        messages=[\n"
+        "            SamplingMessage(\n"
+        "                role='user',\n"
+        "                content=TextContent(type='text', text=prompt),\n"
+        "            )\n"
+        "        ],\n"
+        "        max_tokens=_MAX_TOKENS,\n"
+        "        system_prompt=_SYSTEM_PROMPT,\n"
+        "    )\n"
+        "    raw = msg.content.text if getattr(msg.content, 'type', None) == 'text' else ''\n"
+        "    cleaned = '\\n'.join(line for line in raw.splitlines() if not line.startswith('```'))\n"
+        f"{validate_block}\n"
     )
