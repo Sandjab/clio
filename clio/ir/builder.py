@@ -101,12 +101,14 @@ def build_ir(program: Program) -> FlowGraph:
                 )
             resources_ir = ResourcesIR(target=d.target, models=d.models)
 
-    return FlowGraph(
+    graph = FlowGraph(
         steps=tuple(steps_by_name.values()),
         contracts=tuple(contracts.values()),
         flow=flow_ir,
         resources=resources_ir,
     )
+    _validate_parallel_for_each(graph)
+    return graph
 
 
 def _resolve_fallbacks(
@@ -422,6 +424,76 @@ def _check_refs(t: TypeExpr, contracts: dict[str, ContractIR], line: int, col: i
             _check_refs(ty, contracts, line, col)
     elif isinstance(t, ConstrainedType):
         _check_refs(t.base, contracts, line, col)
+
+
+def _validate_parallel_for_each(graph: FlowGraph) -> None:
+    """Enforce v1 constraints on FOR EACH PARALLEL blocks.
+    Each error includes the source line number from the .clio source."""
+    if graph.flow is None:
+        return
+
+    steps_by_name = {s.name: s for s in graph.steps}
+
+    # Track state-field names populated upstream so we can detect collector collisions.
+    populated: set[str] = set()
+    if graph.flow.chain:
+        first = graph.flow.chain[0]
+        if hasattr(first, "step_name"):
+            first_step = steps_by_name.get(first.step_name)
+            if first_step is not None:
+                for t in first_step.takes:
+                    populated.add(t.name)
+
+    def _walk(chain, ancestor_parallel: bool) -> None:
+        for elem in chain:
+            if hasattr(elem, "step_name"):
+                # CallIR — record GIVES into populated state
+                step = steps_by_name.get(elem.step_name)
+                if step is not None and step.gives is not None:
+                    populated.add(step.gives.name)
+                continue
+
+            # ForEachIR
+            if elem.parallel:
+                if ancestor_parallel:
+                    raise IRBuildError(
+                        f"FOR EACH PARALLEL cannot be nested inside another "
+                        f"PARALLEL block in v1 (line {elem.line})"
+                    )
+                if len(elem.body) != 1:
+                    raise IRBuildError(
+                        f"FOR EACH PARALLEL body must contain exactly one "
+                        f"step call in v1 (line {elem.line})"
+                    )
+                inner = elem.body[0]
+                if not hasattr(inner, "step_name"):
+                    if hasattr(inner, "parallel") and inner.parallel:
+                        raise IRBuildError(
+                            f"FOR EACH PARALLEL cannot be nested inside another "
+                            f"PARALLEL block in v1 (line {inner.line})"
+                        )
+                    raise IRBuildError(
+                        f"FOR EACH PARALLEL cannot contain nested FOR EACH "
+                        f"in v1 (line {elem.line})"
+                    )
+                step = steps_by_name.get(inner.step_name)
+                if step is None or step.gives is None:
+                    raise IRBuildError(
+                        f"FOR EACH PARALLEL body step "
+                        f"{inner.step_name!r} must have a GIVES "
+                        f"(line {elem.line})"
+                    )
+                if elem.collector in populated:
+                    raise IRBuildError(
+                        f"AS {elem.collector!r} shadows existing state "
+                        f"field; rename the collector (line {elem.line})"
+                    )
+                populated.add(elem.collector)
+            else:
+                # Sequential FOR EACH — descend; inner may be PARALLEL
+                _walk(elem.body, ancestor_parallel)
+
+    _walk(graph.flow.chain, ancestor_parallel=False)
 
 
 def _render(t: TypeExpr) -> str:

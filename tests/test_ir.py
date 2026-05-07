@@ -488,3 +488,118 @@ def test_ir_sequential_for_each_defaults_unchanged():
     fe = next(elem for elem in g.flow.chain if elem.__class__.__name__ == "ForEachIR")
     assert fe.parallel is False
     assert fe.collector is None
+
+
+def test_ir_rejects_parallel_multi_step_body():
+    src = (
+        "STEP load\n  GIVES: items: List<str>\n  MODE: exact\n"
+        "STEP a\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n"
+        "STEP b\n  TAKES: y: str\n  GIVES: z: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH item IN items PARALLEL AS results:\n"
+        "         a(x=item)\n"
+        "           -> b(y)\n"
+    )
+    with pytest.raises(ValueError, match="must contain exactly one step call"):
+        build_ir(parse(src))
+
+
+def test_ir_rejects_parallel_with_nested_for_each_body():
+    src = (
+        "STEP load\n  GIVES: matrix: List<List<str>>\n  MODE: exact\n"
+        "STEP inner\n  TAKES: cell: str\n  GIVES: r: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH row IN matrix PARALLEL AS rows:\n"
+        "         FOR EACH cell IN row:\n"
+        "           inner(cell=cell)\n"
+    )
+    with pytest.raises(ValueError, match="cannot contain nested FOR EACH"):
+        build_ir(parse(src))
+
+
+def test_ir_rejects_parallel_body_step_without_gives():
+    src = (
+        "STEP load\n  GIVES: items: List<str>\n  MODE: exact\n"
+        "STEP sink\n  TAKES: x: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH item IN items PARALLEL AS results:\n"
+        "         sink(x=item)\n"
+    )
+    with pytest.raises(ValueError, match="must have a GIVES"):
+        build_ir(parse(src))
+
+
+def test_ir_rejects_parallel_collector_shadowing_state_field():
+    """The collector must not collide with a state field already populated
+    upstream in the FLOW chain (the GIVES name of a prior step in this case)."""
+    src = (
+        "STEP load\n  GIVES: items: List<str>\n  MODE: exact\n"
+        "STEP process\n  TAKES: x: str\n  GIVES: r: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH item IN items PARALLEL AS items:\n"  # 'items' shadows the upstream GIVES
+        "         process(x=item)\n"
+    )
+    with pytest.raises(ValueError, match="shadows existing state field"):
+        build_ir(parse(src))
+
+
+def test_ir_rejects_nested_parallel():
+    """Two nested PARALLEL blocks (transitive) are rejected in v1."""
+    from clio.ir.graph import ForEachIR, CallIR, FlowIR, FlowGraph, StepIR, FieldIR
+    from clio.parser.ast_nodes import PrimitiveType
+
+    inner = ForEachIR(
+        loop_var="y",
+        collection="ys",
+        body=(CallIR(step_name="leaf", kwargs=(("y", "@y"),), line=1),),
+        line=1,
+        parallel=True,
+        collector="leaf_results",
+    )
+    outer = ForEachIR(
+        loop_var="x",
+        collection="xs",
+        body=(inner,),  # inner is also PARALLEL — should be rejected
+        line=1,
+        parallel=True,
+        collector="outer_results",
+    )
+    flow = FlowIR(name="pipe", chain=(outer,), line=1)
+    leaf = StepIR(
+        name="leaf",
+        takes=(FieldIR(name="y", type=PrimitiveType("str")),),
+        gives=FieldIR(name="r", type=PrimitiveType("str")),
+        mode="exact",
+        impl=None, invoke=None, cache=None, on_fail=None, lang=None, line=1,
+    )
+    graph = FlowGraph(steps=(leaf,), contracts=(), flow=flow)
+
+    from clio.ir.builder import _validate_parallel_for_each
+    with pytest.raises(ValueError, match="nested inside another PARALLEL"):
+        _validate_parallel_for_each(graph)
+
+
+def test_ir_accepts_parallel_inside_sequential_foreach():
+    """A PARALLEL block inside a *sequential* FOR EACH is allowed (the outer
+    is not parallel, so there's no nested-parallel issue)."""
+    src = (
+        "STEP load_outer\n  GIVES: groups: List<str>\n  MODE: exact\n"
+        "STEP load_inner\n  TAKES: g: str\n  GIVES: items: List<str>\n  MODE: exact\n"
+        "STEP process\n  TAKES: x: str\n  GIVES: r: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load_outer()\n"
+        "    -> FOR EACH g IN groups:\n"
+        "         load_inner(g=g)\n"
+        "           -> FOR EACH item IN items PARALLEL AS results:\n"
+        "                process(x=item)\n"
+    )
+    # Should NOT raise — outer is sequential, inner is parallel.
+    g = build_ir(parse(src))
+    outer = g.flow.chain[1]
+    assert outer.parallel is False
+    inner = outer.body[1]
+    assert inner.parallel is True
