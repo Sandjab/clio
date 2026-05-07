@@ -890,3 +890,38 @@ def test_emit_for_each_nested(tmp_path):
     assert "for cell in row:" in flow
     assert "inner_mod.inner(cell=cell)" in flow
 
+
+_PARALLEL_FOR_EACH_SRC = (
+    "STEP load\n  GIVES: docs: List<str>\n  MODE: exact\n"
+    "STEP classify\n  TAKES: text: str\n  GIVES: label: str\n  MODE: exact\n"
+    "FLOW pipe\n"
+    "  load()\n"
+    "    -> FOR EACH doc IN docs PARALLEL AS labels:\n"
+    "         classify(text=doc)\n"
+)
+
+
+def test_python_emits_thread_pool_for_parallel_for_each(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_PARALLEL_FOR_EACH_SRC)), tmp_path)
+    flow_py = (tmp_path / "pipe" / "flow.py").read_text()
+    assert "import concurrent.futures" in flow_py
+    assert "ThreadPoolExecutor(max_workers=10)" in flow_py
+    assert "concurrent.futures.as_completed" in flow_py
+    assert "_results = [None] *" in flow_py
+    assert "state['labels'] = _results" in flow_py or 'state["labels"] = _results' in flow_py
+
+
+def test_python_does_not_import_concurrent_when_no_parallel(tmp_path):
+    """Sequential-only flows must not pull in concurrent.futures (unused dep)."""
+    src = (
+        "STEP load\n  GIVES: items: List<str>\n  MODE: exact\n"
+        "STEP process\n  TAKES: x: str\n  GIVES: r: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH item IN items:\n"
+        "         process(x=item)\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = (tmp_path / "pipe" / "flow.py").read_text()
+    assert "concurrent.futures" not in flow_py
+

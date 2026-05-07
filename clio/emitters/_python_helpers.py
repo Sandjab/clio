@@ -610,3 +610,47 @@ def emit_shell_step(
         f'    result = subprocess.run(_argv, capture_output=True, text=True, check=True, {timeout_arg})\n'
         f'    return result.stdout\n'
     )
+
+
+def emit_parallel_for_each_python(
+    elem: "ForEachIR",
+    steps_by_name: dict,
+    indent: str,
+) -> str:
+    """Emit a ThreadPoolExecutor block for a parallel FOR EACH (python target).
+
+    The body is guaranteed (by IR validation) to be a single CallIR with a
+    GIVES. Default cap is 10. Failure semantics: ThreadPoolExecutor's `with`
+    exit cancels queued futures; in-flight tasks finish; the first
+    `_fut.result()` to raise propagates."""
+    inner = elem.body[0]
+    step = steps_by_name[inner.step_name]
+
+    # Render kwargs using the @-prefix disambiguation. Loop var is in scope.
+    scope_local = {elem.loop_var}
+    kw_parts: list[str] = []
+    for name, value in inner.kwargs:
+        if isinstance(value, str) and value.startswith("@"):
+            ref = value[1:]
+            if ref in scope_local:
+                kw_parts.append(f"{name}={ref}")
+            else:
+                kw_parts.append(f"{name}=state[{ref!r}]")
+        else:
+            kw_parts.append(f"{name}={value!r}")
+    kwargs_str = ", ".join(kw_parts)
+
+    # The collection always lives in state for a parallel FOR EACH.
+    items_lookup = f"state[{elem.collection!r}]"
+
+    return (
+        f"{indent}_items = {items_lookup}\n"
+        f"{indent}_results = [None] * len(_items)\n"
+        f"{indent}with concurrent.futures.ThreadPoolExecutor(max_workers=10) as _ex:\n"
+        f"{indent}    _futures = {{_ex.submit({step.name}_mod.{step.name}, {kwargs_str}): _i "
+        f"for _i, {elem.loop_var} in enumerate(_items)}}\n"
+        f"{indent}    for _fut in concurrent.futures.as_completed(_futures):\n"
+        f"{indent}        _idx = _futures[_fut]\n"
+        f"{indent}        _results[_idx] = _fut.result()\n"
+        f"{indent}state[{elem.collector!r}] = _results"
+    )
