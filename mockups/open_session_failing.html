@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>CLIO — Open Session · tests rouges (mockup)</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<header>
+  <div class="logo">CLIO</div>
+  <div class="crumb">
+    <b>pricing_pipeline.clio</b>
+    <span class="sep">›</span>
+    STEP
+    <span class="sep">›</span>
+    <b>compute_pricing</b>
+  </div>
+  <div class="spacer"></div>
+  <span class="pill fail"><span class="dot"></span> tests en échec · 1 / 4</span>
+  <button class="btn">View .clio</button>
+  <button class="btn">Run tests</button>
+  <button class="btn btn-warn">Iterate with Claude</button>
+</header>
+
+<main>
+
+  <!-- ========== LEFT: CONTEXT ========== -->
+  <aside class="col left">
+    <div class="col-header">Context</div>
+    <div class="col-body">
+
+      <div class="step-card">
+        <h2>compute_pricing</h2>
+        <div class="badges">
+          <span class="badge exact">MODE: exact</span>
+          <span class="badge code">impl: code</span>
+          <span class="badge fail">tests fail</span>
+        </div>
+
+        <div class="section-label">TAKES</div>
+        <div class="field-row">
+          <span class="name">cart</span>: <span class="type">Cart</span>
+        </div>
+        <div class="contract-fields">
+          <div class="field-row"><span class="name">items</span>: <span class="type">List&lt;LineItem&gt;</span></div>
+          <div class="field-row"><span class="name">customer_tier</span>: <span class="type">Literal["std","gold"]</span></div>
+          <div class="field-row"><span class="name">currency</span>: <span class="type">Literal["EUR","USD"]</span></div>
+        </div>
+
+        <div class="section-label">GIVES</div>
+        <div class="field-row">
+          <span class="name">total</span>: <span class="type">Money</span>
+        </div>
+        <div class="contract-fields">
+          <div class="field-row"><span class="name">amount</span>: <span class="type">Decimal</span></div>
+          <div class="field-row"><span class="name">currency</span>: <span class="type">str</span></div>
+        </div>
+
+        <div class="section-label">Sidecar</div>
+        <div class="file-link">_impl/compute_pricing.py</div>
+
+        <div class="section-label">Upstream</div>
+        <div class="neighbor">
+          <span>← build_cart</span>
+          <span class="gives">cart</span>
+        </div>
+
+        <div class="section-label">Downstream</div>
+        <div class="neighbor">
+          <span>format_invoice →</span>
+          <span class="arrow">total</span>
+        </div>
+        <div class="neighbor">
+          <span>charge_card →</span>
+          <span class="arrow">total</span>
+        </div>
+
+      </div>
+    </div>
+  </aside>
+
+  <!-- ========== CENTER: CHAT ========== -->
+  <section class="col chat">
+    <div class="col-header">
+      Claude Code session
+      <span class="pill fail" style="margin-left: auto;">
+        <span class="dot"></span> 1 test en échec
+      </span>
+    </div>
+
+    <div class="chat-body">
+
+      <div class="msg">
+        <div class="avatar user">JL</div>
+        <div class="bubble">
+          <div class="who">vous</div>
+          <div class="body">
+            Ajoute le rejet multi-devise : si un <code>LineItem</code> a une devise
+            différente de <code>cart.currency</code>, lève <code>ValueError</code>.
+          </div>
+        </div>
+      </div>
+
+      <div class="msg">
+        <div class="avatar claude">C</div>
+        <div class="bubble">
+          <div class="who">claude</div>
+          <div class="body">
+            <div class="tool">
+              <div class="head">
+                <span class="icon">▸</span>
+                <span class="args">Edit _impl/compute_pricing.py</span>
+                <span class="status">✓ +3 lines</span>
+                <span class="chev">⌄</span>
+              </div>
+            </div>
+
+            <div class="tool">
+              <div class="head">
+                <span class="icon">▸</span>
+                <span class="args">Edit tests/test_compute_pricing.py</span>
+                <span class="status">✓ +12 lines</span>
+                <span class="chev">⌄</span>
+              </div>
+            </div>
+
+            <div class="tool">
+              <div class="head">
+                <span class="icon">▸</span>
+                <span class="args">Bash: pytest -k compute_pricing -q</span>
+                <span class="status fail">✗ 1 failed</span>
+                <span class="chev">⌄</span>
+              </div>
+              <div class="preview fail">FAILED tests/test_compute_pricing.py::test_mixed_currency_rejected
+AssertionError: ValueError not raised
+  expected:  ValueError("currency mismatch")
+  observed:  Money(amount=Decimal("180.00"), currency="EUR")</div>
+            </div>
+
+            Le test échoue : ma vérification compare <code>cart.currency</code> à
+            <code>item.currency</code> mais <code>LineItem</code> n'a pas d'attribut
+            <code>currency</code> — il est implicite. Je dois soit étendre
+            <code>LineItem</code> dans le contrat, soit retirer cette règle.
+            Que préférez-vous ?
+          </div>
+        </div>
+      </div>
+
+      <div class="msg">
+        <div class="avatar sys">!</div>
+        <div class="bubble">
+          <div class="who">ihm</div>
+          <div class="body" style="color: var(--text-dim); font-size: 12px;">
+            Décision requise — Claude est bloqué sur une ambiguïté du contrat.
+            Cliquez <strong>Iterate</strong> pour relancer avec un nouveau message,
+            ou modifiez <code>Cart</code> dans le <code>.clio</code> et la session reprendra
+            avec le contrat à jour.
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="composer">
+      <div class="composer-box">
+        <textarea placeholder="Réponds à Claude, ou édite d'abord le .clio…">Étends LineItem avec un champ currency: Literal["EUR","USD"]. Mets à jour le contrat puis relance.</textarea>
+        <div class="composer-row">
+          <span class="hint">⌘↵ envoyer · ⇧↵ retour à la ligne</span>
+          <div class="right">
+            <button class="btn">Edit .clio</button>
+            <button class="btn btn-primary">Send</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== RIGHT: FILE + TESTS ========== -->
+  <aside class="col right">
+    <div class="tabs">
+      <div class="tab active">Code <span class="changed"></span></div>
+      <div class="tab">Diff (session)</div>
+      <div class="tab">Schema</div>
+    </div>
+    <div class="file-path">_impl/compute_pricing.py · live mirror</div>
+    <div class="code">
+<div class="line"><span class="ln">1</span><span class="src"><span class="kw">from</span> <span class="sym">decimal</span> <span class="kw">import</span> <span class="typ">Decimal</span>, <span class="typ">ROUND_HALF_UP</span></span></div>
+<div class="line"><span class="ln">2</span><span class="src"><span class="kw">from</span> clio.contracts <span class="kw">import</span> <span class="typ">Cart</span>, <span class="typ">Money</span></span></div>
+<div class="line"><span class="ln">3</span><span class="src"></span></div>
+<div class="line"><span class="ln">4</span><span class="src"><span class="kw">def</span> <span class="fn">compute_pricing</span>(cart: <span class="typ">Cart</span>) -&gt; <span class="typ">Money</span>:</span></div>
+<div class="line"><span class="ln">5</span><span class="src">    <span class="kw">if not</span> cart.items:</span></div>
+<div class="line"><span class="ln">6</span><span class="src">        <span class="kw">raise</span> <span class="typ">ValueError</span>(<span class="str">"empty cart"</span>)</span></div>
+<div class="line"><span class="ln">7</span><span class="src"></span></div>
+<div class="line bad"><span class="ln">8</span><span class="src">    <span class="kw">for</span> it <span class="kw">in</span> cart.items:</span></div>
+<div class="line bad"><span class="ln">9</span><span class="src">        <span class="kw">if</span> it.currency != cart.currency:   <span class="cmt"># ✗ LineItem.currency n'existe pas</span></span></div>
+<div class="line bad"><span class="ln">10</span><span class="src">            <span class="kw">raise</span> <span class="typ">ValueError</span>(<span class="str">"currency mismatch"</span>)</span></div>
+<div class="line"><span class="ln">11</span><span class="src"></span></div>
+<div class="line"><span class="ln">12</span><span class="src">    subtotal = <span class="kw">sum</span>(</span></div>
+<div class="line"><span class="ln">13</span><span class="src">        (<span class="typ">Decimal</span>(<span class="kw">str</span>(it.price)) * it.qty <span class="kw">for</span> it <span class="kw">in</span> cart.items),</span></div>
+<div class="line"><span class="ln">14</span><span class="src">        start=<span class="typ">Decimal</span>(<span class="str">"0"</span>),</span></div>
+<div class="line"><span class="ln">15</span><span class="src">    )</span></div>
+<div class="line"><span class="ln">16</span><span class="src"></span></div>
+<div class="line"><span class="ln">17</span><span class="src">    <span class="kw">if</span> cart.customer_tier == <span class="str">"gold"</span>:</span></div>
+<div class="line"><span class="ln">18</span><span class="src">        subtotal *= (<span class="typ">Decimal</span>(<span class="str">"1"</span>) - <span class="typ">Decimal</span>(<span class="str">"0.10"</span>))</span></div>
+<div class="line"><span class="ln">19</span><span class="src"></span></div>
+<div class="line"><span class="ln">20</span><span class="src">    total = subtotal * (<span class="typ">Decimal</span>(<span class="str">"1"</span>) + <span class="typ">Decimal</span>(<span class="str">"0.20"</span>))</span></div>
+<div class="line"><span class="ln">21</span><span class="src">    total = total.quantize(<span class="typ">Decimal</span>(<span class="str">"0.01"</span>), rounding=<span class="typ">ROUND_HALF_UP</span>)</span></div>
+<div class="line"><span class="ln">22</span><span class="src">    <span class="kw">return</span> <span class="typ">Money</span>(amount=total, currency=cart.currency)</span></div>
+    </div>
+
+    <div class="tests">
+      <div class="tests-head">
+        <span class="title">pytest · auto-run on save</span>
+        <span class="result fail">✗ 1 failed · 3 passed · 0.21s</span>
+        <button class="btn btn-warn iterate-btn">Iterate</button>
+      </div>
+      <div class="tests-body">tests/test_compute_pricing.py <span class="ok">...</span><span class="ko">F</span>                  [100%]
+
+<span class="dim">  test_empty_cart_raises          PASSED</span>
+<span class="dim">  test_std_tier_with_vat          PASSED</span>
+<span class="dim">  test_gold_tier_discount_then_vat PASSED</span>
+<span class="ko">  test_mixed_currency_rejected    FAILED</span>
+<span class="ko">    AttributeError: 'LineItem' object has no attribute 'currency'
+    at _impl/compute_pricing.py:9 in compute_pricing</span></div>
+    </div>
+  </aside>
+
+</main>
+
+</body>
+</html>
