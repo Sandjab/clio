@@ -93,6 +93,8 @@ from <pkg>.flow import run
 result = run(file="customers.csv")
 ```
 
+- **FOR EACH PARALLEL:** supported via `concurrent.futures.ThreadPoolExecutor` (cap = 10).
+
 ### Cache layout interchangeable with `claude-cli`
 
 Both targets read/write `<output>/.cache/<step_name>/<sha256>.json` with the same key derivation (SHA256 of `step + model + prompt + schema`). Switching targets between runs preserves cache hits.
@@ -168,6 +170,7 @@ The following are rejected at compile time with a clear error and a pointer to `
 These work identically to the `python` target (shared helpers in `_python_helpers.py`):
 
 - `FOR EACH ... IN ...:` — emits `for var in state[...]:` with body step calls.
+- **FOR EACH PARALLEL:** supported via `asyncio.gather` + `Semaphore(10)`. Judgment steps thread the MCP session per task.
 - `CACHE: ttl(...)` — same on-disk layout as `python` and `claude-cli`; cache files are interchangeable.
 - `ON_FAIL: retry / escalate / fallback / abort` — full strategy chain.
 - `impl.mode: rest` — emits `requests.request(...)` with `${var}` URL templating.
