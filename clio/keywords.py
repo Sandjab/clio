@@ -66,3 +66,5 @@ class Keyword(str, Enum):
     FOR = "FOR"
     EACH = "EACH"
     IN = "IN"
+    PARALLEL = "PARALLEL"
+    AS = "AS"

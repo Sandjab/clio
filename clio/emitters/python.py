@@ -27,6 +27,8 @@ from clio.emitters._python_helpers import (
     _type_to_python,
     emit_contracts,
     emit_default_exact_step,
+    _has_parallel,
+    emit_parallel_for_each_python,
     emit_rest_step,
     emit_shell_step,
 )
@@ -366,6 +368,7 @@ class PythonEmitter(BaseEmitter):
 
         chain_lines: list[str] = []
         imported_steps: list[str] = []
+        steps_by_name = {s.name: s for s in graph.steps}
 
         def _emit_call(call: CallIR, indent: str, scope_local: set[str]) -> None:
             step = next(s for s in graph.steps if s.name == call.step_name)
@@ -397,6 +400,12 @@ class PythonEmitter(BaseEmitter):
 
         def _emit_item(item, indent: str, scope_local: set[str]) -> None:
             if isinstance(item, ForEachIR):
+                if item.parallel:
+                    chain_lines.append(emit_parallel_for_each_python(item, steps_by_name, indent))
+                    inner = item.body[0]
+                    if inner.step_name not in imported_steps:
+                        imported_steps.append(inner.step_name)
+                    return
                 # FOR EACH item IN collection:
                 #     <body>
                 source = (
@@ -420,6 +429,9 @@ class PythonEmitter(BaseEmitter):
         for item in graph.flow.chain:
             _emit_item(item, "    ", set())
 
+        needs_concurrent = _has_parallel(graph.flow.chain)
+        cf_import = "import concurrent.futures\n\n" if needs_concurrent else ""
+
         imports = "\n".join(f"from .steps import {n} as {n}_mod" for n in imported_steps)
 
         return (
@@ -427,6 +439,7 @@ class PythonEmitter(BaseEmitter):
             f'Auto-generated. Calls steps in chain order, threading state through a dict.\n'
             f'"""\n'
             f'\n'
+            f'{cf_import}'
             f'{imports}\n'
             f'\n'
             f'\n'

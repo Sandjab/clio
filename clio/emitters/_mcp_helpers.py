@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json as _json
 
+from clio.emitters._python_helpers import _has_parallel
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import CallIR, FlowGraph, ForEachIR, StepIR
 from clio.parser.ast_nodes import ContractRef, ListType
@@ -271,6 +272,7 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
 
     chain_lines: list[str] = []
     imported_steps: list[str] = []
+    steps_by_name = {s.name: s for s in graph.steps}
 
     def _emit_call(call: CallIR, indent: str, scope_local: set[str]) -> None:
         step = next(s for s in graph.steps if s.name == call.step_name)
@@ -304,6 +306,12 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
 
     def _emit_item(item, indent: str, scope_local: set[str]) -> None:
         if isinstance(item, ForEachIR):
+            if item.parallel:
+                chain_lines.append(emit_parallel_for_each_mcp(item, steps_by_name, indent))
+                inner = item.body[0]
+                if inner.step_name not in imported_steps:
+                    imported_steps.append(inner.step_name)
+                return
             source = (
                 item.collection
                 if item.collection in scope_local
@@ -326,11 +334,13 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
         _emit_item(item, "    ", set())
 
     imports = "\n".join(f"from .steps import {n} as {n}_mod" for n in imported_steps)
+    asyncio_import = "import asyncio\n\n" if _has_parallel(graph.flow.chain) else ""
 
     return (
         '"""Async FLOW orchestrator. Auto-generated; do not edit."""\n'
         "from __future__ import annotations\n"
         "\n"
+        f"{asyncio_import}"
         f"{imports}\n"
         "\n"
         "\n"
@@ -338,6 +348,51 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
         "    state: dict = dict(initial)\n"
         + "\n".join(chain_lines)
         + "\n    return state\n"
+    )
+
+
+def emit_parallel_for_each_mcp(
+    elem: "ForEachIR",
+    steps_by_name: dict,
+    indent: str,
+) -> str:
+    """Emit an asyncio.gather block for a parallel FOR EACH (mcp-server target)."""
+    inner = elem.body[0]
+    step = steps_by_name[inner.step_name]
+    is_judgment = step.mode == "judgment"
+
+    scope_local = {elem.loop_var}
+    kw_parts: list[str] = []
+    for name, value in inner.kwargs:
+        if isinstance(value, str) and value.startswith("@"):
+            ref = value[1:]
+            if ref in scope_local:
+                kw_parts.append(f"{name}={ref}")
+            else:
+                kw_parts.append(f"{name}=state[{ref!r}]")
+        else:
+            kw_parts.append(f"{name}={value!r}")
+    kwargs_str = ", ".join(kw_parts)
+
+    if is_judgment:
+        if kwargs_str:
+            call_expr = f"await {step.name}_mod.{step.name}({kwargs_str}, _session=_session)"
+        else:
+            call_expr = f"await {step.name}_mod.{step.name}(_session=_session)"
+    else:
+        call_expr = f"{step.name}_mod.{step.name}({kwargs_str})"
+
+    items_lookup = f"state[{elem.collection!r}]"
+    bound_name = f"_bound_{elem.collector}"
+
+    return (
+        f"{indent}_items = {items_lookup}\n"
+        f"{indent}_sem = asyncio.Semaphore(10)\n"
+        f"{indent}async def {bound_name}({elem.loop_var}):\n"
+        f"{indent}    async with _sem:\n"
+        f"{indent}        return {call_expr}\n"
+        f"{indent}state[{elem.collector!r}] = await asyncio.gather("
+        f"*[{bound_name}(_x) for _x in _items])"
     )
 
 

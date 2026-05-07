@@ -458,3 +458,56 @@ def test_e2e_compiled_server_responds_to_initialize(tmp_path):
     finally:
         proc.terminate()
         proc.wait(timeout=5)
+
+
+_PARALLEL_EXACT_SRC = (
+    "STEP load\n  GIVES: docs: List<str>\n  MODE: exact\n"
+    "STEP classify\n  TAKES: text: str\n  GIVES: label: str\n  MODE: exact\n"
+    "FLOW pipe\n"
+    "  load()\n"
+    "    -> FOR EACH doc IN docs PARALLEL AS labels:\n"
+    "         classify(text=doc)\n"
+)
+
+
+_PARALLEL_JUDGMENT_SRC = (
+    "STEP load\n  GIVES: docs: List<str>\n  MODE: exact\n"
+    "STEP classify\n  TAKES: text: str\n  GIVES: label: str\n  MODE: judgment\n"
+    "FLOW pipe\n"
+    "  load()\n"
+    "    -> FOR EACH doc IN docs PARALLEL AS labels:\n"
+    "         classify(text=doc)\n"
+)
+
+
+def test_mcp_emits_asyncio_gather_for_parallel_for_each(tmp_path):
+    MCPServerEmitter().emit(build_ir(parse(_PARALLEL_EXACT_SRC)), tmp_path)
+    flow_py = (tmp_path / "pipe" / "flow.py").read_text()
+    assert "import asyncio" in flow_py
+    assert "asyncio.Semaphore(10)" in flow_py
+    assert "asyncio.gather" in flow_py
+    assert "state['labels']" in flow_py or 'state["labels"]' in flow_py
+
+
+def test_mcp_parallel_judgment_threads_session_per_iteration(tmp_path):
+    MCPServerEmitter().emit(build_ir(parse(_PARALLEL_JUDGMENT_SRC)), tmp_path)
+    flow_py = (tmp_path / "pipe" / "flow.py").read_text()
+    # Each task awaits the judgment step with _session.
+    assert "await classify_mod.classify" in flow_py
+    assert "_session=_session" in flow_py
+
+
+def test_mcp_does_not_import_asyncio_in_flow_when_no_parallel(tmp_path):
+    """Sequential-only flow.py must not gain a top-level `import asyncio`
+    (not strictly harmful, but pollutes the output unnecessarily)."""
+    src = (
+        "STEP load\n  GIVES: items: List<str>\n  MODE: exact\n"
+        "STEP process\n  TAKES: x: str\n  GIVES: r: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH item IN items:\n"
+        "         process(x=item)\n"
+    )
+    MCPServerEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = (tmp_path / "pipe" / "flow.py").read_text()
+    assert "import asyncio" not in flow_py

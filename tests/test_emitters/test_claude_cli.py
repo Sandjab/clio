@@ -405,3 +405,17 @@ def test_claude_cli_emit_for_each_judgment_in_body_raises(tmp_path):
         ClaudeCLIEmitter().emit(build_ir(parse(src)), tmp_path)
     assert "judgment" in str(exc.value)
     assert "FOR EACH" in str(exc.value)
+
+
+def test_claude_cli_rejects_parallel(tmp_path):
+    import pytest as _pytest
+    src = (
+        "STEP load\n  GIVES: items: List<str>\n  MODE: exact\n"
+        "STEP process\n  TAKES: x: str\n  GIVES: r: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH item IN items PARALLEL AS results:\n"
+        "         process(x=item)\n"
+    )
+    with _pytest.raises(ValueError, match="claude-cli target does not support FOR EACH PARALLEL"):
+        ClaudeCLIEmitter().emit(build_ir(parse(src)), tmp_path)

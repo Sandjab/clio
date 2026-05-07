@@ -24,6 +24,7 @@ Also lifts `FOR EACH <var> IN <collection>:` from spec-only to implemented contr
 | `invoke.mode: embedded` / `mcp_sampling` | ❌ | ❌ | ❌ | ❌ | ✅ — `sampling/createMessage` via MCP client |
 | `FOR EACH ... IN ...:` | ✅ | ✅ | ✅ `for x in state[...]:` | ✅ `mapfile` + bash `for` loop | ✅ `for x in state[...]:` |
 | Judgment step inside FOR EACH | parses fine | builds fine | works | rejected at emit | works |
+| `FOR EACH ... PARALLEL AS <name>` | ✅ | ✅ | ✅ `ThreadPoolExecutor` | ❌ rejected | ✅ `asyncio.gather` |
 
 Where the table says *rejected at compile time*, the emitter raises a clear `ValueError` / `NotImplementedError` rather than producing silent or broken code.
 
@@ -388,6 +389,27 @@ Iterates over a collection. The loop variable is available inside the block.
 FOR EACH <item> IN <collection>:
   <step_call(item)>
 ```
+
+#### PARALLEL
+
+Fan a single STEP over a collection in parallel. The collected results land in `state[<collector>]` as a `List<step.gives.type>`.
+
+```clio
+FOR EACH <loop_var> IN <collection> PARALLEL AS <collector>:
+  <single_step_call(loop_var)>
+```
+
+**v1 constraints:**
+- Body is exactly one step call (no chains, no nested FOR EACH).
+- The body step must have a `GIVES` (otherwise the collector type is undefined).
+- Default concurrency cap = 10. Not configurable in v1.
+- Failure mode = fail-fast (first definitive failure cancels siblings on mcp-server, raises after queued cancellation on python).
+- Nested PARALLEL (transitive) is rejected. PARALLEL inside a sequential FOR EACH is allowed.
+- claude-cli target rejects PARALLEL at compile time; use `--target python` or `--target mcp-server`.
+
+**Emission:**
+- python target → `concurrent.futures.ThreadPoolExecutor(max_workers=10)` + `as_completed` (preserves order via indexed write).
+- mcp-server target → `asyncio.gather` + `asyncio.Semaphore(10)`. Judgment-mode body steps thread `_session=_session` per task.
 
 ### WHILE
 

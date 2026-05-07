@@ -120,11 +120,16 @@ class CallIR:
 @dataclass(frozen=True)
 class ForEachIR:
     """IR mirror of ForEachBlock: iterate `loop_var` over `collection` (a state
-    field name), executing `body` for each element."""
+    field name), executing `body` for each element.
+
+    `parallel=True` + `collector=<name>` means the body runs concurrently for
+    each item, and results are collected into `state[<collector>]` as a list."""
     loop_var: str
     collection: str
     body: "tuple[CallIR | ForEachIR, ...]"
     line: int
+    parallel: bool = False
+    collector: str | None = None
 
 
 @dataclass(frozen=True)

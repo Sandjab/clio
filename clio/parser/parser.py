@@ -995,6 +995,30 @@ class _Parser:
         var_tok = self.expect(TokenType.IDENT)
         self.expect(TokenType.KEYWORD, "IN")
         collection_tok = self.expect(TokenType.IDENT)
+
+        parallel = False
+        collector: str | None = None
+
+        # Optional `PARALLEL AS <ident>` between collection and ':'
+        next_tok = self.peek()
+        if next_tok.type == TokenType.KEYWORD and next_tok.value == "PARALLEL":
+            self.advance()
+            as_tok = self.peek()
+            if not (as_tok.type == TokenType.KEYWORD and as_tok.value == "AS"):
+                raise ParseError(
+                    f"PARALLEL requires an AS <name> binding",
+                    next_tok.line, next_tok.col,
+                )
+            self.advance()
+            collector_tok = self.expect(TokenType.IDENT)
+            parallel = True
+            collector = collector_tok.value
+        elif next_tok.type == TokenType.KEYWORD and next_tok.value == "AS":
+            raise ParseError(
+                f"AS binding is only valid with PARALLEL — sequential FOR EACH discards results",
+                next_tok.line, next_tok.col,
+            )
+
         self.expect(TokenType.COLON)
         self.expect(TokenType.NEWLINE)
         self.expect(TokenType.INDENT)
@@ -1022,6 +1046,8 @@ class _Parser:
             collection=collection_tok.value,
             body=tuple(body),
             line=kw.line, col=kw.col,
+            parallel=parallel,
+            collector=collector,
         )
 
     def parse_step_call(self) -> StepCall:

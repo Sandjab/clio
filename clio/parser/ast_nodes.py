@@ -85,12 +85,17 @@ class ForEachBlock:
         <body>
 
     `collection` is the name of a state field (the GIVES of an upstream step).
-    `body` is a chain of FlowItems executed for each element."""
+    `body` is a chain of FlowItems executed for each element.
+
+    `parallel=True` + `collector=<name>` means the body runs concurrently for
+    each item, and results are collected into `state[<collector>]` as a list."""
     loop_var: str
     collection: str
     body: "tuple[StepCall | ForEachBlock, ...]"
     line: int
     col: int
+    parallel: bool = False
+    collector: str | None = None
 
 
 @dataclass(frozen=True)
