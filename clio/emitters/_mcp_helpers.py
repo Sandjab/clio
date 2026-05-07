@@ -238,20 +238,6 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
     )
 
 
-def _emit_exact_step_stub(step_name: str) -> str:
-    """Placeholder exact-step body. Task 2 plugs the real signature in."""
-    return (
-        f'"""STEP {step_name} (exact). Auto-generated stub."""\n'
-        "from __future__ import annotations\n"
-        "\n"
-        "\n"
-        f"def {step_name}(**kwargs):\n"
-        "    raise NotImplementedError(\n"
-        f"        \"Implement steps/{step_name}.py: this is an exact (deterministic) step.\"\n"
-        "    )\n"
-    )
-
-
 def emit_judgment_step_via_sampling(
     step: StepIR, graph: FlowGraph, contracts_by_name: dict
 ) -> str:
