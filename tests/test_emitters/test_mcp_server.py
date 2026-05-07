@@ -1,5 +1,8 @@
 import ast
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 from clio.emitters.mcp_server import MCPServerEmitter
@@ -385,3 +388,44 @@ def test_emit_writes_readme_with_mcp_client_config(tmp_path):
     assert "hello" in readme
     assert '"command": "python"' in readme
     assert '"-m"' in readme
+
+
+@pytest.mark.skipif(
+    os.environ.get("CLIO_MCP_E2E") != "1",
+    reason="MCP smoke test gated; set CLIO_MCP_E2E=1 to run",
+)
+def test_e2e_compiled_server_responds_to_initialize(tmp_path):
+    src = (
+        "STEP greet\n"
+        "  TAKES: name: str\n"
+        "  GIVES: msg: str\n"
+        "  MODE:  exact\n"
+        "FLOW hello\n"
+        "  greet(name=\"World\")\n"
+    )
+    MCPServerEmitter().emit(build_ir(parse(src)), tmp_path)
+
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "--quiet", "-e", str(tmp_path)],
+    )
+
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "hello"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        request = (
+            '{"jsonrpc":"2.0","id":1,"method":"initialize",'
+            '"params":{"protocolVersion":"2024-11-05","capabilities":{},'
+            '"clientInfo":{"name":"smoke","version":"0"}}}\n'
+        )
+        proc.stdin.write(request)
+        proc.stdin.flush()
+        line = proc.stdout.readline()
+        assert "jsonrpc" in line
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
