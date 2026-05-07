@@ -1,5 +1,4 @@
 import ast
-import re
 from pathlib import Path
 
 from clio.emitters.mcp_server import MCPServerEmitter
@@ -57,10 +56,6 @@ _FLOW_WITH_TAKES_SRC = (
     "  greet(name=\"World\", count=3)\n"
 )
 
-# ast.literal_eval alias — avoids false-positive security scanner on the word 'eval'
-_safe_parse_literal = getattr(ast, "literal_eval")
-
-
 def _extract_input_schema(server_py: str, tool_name: str) -> dict:
     """Pull the inputSchema dict literal out of the emitted server.py via AST walk."""
     tree = ast.parse(server_py)
@@ -68,7 +63,7 @@ def _extract_input_schema(server_py: str, tool_name: str) -> dict:
         if isinstance(node, ast.Call):
             for kw in node.keywords:
                 if kw.arg == "inputSchema":
-                    return _safe_parse_literal(kw.value)
+                    return ast.literal_eval(kw.value)
     raise AssertionError(f"inputSchema for {tool_name} not found in server.py")
 
 
