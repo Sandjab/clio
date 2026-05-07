@@ -14,6 +14,7 @@ from clio.emitters._mcp_helpers import (
     _emit_server_module,
     _pyproject_for_mcp,
 )
+from clio.emitters._python_helpers import emit_default_exact_step
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import FlowGraph
 
@@ -37,7 +38,6 @@ class MCPServerEmitter(BaseEmitter):
         (pkg_dir / "server.py").write_text(_emit_server_module(pkg_name, graph))
         (pkg_dir / "flow.py").write_text(_emit_flow_module_async(graph))
 
-        from clio.emitters._python_helpers import emit_default_exact_step
         contracts_by_name = {c.name: c for c in graph.contracts}
         for step in graph.steps:
             if step.mode == "exact":

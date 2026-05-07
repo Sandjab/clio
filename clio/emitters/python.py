@@ -25,6 +25,7 @@ from clio.emitters._python_helpers import (
     _to_class_name,
     _to_field_name,
     _type_to_python,
+    emit_default_exact_step,
 )
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import (
@@ -158,7 +159,6 @@ class PythonEmitter(BaseEmitter):
             return self._emit_shell_step(step, contracts_by_name, step.impl)
 
         # default branch (no impl, or impl.mode: code)
-        from clio.emitters._python_helpers import emit_default_exact_step
         return emit_default_exact_step(step, contracts_by_name)
 
     def _emit_rest_step(
