@@ -142,3 +142,25 @@ def test_cli_graph_missing_source_returns_2(tmp_path, capsys):
     assert rc == 2
     err = capsys.readouterr().out
     assert "source file not found" in err
+
+
+_PARALLEL_FOREACH_SRC = (
+    "STEP load\n  GIVES: docs: List<str>\n  MODE: exact\n"
+    "STEP classify\n  TAKES: text: str\n  GIVES: label: str\n  MODE: exact\n"
+    "FLOW pipe\n"
+    "  load()\n"
+    "    -> FOR EACH doc IN docs PARALLEL AS labels:\n"
+    "         classify(text=doc)\n"
+)
+
+
+def test_graph_mermaid_marks_parallel_for_each():
+    """Parallel FOR EACH nodes should be visually distinguished from sequential ones."""
+    out = _mermaid(_PARALLEL_FOREACH_SRC)
+    assert "[parallel]" in out
+
+
+def test_graph_dot_marks_parallel_for_each():
+    """DOT edge label for parallel FOR EACH should include '[parallel]'."""
+    out = _dot(_PARALLEL_FOREACH_SRC)
+    assert "[parallel]" in out

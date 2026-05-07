@@ -54,7 +54,10 @@ def to_mermaid(graph: FlowGraph) -> str:
             elif isinstance(elem, ForEachIR):
                 state["foreach_idx"] += 1
                 sg_id = f"foreach_{state['foreach_idx']}"
-                label = f"FOR EACH {elem.loop_var} IN {elem.collection}"
+                if elem.parallel:
+                    label = f"FOR EACH {elem.loop_var} IN {elem.collection} [parallel]"
+                else:
+                    label = f"FOR EACH {elem.loop_var} IN {elem.collection}"
                 lines.append(f'{indent}subgraph {sg_id}["{label}"]')
                 walk(elem.body, indent + "    ", None)
                 lines.append(f"{indent}end")
@@ -137,7 +140,10 @@ def to_dot(graph: FlowGraph) -> str:
                     continue
                 walk(elem.body, None)
                 if prev_id is not None:
-                    edge_label = f"for each {elem.loop_var} in {elem.collection}"
+                    if elem.parallel:
+                        edge_label = f"for each {elem.loop_var} in {elem.collection} [parallel]"
+                    else:
+                        edge_label = f"for each {elem.loop_var} in {elem.collection}"
                     lines.append(
                         f'    {prev_id} -> {target} [label="{edge_label}", style=dashed];'
                     )

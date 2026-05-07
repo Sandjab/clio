@@ -318,8 +318,15 @@ def _build_flow_items(
     out: list = []
     for item in chain:
         if isinstance(item, ForEachBlock):
-            out.append(_build_for_each(item, steps_by_name, contracts, available))
-            # FOR EACH does not contribute to the outer state in v0.
+            foreach_ir = _build_for_each(item, steps_by_name, contracts, available)
+            out.append(foreach_ir)
+            # PARALLEL FOR EACH with a collector makes List<body.gives.type> available.
+            if foreach_ir.parallel and foreach_ir.collector and len(foreach_ir.body) == 1:
+                body_call = foreach_ir.body[0]
+                if hasattr(body_call, "step_name"):
+                    body_step = steps_by_name.get(body_call.step_name)
+                    if body_step is not None and body_step.gives is not None:
+                        available[foreach_ir.collector] = ListType(inner=body_step.gives.type)
             continue
         # StepCall path
         out.append(_build_call(item, steps_by_name, contracts, available))

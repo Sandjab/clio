@@ -1,0 +1,19 @@
+STEP load_corpus
+  GIVES: docs: List<str>
+  MODE:  exact
+
+STEP classify
+  TAKES: text: str
+  GIVES: label: str
+  MODE:  judgment
+
+STEP aggregate
+  TAKES: labels: List<str>
+  GIVES: summary: str
+  MODE:  judgment
+
+FLOW pipe
+  load_corpus()
+    -> FOR EACH doc IN docs PARALLEL AS labels:
+         classify(text=doc)
+    -> aggregate(labels=labels)
