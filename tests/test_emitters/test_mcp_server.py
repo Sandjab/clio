@@ -331,3 +331,44 @@ def test_emit_on_fail_chain_appears_in_judgment_body(tmp_path):
     MCPServerEmitter().emit(build_ir(parse(src)), tmp_path)
     body = (tmp_path / "f" / "steps" / "classify.py").read_text()
     assert "retry" in body.lower() or "_attempt" in body
+
+
+def test_input_schema_keeps_state_ref_kwarg_in_required(tmp_path):
+    """A kwarg whose value is a state-ref (@-prefixed) must stay in `required`
+    — it has no compile-time literal default.  The parser/builder rejects @-refs
+    in the first call (nothing is in scope yet), so we build the IR directly."""
+    from clio.ir.graph import CallIR, FieldIR, FlowGraph, FlowIR, StepIR
+    from clio.parser.ast_nodes import PrimitiveType
+
+    step = StepIR(
+        name="greet",
+        mode="exact",
+        takes=(
+            FieldIR(name="name", type=PrimitiveType(name="str")),
+            FieldIR(name="count", type=PrimitiveType(name="int")),
+        ),
+        gives=FieldIR(name="msg", type=PrimitiveType(name="str")),
+        cache=None,
+        on_fail=None,
+        lang=None,
+        impl=None,
+        invoke=None,
+        line=1,
+    )
+    # "name" has a literal default; "count" is a state-ref — no literal default.
+    call = CallIR(
+        step_name="greet",
+        kwargs=(("name", "World"), ("count", "@some_count")),
+        line=5,
+    )
+    graph = FlowGraph(
+        steps=(step,),
+        flow=FlowIR(name="hello", chain=(call,), line=5),
+    )
+    MCPServerEmitter().emit(graph, tmp_path)
+    server_py = (tmp_path / "hello" / "server.py").read_text()
+    schema = _extract_input_schema(server_py, "hello")
+    assert schema["properties"]["name"]["default"] == "World"
+    assert "name" not in schema["required"]
+    assert "count" in schema["required"]
+    assert "default" not in schema["properties"]["count"]
