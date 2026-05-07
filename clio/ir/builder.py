@@ -444,7 +444,7 @@ def _validate_parallel_for_each(graph: FlowGraph) -> None:
                 for t in first_step.takes:
                     populated.add(t.name)
 
-    def _walk(chain, ancestor_parallel: bool) -> None:
+    def _walk(chain) -> None:
         for elem in chain:
             if hasattr(elem, "step_name"):
                 # CallIR — record GIVES into populated state
@@ -455,11 +455,6 @@ def _validate_parallel_for_each(graph: FlowGraph) -> None:
 
             # ForEachIR
             if elem.parallel:
-                if ancestor_parallel:
-                    raise IRBuildError(
-                        f"FOR EACH PARALLEL cannot be nested inside another "
-                        f"PARALLEL block in v1 (line {elem.line})"
-                    )
                 if len(elem.body) != 1:
                     raise IRBuildError(
                         f"FOR EACH PARALLEL body must contain exactly one "
@@ -491,9 +486,9 @@ def _validate_parallel_for_each(graph: FlowGraph) -> None:
                 populated.add(elem.collector)
             else:
                 # Sequential FOR EACH — descend; inner may be PARALLEL
-                _walk(elem.body, ancestor_parallel)
+                _walk(elem.body)
 
-    _walk(graph.flow.chain, ancestor_parallel=False)
+    _walk(graph.flow.chain)
 
 
 def _render(t: TypeExpr) -> str:
