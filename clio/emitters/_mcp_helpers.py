@@ -2,7 +2,8 @@
 import from here, never from each other."""
 from __future__ import annotations
 
-from clio.ir.graph import FlowGraph
+from clio.ir.contracts import type_to_json_schema
+from clio.ir.graph import CallIR, FlowGraph, ForEachIR, StepIR
 
 
 def _pyproject_for_mcp(pkg_name: str, *, needs_pydantic: bool, needs_requests: bool) -> str:
@@ -62,27 +63,74 @@ def _emit_main_module(pkg_name: str) -> str:
     )
 
 
-def _emit_server_module_minimal(pkg_name: str, graph: FlowGraph) -> str:
-    """Bare server: registers each FLOW as a tool with a placeholder body.
-    Real input/output schemas land in Task 2; real flow dispatch in Task 3."""
-    flow_names = [graph.flow.name] if graph.flow is not None else []
-    list_entries = ",\n".join(
-        f'        Tool(name={n!r}, description="Auto-generated from FLOW {n}", '
-        'inputSchema={"type": "object", "properties": {}, "required": []})'
-        for n in flow_names
+def _first_step_of_flow(graph: FlowGraph) -> StepIR | None:
+    """Returns the StepIR for the first CallIR in the flow chain, or None."""
+    if graph.flow is None:
+        return None
+    by_name = {s.name: s for s in graph.steps}
+    for elem in graph.flow.chain:
+        if isinstance(elem, CallIR):
+            return by_name.get(elem.step_name)
+        if isinstance(elem, ForEachIR):
+            for inner in elem.body:
+                if isinstance(inner, CallIR):
+                    return by_name.get(inner.step_name)
+    return None
+
+
+def _input_schema_for_flow(graph: FlowGraph) -> dict:
+    first = _first_step_of_flow(graph)
+    if first is None or not first.takes:
+        return {"type": "object", "properties": {}, "required": []}
+    properties = {t.name: type_to_json_schema(t.type) for t in first.takes}
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": [t.name for t in first.takes],
+    }
+
+
+def _emit_server_module(pkg_name: str, graph: FlowGraph) -> str:
+    flow_name = graph.flow.name if graph.flow is not None else None
+    if flow_name is None:
+        return (
+            '"""MCP server for this CLIO-compiled package."""\n'
+            "from __future__ import annotations\n"
+            "\n"
+            "from mcp.server.lowlevel import Server\n"
+            "from mcp.types import TextContent, Tool\n"
+            "\n"
+            f"server = Server({pkg_name!r})\n"
+            "\n"
+            "\n"
+            "@server.list_tools()\n"
+            "async def list_tools() -> list[Tool]:\n"
+            "    return []\n"
+            "\n"
+            "\n"
+            "@server.call_tool()\n"
+            "async def call_tool(name: str, arguments: dict) -> list[TextContent]:\n"
+            "    raise ValueError(f'unknown tool: {name}')\n"
+        )
+
+    schema = _input_schema_for_flow(graph)
+    tool_entry = (
+        f"        Tool(\n"
+        f"            name={flow_name!r},\n"
+        f'            description="Auto-generated from FLOW {flow_name}",\n'
+        f"            inputSchema={schema!r},\n"
+        f"        )"
     )
-    dispatch = "\n".join(
-        f'    if name == {n!r}:\n'
-        '        return [TextContent(type="text", text="not yet implemented")]'
-        for n in flow_names
-    ) or "    raise ValueError(f'unknown tool: {name}')"
-    trailing_raise = "    raise ValueError(f'unknown tool: {name}')\n" if flow_names else ""
     return (
         '"""MCP server for this CLIO-compiled package."""\n'
         "from __future__ import annotations\n"
         "\n"
+        "import json\n"
+        "\n"
         "from mcp.server.lowlevel import Server\n"
         "from mcp.types import TextContent, Tool\n"
+        "\n"
+        "from . import flow as _flow\n"
         "\n"
         f"server = Server({pkg_name!r})\n"
         "\n"
@@ -90,14 +138,16 @@ def _emit_server_module_minimal(pkg_name: str, graph: FlowGraph) -> str:
         "@server.list_tools()\n"
         "async def list_tools() -> list[Tool]:\n"
         "    return [\n"
-        f"{list_entries}\n"
+        f"{tool_entry},\n"
         "    ]\n"
         "\n"
         "\n"
         "@server.call_tool()\n"
         "async def call_tool(name: str, arguments: dict) -> list[TextContent]:\n"
-        f"{dispatch}\n"
-        f"{trailing_raise}"
+        f"    if name == {flow_name!r}:\n"
+        "        result = await _flow.run(**arguments)\n"
+        '        return [TextContent(type="text", text=json.dumps(result, default=str))]\n'
+        "    raise ValueError(f'unknown tool: {name}')\n"
     )
 
 
