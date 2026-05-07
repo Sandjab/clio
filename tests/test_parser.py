@@ -832,6 +832,14 @@ def test_parse_for_each_with_arrow_chain_in_body():
     assert [c.name for c in fe.body] == ["a", "b"]
 
 
+def test_for_each_block_defaults_are_sequential():
+    """Sequential FOR EACH must build with parallel=False, collector=None."""
+    flow = next(d for d in parse(_FOREACH_SRC).decls if d.__class__.__name__ == "FlowDecl")
+    fe = flow.chain[1]
+    assert fe.parallel is False
+    assert fe.collector is None
+
+
 def test_parse_for_each_nested():
     src = (
         "STEP load\n  GIVES: matrix: List<str>\n  MODE: exact\n"
