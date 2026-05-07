@@ -6,7 +6,7 @@ import json as _json
 
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import CallIR, FlowGraph, ForEachIR, StepIR
-from clio.parser.ast_nodes import ContractRef
+from clio.parser.ast_nodes import ContractRef, ListType
 
 
 def _emit_readme(pkg_name: str, graph: FlowGraph) -> str:
@@ -153,6 +153,13 @@ def _output_schema_for_flow(graph: FlowGraph) -> dict | None:
         if contract is None:
             return None
         return contract.json_schema
+    # List<ContractRef> → inline items schema; never emit a $ref (clients can't resolve it)
+    if isinstance(t, ListType) and isinstance(t.inner, ContractRef):
+        by_name = {c.name: c for c in graph.contracts}
+        contract = by_name.get(t.inner.name)
+        if contract is None:
+            return None
+        return {"type": "array", "items": contract.json_schema}
     try:
         return type_to_json_schema(t)
     except (NotImplementedError, Exception):

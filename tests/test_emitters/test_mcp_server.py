@@ -390,6 +390,35 @@ def test_emit_writes_readme_with_mcp_client_config(tmp_path):
     assert '"-m"' in readme
 
 
+def test_emit_output_schema_for_list_of_contract_inlines_items(tmp_path):
+    """List<ContractRef> in last step's GIVES must inline the items schema —
+    no $ref leaks (clients can't resolve it)."""
+    src = (
+        "CONTRACT classification\n"
+        "  SHAPE: {label: str, confidence: float}\n"
+        "STEP classify_all\n  TAKES: texts: List<str>\n  GIVES: results: List<classification>\n"
+        "  MODE: judgment\n"
+        'FLOW f\n  classify_all(texts="placeholder")\n'
+    )
+    MCPServerEmitter().emit(build_ir(parse(src)), tmp_path)
+    server_py = (tmp_path / "f" / "server.py").read_text()
+    tree = ast.parse(server_py)
+    output_schema = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            for kw in node.keywords:
+                if kw.arg == "outputSchema":
+                    output_schema = ast.literal_eval(kw.value)
+    assert output_schema is not None, "outputSchema not present in server.py"
+    assert output_schema["type"] == "array"
+    items = output_schema["items"]
+    # No $ref — inlined.
+    assert "$ref" not in items
+    # Items schema reflects the contract's fields.
+    assert "label" in items["properties"]
+    assert items["properties"]["confidence"]["type"] == "number"
+
+
 @pytest.mark.skipif(
     os.environ.get("CLIO_MCP_E2E") != "1",
     reason="MCP smoke test gated; set CLIO_MCP_E2E=1 to run",
