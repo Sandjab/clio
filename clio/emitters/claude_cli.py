@@ -39,7 +39,23 @@ from clio.ir.graph import (
 
 
 class ClaudeCLIEmitter(BaseEmitter):
+    def _reject_parallel(self, graph: FlowGraph) -> None:
+        def _walk(chain) -> None:
+            for elem in chain:
+                if isinstance(elem, ForEachIR):
+                    if elem.parallel:
+                        raise ValueError(
+                            "claude-cli target does not support FOR EACH "
+                            "PARALLEL; use --target python or --target mcp-server "
+                            f"(line {elem.line})"
+                        )
+                    _walk(elem.body)
+
+        if graph.flow is not None:
+            _walk(graph.flow.chain)
+
     def emit(self, graph: FlowGraph, output_dir: Path) -> None:
+        self._reject_parallel(graph)
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "CLAUDE.md").write_text(_CLAUDE_MD)
 
