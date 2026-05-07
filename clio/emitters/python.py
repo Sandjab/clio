@@ -25,7 +25,10 @@ from clio.emitters._python_helpers import (
     _to_class_name,
     _to_field_name,
     _type_to_python,
+    emit_contracts,
     emit_default_exact_step,
+    emit_rest_step,
+    emit_shell_step,
 )
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import (
@@ -56,7 +59,7 @@ class PythonEmitter(BaseEmitter):
         (steps_dir / "__init__.py").write_text("")
         (runtime_dir / "__init__.py").write_text("")
 
-        (pkg_dir / "contracts.py").write_text(self._emit_contracts(graph))
+        (pkg_dir / "contracts.py").write_text(emit_contracts(graph))
 
         contracts_by_name = {c.name: c for c in graph.contracts}
         for step in graph.steps:
@@ -100,57 +103,7 @@ class PythonEmitter(BaseEmitter):
         (runtime_dir / "cache.py").write_text(src.read_text())
 
     def _emit_contracts(self, graph: FlowGraph) -> str:
-        if not graph.contracts:
-            return '"""No contracts declared in this flow."""\n'
-
-        lines: list[str] = [
-            '"""Pydantic models generated from CLIO CONTRACT declarations."""',
-            "from typing import Literal",
-            "",
-            "from pydantic import BaseModel, Field, field_validator",
-            "",
-            "",
-        ]
-
-        for c in graph.contracts:
-            class_name = _to_class_name(c.name)
-            shape = _shape_from_schema(c.json_schema)
-            for fname, _ in shape:
-                if fname in _PYDANTIC_RESERVED_FIELDS:
-                    raise ValueError(
-                        f"CONTRACT {c.name!r} field {fname!r} collides with a "
-                        f"Pydantic v2 reserved attribute and cannot be emitted "
-                        f"to the python target; rename the field in your .clio source"
-                    )
-            lines.append(f"class {class_name}(BaseModel):")
-            lines.append(f'    """CONTRACT {c.name}."""')
-
-            for fname, fschema in shape:
-                lines.append(f"    {_field_from_schema(fname, fschema)}")
-
-            if c.assert_json_ast is not None:
-                idents = _collect_idents(c.assert_json_ast)
-                if len(idents) > 1:
-                    raise ValueError(
-                        f"CONTRACT {c.name!r} ASSERT references multi-field "
-                        f"({sorted(idents)}); the python target only supports "
-                        f"single-field ASSERTs in v0.3"
-                    )
-                target_field = _first_ident(c.assert_json_ast)
-                expr = _ast_to_python(c.assert_json_ast)
-                lines += [
-                    "",
-                    f'    @field_validator({target_field!r})',
-                    "    @classmethod",
-                    f"    def _assert_{c.name}(cls, v):",
-                    f"        {target_field} = v",
-                    f"        if not {expr}:",
-                    f'            raise ValueError("ASSERT failed: " + {expr!r})',
-                    "        return v",
-                ]
-            lines.append("")
-
-        return "\n".join(lines) + "\n"
+        return emit_contracts(graph)
 
     def _emit_exact_step(self, step: StepIR, contracts_by_name: dict[str, "ContractIR"]) -> str:
         if isinstance(step.impl, RestImplIR):
@@ -167,92 +120,7 @@ class PythonEmitter(BaseEmitter):
         contracts_by_name: dict[str, "ContractIR"],
         impl: RestImplIR,
     ) -> str:
-        params = _step_signature(step, contracts_by_name)
-        ret_type = (
-            _type_to_python(step.gives.type, contracts_by_name)
-            if step.gives is not None else "None"
-        )
-        takes_doc = (
-            "\n    ".join(f"{t.name}: {_render_type_short(t.type)}" for t in step.takes)
-            if step.takes else "(no TAKES)"
-        )
-        gives_doc = (
-            f"{step.gives.name}: {_render_type_short(step.gives.type)}"
-            if step.gives is not None else "(no GIVES)"
-        )
-
-        templating_active = "${" in impl.url
-        if templating_active:
-            url_lines = [f"    _url = {impl.url!r}"]
-            for t in step.takes:
-                fname = _to_field_name(t.name)
-                url_lines.append(
-                    f"    _url = _url.replace('${{{t.name}}}', str({fname}))"
-                )
-            url_block = "\n".join(url_lines) + "\n"
-            url_arg = "url=_url"
-            unused_takes_block = ""
-        else:
-            url_block = ""
-            url_arg = f"url={impl.url!r}"
-            unused_takes_block = (
-                "\n".join(f"    _ = {_to_field_name(t.name)}" for t in step.takes)
-                + "\n"
-                if step.takes else ""
-            )
-
-        timeout_arg = (
-            f"timeout={impl.timeout_seconds}"
-            if impl.timeout_seconds is not None else "timeout=None"
-        )
-
-        if impl.response_path is not None:
-            traversal_block = (
-                f"    _path = {impl.response_path!r}\n"
-                f"    _data = response.json()\n"
-                f"    for _part in _re.findall(r'[^.\\[\\]]+|\\[\\d+\\]', _path):\n"
-                f"        if _part.startswith('['):\n"
-                f"            _data = _data[int(_part[1:-1])]\n"
-                f"        else:\n"
-                f"            _data = _data[_part]\n"
-                f"    return _data\n"
-            )
-            extra_imports = "import re as _re\n"
-        else:
-            traversal_block = "    return response.json()\n"
-            extra_imports = ""
-
-        retries_note = (
-            f"# retries={impl.retries} requested but not implemented in v0.2; "
-            "wire ON_FAIL on rest steps in a future slice.\n"
-            if impl.retries is not None else ""
-        )
-
-        return (
-            f'"""STEP {step.name} (exact, impl: rest)\n'
-            f'TAKES:\n'
-            f'    {takes_doc}\n'
-            f'GIVES:\n'
-            f'    {gives_doc}\n\n'
-            f'Auto-generated from `impl: mode: rest`. TAKES are substituted into\n'
-            f'the URL via ${{var}} placeholders; templating of headers/body and\n'
-            f'parsing of query/headers/body fields is not yet supported.\n'
-            f'"""\n'
-            f'from __future__ import annotations\n\n'
-            f'import requests\n'
-            f'{extra_imports}\n\n'
-            f'{retries_note}'
-            f'def {step.name}({params}) -> {ret_type}:\n'
-            f'{unused_takes_block}'
-            f'{url_block}'
-            f'    response = requests.request(\n'
-            f'        method={impl.method!r},\n'
-            f'        {url_arg},\n'
-            f'        {timeout_arg},\n'
-            f'    )\n'
-            f'    response.raise_for_status()\n'
-            f'{traversal_block}'
-        )
+        return emit_rest_step(step, contracts_by_name, impl)
 
     def _emit_shell_step(
         self,
@@ -260,50 +128,7 @@ class PythonEmitter(BaseEmitter):
         contracts_by_name: dict[str, "ContractIR"],
         impl: ShellImplIR,
     ) -> str:
-        params = _step_signature(step, contracts_by_name)
-        ret_type = (
-            _type_to_python(step.gives.type, contracts_by_name)
-            if step.gives is not None else "None"
-        )
-        takes_doc = (
-            "\n    ".join(f"{t.name}: {_render_type_short(t.type)}" for t in step.takes)
-            if step.takes else "(no TAKES)"
-        )
-        gives_doc = (
-            f"{step.gives.name}: {_render_type_short(step.gives.type)}"
-            if step.gives is not None else "(no GIVES)"
-        )
-
-        argv_repr = "[" + ", ".join(repr(t) for t in impl.argv) + "]"
-        sub_lines = [
-            f"    _argv = [_t.replace('${{{t.name}}}', str({_to_field_name(t.name)})) for _t in _argv]"
-            for t in step.takes
-        ]
-        sub_block = ("\n".join(sub_lines) + "\n") if sub_lines else ""
-
-        timeout_arg = (
-            f"timeout={impl.timeout_seconds}"
-            if impl.timeout_seconds is not None else "timeout=None"
-        )
-
-        return (
-            f'"""STEP {step.name} (exact, impl: shell)\n'
-            f'TAKES:\n'
-            f'    {takes_doc}\n'
-            f'GIVES:\n'
-            f'    {gives_doc}\n\n'
-            f'Auto-generated from `impl: mode: shell`. Argv-style invocation —\n'
-            f'no shell pipes/redirections (subprocess.run is called with shell=False).\n'
-            f'TAKES are substituted into argv tokens via ${{var}} placeholders.\n'
-            f'"""\n'
-            f'from __future__ import annotations\n\n'
-            f'import subprocess\n\n\n'
-            f'def {step.name}({params}) -> {ret_type}:\n'
-            f'    _argv = {argv_repr}\n'
-            f'{sub_block}'
-            f'    result = subprocess.run(_argv, capture_output=True, text=True, check=True, {timeout_arg})\n'
-            f'    return result.stdout\n'
-        )
+        return emit_shell_step(step, contracts_by_name, impl)
 
     def _emit_judgment_step(
         self,

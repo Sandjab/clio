@@ -6,6 +6,7 @@ import json as _json
 
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import CallIR, FlowGraph, ForEachIR, StepIR
+from clio.parser.ast_nodes import ContractRef
 
 
 def _pyproject_for_mcp(pkg_name: str, *, needs_pydantic: bool, needs_requests: bool) -> str:
@@ -80,16 +81,67 @@ def _first_step_of_flow(graph: FlowGraph) -> StepIR | None:
     return None
 
 
+def _last_step_of_flow(graph: FlowGraph) -> StepIR | None:
+    """Returns the StepIR for the last CallIR in the flow chain, or None."""
+    if graph.flow is None:
+        return None
+    by_name = {s.name: s for s in graph.steps}
+    last_call: CallIR | None = None
+
+    def _walk(chain) -> None:
+        nonlocal last_call
+        for elem in chain:
+            if isinstance(elem, CallIR):
+                last_call = elem
+            elif isinstance(elem, ForEachIR):
+                _walk(elem.body)
+
+    _walk(graph.flow.chain)
+    return by_name.get(last_call.step_name) if last_call else None
+
+
+def _output_schema_for_flow(graph: FlowGraph) -> dict | None:
+    last = _last_step_of_flow(graph)
+    if last is None or last.gives is None:
+        return None
+    t = last.gives.type
+    # ContractRef → expand the contract's JSON schema inline
+    if isinstance(t, ContractRef):
+        by_name = {c.name: c for c in graph.contracts}
+        contract = by_name.get(t.name)
+        if contract is None:
+            return None
+        return contract.json_schema
+    try:
+        return type_to_json_schema(t)
+    except (NotImplementedError, Exception):
+        return None
+
+
 def _input_schema_for_flow(graph: FlowGraph) -> dict:
     first = _first_step_of_flow(graph)
     if first is None or not first.takes:
         return {"type": "object", "properties": {}, "required": []}
-    properties = {t.name: type_to_json_schema(t.type) for t in first.takes}
-    return {
-        "type": "object",
-        "properties": properties,
-        "required": [t.name for t in first.takes],
-    }
+
+    literal_defaults: dict[str, object] = {}
+    if graph.flow is not None:
+        for elem in graph.flow.chain:
+            if isinstance(elem, CallIR) and elem.step_name == first.name:
+                for kw_name, kw_val in elem.kwargs:
+                    if not (isinstance(kw_val, str) and kw_val.startswith("@")):
+                        literal_defaults[kw_name] = kw_val
+                break
+
+    properties = {}
+    required = []
+    for t in first.takes:
+        prop = type_to_json_schema(t.type)
+        if t.name in literal_defaults:
+            prop["default"] = literal_defaults[t.name]
+        else:
+            required.append(t.name)
+        properties[t.name] = prop
+    return {"type": "object", "properties": properties, "required": required}
 
 
 def _emit_server_module(pkg_name: str, graph: FlowGraph) -> str:
@@ -116,11 +168,14 @@ def _emit_server_module(pkg_name: str, graph: FlowGraph) -> str:
         )
 
     schema = _input_schema_for_flow(graph)
+    output_schema = _output_schema_for_flow(graph)
+    output_field = f"            outputSchema={output_schema!r},\n" if output_schema else ""
     tool_entry = (
         f"        Tool(\n"
         f"            name={flow_name!r},\n"
         f'            description="Auto-generated from FLOW {flow_name}",\n'
         f"            inputSchema={schema!r},\n"
+        f"{output_field}"
         f"        )"
     )
     return (
@@ -297,6 +352,70 @@ def emit_judgment_step_via_sampling(
     has_contracts = bool(graph.contracts)
     contracts_import = "from .. import contracts\n" if has_contracts else ""
 
+    # ON_FAIL: compute retry count from the first retry strategy (if any)
+    strategies = step.on_fail.strategies if step.on_fail is not None else ()
+    retry_max = 0
+    for s in strategies:
+        if s.kind == "retry":
+            retry_max = s.max_retries or 1
+            break
+    has_on_fail = bool(strategies)
+
+    # Build the sampling call block
+    sampling_call = (
+        "    from mcp.types import SamplingMessage, TextContent\n"
+        "    msg = await _session.create_message(\n"
+        "        messages=[\n"
+        "            SamplingMessage(\n"
+        "                role='user',\n"
+        "                content=TextContent(type='text', text=prompt),\n"
+        "            )\n"
+        "        ],\n"
+        "        max_tokens=_MAX_TOKENS,\n"
+        "        system_prompt=_SYSTEM_PROMPT,\n"
+        "    )\n"
+        "    raw = msg.content.text if getattr(msg.content, 'type', None) == 'text' else ''\n"
+        "    cleaned = '\\n'.join(line for line in raw.splitlines() if not line.startswith('```'))\n"
+    )
+
+    if has_on_fail:
+        retry_max_line = f"_RETRY_MAX = {retry_max}\n"
+        body_lines = (
+            f"async def {step.name}({params_with_session}) -> {ret_type}:\n"
+            "    prompt = _PROMPT_TEMPLATE\n"
+            f"{sub_block}\n"
+            "    last_exc = None\n"
+            "    for _attempt_idx in range(_RETRY_MAX + 1):\n"
+            "        try:\n"
+            "            from mcp.types import SamplingMessage, TextContent\n"
+            "            msg = await _session.create_message(\n"
+            "                messages=[\n"
+            "                    SamplingMessage(\n"
+            "                        role='user',\n"
+            "                        content=TextContent(type='text', text=prompt),\n"
+            "                    )\n"
+            "                ],\n"
+            "                max_tokens=_MAX_TOKENS,\n"
+            "                system_prompt=_SYSTEM_PROMPT,\n"
+            "            )\n"
+            "            raw = msg.content.text if getattr(msg.content, 'type', None) == 'text' else ''\n"
+            "            cleaned = '\\n'.join(line for line in raw.splitlines() if not line.startswith('```'))\n"
+            f"            {validate_block.lstrip()}\n"
+            "        except Exception as _e:\n"
+            "            last_exc = _e\n"
+            "    if last_exc is not None:\n"
+            "        raise last_exc\n"
+        )
+    else:
+        retry_max_line = ""
+        body_lines = (
+            f"async def {step.name}({params_with_session}) -> {ret_type}:\n"
+            "    prompt = _PROMPT_TEMPLATE\n"
+            f"{sub_block}\n"
+            f"{sampling_call}"
+            f"{validate_block}\n"
+        )
+
     return (
         f'"""STEP {step.name} (judgment, mcp_sampling).\n'
         f'Auto-generated. Do not edit; regenerate via `clio compile`.\n'
@@ -315,23 +434,8 @@ def emit_judgment_step_via_sampling(
         "    'and no leading or trailing whitespace beyond the JSON itself.'\n"
         ")\n"
         "_MAX_TOKENS = 4096\n"
+        f"{retry_max_line}"
         "\n"
         "\n"
-        f"async def {step.name}({params_with_session}) -> {ret_type}:\n"
-        "    prompt = _PROMPT_TEMPLATE\n"
-        f"{sub_block}\n"
-        "    from mcp.types import SamplingMessage, TextContent\n"
-        "    msg = await _session.create_message(\n"
-        "        messages=[\n"
-        "            SamplingMessage(\n"
-        "                role='user',\n"
-        "                content=TextContent(type='text', text=prompt),\n"
-        "            )\n"
-        "        ],\n"
-        "        max_tokens=_MAX_TOKENS,\n"
-        "        system_prompt=_SYSTEM_PROMPT,\n"
-        "    )\n"
-        "    raw = msg.content.text if getattr(msg.content, 'type', None) == 'text' else ''\n"
-        "    cleaned = '\\n'.join(line for line in raw.splitlines() if not line.startswith('```'))\n"
-        f"{validate_block}\n"
+        f"{body_lines}"
     )
