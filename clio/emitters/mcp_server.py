@@ -10,6 +10,7 @@ from pathlib import Path
 from clio.emitters._mcp_helpers import (
     _emit_flow_module_async,
     _emit_main_module,
+    _emit_readme,
     _emit_server_module,
     _pyproject_for_mcp,
     emit_judgment_step_via_sampling,
@@ -41,6 +42,7 @@ class MCPServerEmitter(BaseEmitter):
         (output_dir / "pyproject.toml").write_text(
             _pyproject_for_mcp(pkg_name, needs_pydantic=needs_pydantic, needs_requests=needs_requests)
         )
+        (output_dir / "README.md").write_text(_emit_readme(pkg_name, graph))
         (pkg_dir / "__init__.py").write_text("")
         (pkg_dir / "__main__.py").write_text(_emit_main_module(pkg_name))
         (pkg_dir / "server.py").write_text(_emit_server_module(pkg_name, graph))

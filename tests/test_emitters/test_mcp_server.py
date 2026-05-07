@@ -372,3 +372,16 @@ def test_input_schema_keeps_state_ref_kwarg_in_required(tmp_path):
     assert "name" not in schema["required"]
     assert "count" in schema["required"]
     assert "default" not in schema["properties"]["count"]
+
+
+def test_emit_writes_readme_with_mcp_client_config(tmp_path):
+    src = (
+        "STEP greet\n  TAKES: name: str\n  GIVES: msg: str\n  MODE: exact\n"
+        "FLOW hello\n  greet(name=\"World\")\n"
+    )
+    MCPServerEmitter().emit(build_ir(parse(src)), tmp_path)
+    readme = (tmp_path / "README.md").read_text()
+    assert "MCP" in readme
+    assert "hello" in readme
+    assert '"command": "python"' in readme
+    assert '"-m"' in readme
