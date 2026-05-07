@@ -857,3 +857,53 @@ def test_parse_for_each_nested():
     inner = outer.body[0]
     assert inner.loop_var == "cell"
     assert inner.collection == "row"
+
+
+_FOREACH_PARALLEL_SRC = (
+    "STEP load\n"
+    "  GIVES: items: List<str>\n"
+    "  MODE: exact\n"
+    "STEP process\n"
+    "  TAKES: x: str\n"
+    "  GIVES: r: str\n"
+    "  MODE: exact\n"
+    "FLOW pipe\n"
+    "  load()\n"
+    "    -> FOR EACH item IN items PARALLEL AS results:\n"
+    "         process(x=item)\n"
+)
+
+
+def test_parse_for_each_parallel_with_as():
+    flow = next(d for d in parse(_FOREACH_PARALLEL_SRC).decls if d.__class__.__name__ == "FlowDecl")
+    fe = flow.chain[1]
+    assert fe.parallel is True
+    assert fe.collector == "results"
+    assert fe.loop_var == "item"
+    assert fe.collection == "items"
+
+
+def test_parse_for_each_parallel_without_as_fails():
+    bad = (
+        "STEP load\n  GIVES: items: List<str>\n  MODE: exact\n"
+        "STEP process\n  TAKES: x: str\n  GIVES: r: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH item IN items PARALLEL:\n"
+        "         process(x=item)\n"
+    )
+    with pytest.raises(Exception, match="PARALLEL requires an AS"):
+        parse(bad)
+
+
+def test_parse_for_each_as_without_parallel_fails():
+    bad = (
+        "STEP load\n  GIVES: items: List<str>\n  MODE: exact\n"
+        "STEP process\n  TAKES: x: str\n  GIVES: r: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH item IN items AS results:\n"
+        "         process(x=item)\n"
+    )
+    with pytest.raises(Exception, match="AS binding is only valid with PARALLEL"):
+        parse(bad)
