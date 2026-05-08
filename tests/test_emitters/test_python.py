@@ -1226,3 +1226,27 @@ def test_parallel_block_counts_as_one_chain_item(tmp_path):
     import re
     call_sites = re.findall(r"_persist_state\(\d+, state\)", flow_py)
     assert len(call_sites) == 3, f"expected 3 call sites, got {call_sites}"
+
+
+def test_main_argparse_has_from_step(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    main_py = (tmp_path / "classify" / "__main__.py").read_text()
+    assert '"--from-step"' in main_py
+    assert "type=int" in main_py
+    assert "default=0" in main_py
+
+
+def test_main_validates_negative_from_step(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    main_py = (tmp_path / "classify" / "__main__.py").read_text()
+    assert "args.from_step < 0" in main_py
+    assert "return 2" in main_py
+
+
+def test_main_passes_start_at_to_run(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    main_py = (tmp_path / "classify" / "__main__.py").read_text()
+    assert "run(start_at=args.from_step" in main_py or "start_at=args.from_step" in main_py
