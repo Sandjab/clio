@@ -208,10 +208,17 @@ def emit_default_exact_step(step: "StepIR", contracts_by_name: dict[str, "Contra
         f'    {gives_doc}\n\n'
         f'Implement the body below. The orchestrator passes arguments by keyword\n'
         f'and expects the return value to conform to the GIVES type.\n'
+        f'\n'
+        f'NOTE: when implementing, emit a step_end before returning:\n'
+        f'    _log.emit("step_end", step={step.name!r}, mode="exact",\n'
+        f'              duration_ms=int((time.monotonic() - _t0) * 1000), success=True)\n'
         f'"""\n'
-        f'from __future__ import annotations\n'
-        f'\n\n'
+        f'from __future__ import annotations\n\n'
+        f'import time\n\n'
+        f'from ..clio_runtime import logging as _log\n\n\n'
         f'def {step.name}({params}) -> {ret_type}:\n'
+        f'    _t0 = time.monotonic()\n'
+        f'    _log.emit("step_start", step={step.name!r}, mode="exact")\n'
         f'    raise NotImplementedError(\n'
         f'        "Implement steps/{step.name}.py: this is an exact (deterministic) step."\n'
         f'    )\n'
@@ -534,11 +541,17 @@ def emit_rest_step(
             f"            _data = _data[int(_part[1:-1])]\n"
             f"        else:\n"
             f"            _data = _data[_part]\n"
+            f'    _log.emit("step_end", step={step.name!r}, mode="exact",\n'
+            f'              duration_ms=int((time.monotonic() - _t0) * 1000), success=True)\n'
             f"    return _data\n"
         )
         extra_imports = "import re as _re\n"
     else:
-        traversal_block = "    return response.json()\n"
+        traversal_block = (
+            f'    _log.emit("step_end", step={step.name!r}, mode="exact",\n'
+            f'              duration_ms=int((time.monotonic() - _t0) * 1000), success=True)\n'
+            f"    return response.json()\n"
+        )
         extra_imports = ""
 
     retries_note = (
@@ -547,6 +560,10 @@ def emit_rest_step(
         if impl.retries is not None else ""
     )
 
+    step_start_block = (
+        f'    _t0 = time.monotonic()\n'
+        f'    _log.emit("step_start", step={step.name!r}, mode="exact")\n'
+    )
     return (
         f'"""STEP {step.name} (exact, impl: rest)\n'
         f'TAKES:\n'
@@ -558,10 +575,13 @@ def emit_rest_step(
         f'parsing of query/headers/body fields is not yet supported.\n'
         f'"""\n'
         f'from __future__ import annotations\n\n'
+        f'import time\n'
         f'import requests\n'
-        f'{extra_imports}\n\n'
+        f'{extra_imports}\n'
+        f'from ..clio_runtime import logging as _log\n\n\n'
         f'{retries_note}'
         f'def {step.name}({params}) -> {ret_type}:\n'
+        f'{step_start_block}'
         f'{unused_takes_block}'
         f'{url_block}'
         f'    response = requests.request(\n'
@@ -617,11 +637,17 @@ def emit_shell_step(
         f'TAKES are substituted into argv tokens via ${{var}} placeholders.\n'
         f'"""\n'
         f'from __future__ import annotations\n\n'
-        f'import subprocess\n\n\n'
+        f'import subprocess\n'
+        f'import time\n\n'
+        f'from ..clio_runtime import logging as _log\n\n\n'
         f'def {step.name}({params}) -> {ret_type}:\n'
+        f'    _t0 = time.monotonic()\n'
+        f'    _log.emit("step_start", step={step.name!r}, mode="exact")\n'
         f'    _argv = {argv_repr}\n'
         f'{sub_block}'
         f'    result = subprocess.run(_argv, capture_output=True, text=True, check=True, {timeout_arg})\n'
+        f'    _log.emit("step_end", step={step.name!r}, mode="exact",\n'
+        f'              duration_ms=int((time.monotonic() - _t0) * 1000), success=True)\n'
         f'    return result.stdout\n'
     )
 

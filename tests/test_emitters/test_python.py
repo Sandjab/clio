@@ -82,10 +82,17 @@ def test_emit_contracts_pydantic_validates(tmp_path):
 def test_emit_exact_step_stub_is_callable(tmp_path):
     src = (FIXTURES / "mvp_v03_contracts.clio").read_text()
     PythonEmitter().emit(build_ir(parse(src)), tmp_path)
-    step_path = tmp_path / "retention" / "steps" / "load_customers.py"
-    mod = _load_module("v03_load_customers_test", step_path)
-    with pytest.raises(NotImplementedError):
-        mod.load_customers(file="x.csv")
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    try:
+        from retention.steps import load_customers as lc_mod
+        with pytest.raises(NotImplementedError):
+            lc_mod.load_customers(file="x.csv")
+    finally:
+        sys.path.remove(str(tmp_path))
+        for k in list(sys.modules):
+            if k.startswith("retention"):
+                del sys.modules[k]
 
 
 def test_emit_judgment_step_runs_with_monkeypatched_sdk(tmp_path, monkeypatch):
@@ -143,9 +150,17 @@ def test_emit_exact_step_with_no_takes_is_valid_python(tmp_path):
     import py_compile
     py_compile.compile(str(step_path), doraise=True)
     # Must be loadable and raise NotImplementedError when called.
-    mod = _load_module("v03_no_takes_test", step_path)
-    with pytest.raises(NotImplementedError):
-        mod.foo()
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    try:
+        from f.steps import foo as foo_mod
+        with pytest.raises(NotImplementedError):
+            foo_mod.foo()
+    finally:
+        sys.path.remove(str(tmp_path))
+        for k in list(sys.modules):
+            if k == "f" or k.startswith("f."):
+                del sys.modules[k]
 
 
 def test_emit_v03_cache(tmp_path):
@@ -589,7 +604,6 @@ def test_emit_shell_step_parses_as_python(tmp_path):
 
 
 def test_emit_shell_step_runtime_substitution(tmp_path, monkeypatch):
-    import runpy
     import sys
     import types
 
@@ -609,19 +623,24 @@ def test_emit_shell_step_runtime_substitution(tmp_path, monkeypatch):
     fake.run = fake_run
     monkeypatch.setitem(sys.modules, "subprocess", fake)
 
-    step_path = tmp_path / "pipe" / "steps" / "extract_pdf.py"
-    ns = runpy.run_path(str(step_path))
-    out = ns["extract_pdf"](file="report.pdf")
-    assert out == "extracted text"
-    assert captured["argv"] == ["pdftotext", "report.pdf", "-"]
-    assert captured["timeout"] == 60
-    assert captured["check"] is True
-    assert captured["capture_output"] is True
-    assert captured["text"] is True
+    sys.path.insert(0, str(tmp_path))
+    try:
+        from pipe.steps import extract_pdf as ep_mod
+        out = ep_mod.extract_pdf(file="report.pdf")
+        assert out == "extracted text"
+        assert captured["argv"] == ["pdftotext", "report.pdf", "-"]
+        assert captured["timeout"] == 60
+        assert captured["check"] is True
+        assert captured["capture_output"] is True
+        assert captured["text"] is True
+    finally:
+        sys.path.remove(str(tmp_path))
+        for k in list(sys.modules):
+            if k == "pipe" or k.startswith("pipe."):
+                del sys.modules[k]
 
 
 def test_emit_rest_step_templated_runtime_substitution(tmp_path, monkeypatch):
-    import runpy
     import sys
     import types
 
@@ -639,11 +658,17 @@ def test_emit_rest_step_templated_runtime_substitution(tmp_path, monkeypatch):
     fake.request = lambda **kwargs: (captured.update(kwargs) or _FakeResp())
     monkeypatch.setitem(sys.modules, "requests", fake)
 
-    step_path = tmp_path / "geo" / "steps" / "geocode.py"
-    ns = runpy.run_path(str(step_path))
-    ns["geocode"](address="123 Main St", country="US")
-    assert captured["url"] == "https://api.example.com/geo/US?q=123 Main St"
-    assert captured["method"] == "GET"
+    sys.path.insert(0, str(tmp_path))
+    try:
+        from geo.steps import geocode as gc_mod
+        gc_mod.geocode(address="123 Main St", country="US")
+        assert captured["url"] == "https://api.example.com/geo/US?q=123 Main St"
+        assert captured["method"] == "GET"
+    finally:
+        sys.path.remove(str(tmp_path))
+        for k in list(sys.modules):
+            if k == "geo" or k.startswith("geo."):
+                del sys.modules[k]
 
 
 # --- invoke: mode: api emission --------------------------------------------
@@ -1008,4 +1033,25 @@ def test_judgment_step_initializes_last_usage(tmp_path):
     body = judgment_files[0].read_text()
     assert "_last_usage" in body
     assert "**_last_usage" in body
+
+
+def test_exact_step_emits_step_start_and_step_end(tmp_path):
+    src = (FIXTURES / "mvp_v03_contracts.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    step_files = list((tmp_path / "retention" / "steps").glob("*.py"))
+    exact_files = [f for f in step_files if "(exact" in f.read_text()]
+    assert exact_files, "expected at least one exact step in fixture"
+    body = exact_files[0].read_text()
+    assert '_log.emit("step_start"' in body
+    assert 'mode="exact"' in body
+
+
+def test_exact_step_imports_logging_and_time(tmp_path):
+    src = (FIXTURES / "mvp_v03_contracts.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    step_files = list((tmp_path / "retention" / "steps").glob("*.py"))
+    exact_files = [f for f in step_files if "(exact" in f.read_text()]
+    body = exact_files[0].read_text()
+    assert "from ..clio_runtime import logging as _log" in body
+    assert "import time" in body
 
