@@ -38,7 +38,3 @@ FLOW rag_faq
     -> load_question(file="question.txt")
     -> score_chunks(corpus, question)
     -> answer(question, scored, corpus)
-
-RESOURCES
-  target: claude-cli
-  models: [haiku, sonnet, opus]
