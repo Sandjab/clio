@@ -486,27 +486,23 @@ def emit_judgment_step_via_sampling(
             break
     has_on_fail = bool(strategies)
 
-    # Build the sampling call block
-    sampling_call = (
-        "    from mcp.types import SamplingMessage, TextContent\n"
-        "    msg = await _session.create_message(\n"
-        "        messages=[\n"
-        "            SamplingMessage(\n"
-        "                role='user',\n"
-        "                content=TextContent(type='text', text=prompt),\n"
-        "            )\n"
-        "        ],\n"
-        "        max_tokens=_MAX_TOKENS,\n"
-        "        system_prompt=_SYSTEM_PROMPT,\n"
-        "    )\n"
-        "    raw = msg.content.text if getattr(msg.content, 'type', None) == 'text' else ''\n"
-        "    cleaned = '\\n'.join(line for line in raw.splitlines() if not line.startswith('```'))\n"
-    )
+    # Strip the "return " prefix from validate_block to get the bare expression
+    # for assignment to _ret. validate_block always begins with 4 spaces of
+    # indent and the keyword "return ". Handles all 4 variants:
+    #   "    return None"
+    #   "    return json.loads(cleaned)"
+    #   "    return contracts.X.model_validate(json.loads(cleaned))"
+    #   "    return [contracts.X.model_validate(item) for item in json.loads(cleaned)]"
+    validate_expr = validate_block.lstrip().removeprefix("return ")
 
     if has_on_fail:
         retry_max_line = f"_RETRY_MAX = {retry_max}\n"
         body_lines = (
             f"async def {step.name}({params_with_session}) -> {ret_type}:\n"
+            "    _t0 = time.monotonic()\n"
+            f'    _log.emit("step_start", step={step.name!r}, mode="judgment")\n'
+            "    _last_model = None\n"
+            "    _last_usage: dict = {}\n"
             "    prompt = _PROMPT_TEMPLATE\n"
             f"{sub_block}\n"
             "    last_exc = None\n"
@@ -523,22 +519,68 @@ def emit_judgment_step_via_sampling(
             "                max_tokens=_MAX_TOKENS,\n"
             "                system_prompt=_SYSTEM_PROMPT,\n"
             "            )\n"
+            "            if hasattr(msg, 'model') and msg.model:\n"
+            "                _last_model = msg.model\n"
+            "            if hasattr(msg, 'usage') and msg.usage is not None:\n"
+            "                _last_usage = {\n"
+            "                    'tokens_in': getattr(msg.usage, 'input_tokens', None),\n"
+            "                    'tokens_out': getattr(msg.usage, 'output_tokens', None),\n"
+            "                }\n"
+            "                _last_usage = {k: v for k, v in _last_usage.items() if v is not None}\n"
             "            raw = msg.content.text if getattr(msg.content, 'type', None) == 'text' else ''\n"
             "            cleaned = '\\n'.join(line for line in raw.splitlines() if not line.startswith('```'))\n"
-            f"            {validate_block.lstrip()}\n"
+            f"            _ret = ({validate_expr})\n"
+            f'            _log.emit("step_end", step={step.name!r}, mode="judgment",\n'
+            "                      duration_ms=int((time.monotonic() - _t0) * 1000),\n"
+            "                      cache_hit=False, model=_last_model,\n"
+            "                      fallback_used=False, success=True, **_last_usage)\n"
+            "            return _ret\n"
             "        except Exception as _e:\n"
             "            last_exc = _e\n"
             "    if last_exc is not None:\n"
+            f'        _log.emit("step_end", step={step.name!r}, mode="judgment",\n'
+            "                  duration_ms=int((time.monotonic() - _t0) * 1000),\n"
+            "                  cache_hit=False, model=_last_model,\n"
+            "                  fallback_used=False, success=False)\n"
             "        raise last_exc\n"
         )
     else:
         retry_max_line = ""
         body_lines = (
             f"async def {step.name}({params_with_session}) -> {ret_type}:\n"
+            "    _t0 = time.monotonic()\n"
+            f'    _log.emit("step_start", step={step.name!r}, mode="judgment")\n'
+            "    _last_model = None\n"
+            "    _last_usage: dict = {}\n"
             "    prompt = _PROMPT_TEMPLATE\n"
             f"{sub_block}\n"
-            f"{sampling_call}"
-            f"{validate_block}\n"
+            "    from mcp.types import SamplingMessage, TextContent\n"
+            "    msg = await _session.create_message(\n"
+            "        messages=[\n"
+            "            SamplingMessage(\n"
+            "                role='user',\n"
+            "                content=TextContent(type='text', text=prompt),\n"
+            "            )\n"
+            "        ],\n"
+            "        max_tokens=_MAX_TOKENS,\n"
+            "        system_prompt=_SYSTEM_PROMPT,\n"
+            "    )\n"
+            "    if hasattr(msg, 'model') and msg.model:\n"
+            "        _last_model = msg.model\n"
+            "    if hasattr(msg, 'usage') and msg.usage is not None:\n"
+            "        _last_usage = {\n"
+            "            'tokens_in': getattr(msg.usage, 'input_tokens', None),\n"
+            "            'tokens_out': getattr(msg.usage, 'output_tokens', None),\n"
+            "        }\n"
+            "        _last_usage = {k: v for k, v in _last_usage.items() if v is not None}\n"
+            "    raw = msg.content.text if getattr(msg.content, 'type', None) == 'text' else ''\n"
+            "    cleaned = '\\n'.join(line for line in raw.splitlines() if not line.startswith('```'))\n"
+            f"    _ret = ({validate_expr})\n"
+            f'    _log.emit("step_end", step={step.name!r}, mode="judgment",\n'
+            "              duration_ms=int((time.monotonic() - _t0) * 1000),\n"
+            "              cache_hit=False, model=_last_model,\n"
+            "              fallback_used=False, success=True, **_last_usage)\n"
+            "    return _ret\n"
         )
 
     return (
@@ -548,8 +590,10 @@ def emit_judgment_step_via_sampling(
         "from __future__ import annotations\n"
         "\n"
         "import json\n"
+        "import time\n"
         "\n"
         f"{contracts_import}"
+        "from ..clio_runtime import logging as _log\n"
         "\n"
         f"_PROMPT_TEMPLATE = {prompt_template!r}\n"
         f"_INLINED_SCHEMA = {inlined_json!r}\n"

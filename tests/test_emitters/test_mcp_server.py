@@ -546,3 +546,36 @@ def test_mcp_flow_py_emits_set_flow_and_flow_events(tmp_path):
     assert "try:" in flow_py
     assert "finally:" in flow_py
     assert "_log.set_flow(None)" in flow_py
+
+
+def test_mcp_judgment_step_imports_logging_and_time(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    from clio.emitters.mcp_server import MCPServerEmitter
+    MCPServerEmitter().emit(build_ir(parse(src)), tmp_path)
+    step_files = list((tmp_path / "classify" / "steps").glob("*.py"))
+    judgment_files = [
+        f for f in step_files
+        if "(judgment" in f.read_text() or "mcp_sampling" in f.read_text()
+    ]
+    assert judgment_files, "expected at least one judgment step in mcp output"
+    body = judgment_files[0].read_text()
+    assert "import time" in body
+    assert "from ..clio_runtime import logging as _log" in body
+
+
+def test_mcp_judgment_step_has_step_events(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    from clio.emitters.mcp_server import MCPServerEmitter
+    MCPServerEmitter().emit(build_ir(parse(src)), tmp_path)
+    step_files = list((tmp_path / "classify" / "steps").glob("*.py"))
+    judgment_files = [
+        f for f in step_files
+        if "(judgment" in f.read_text() or "mcp_sampling" in f.read_text()
+    ]
+    body = judgment_files[0].read_text()
+    assert '_log.emit("step_start"' in body
+    assert 'mode="judgment"' in body
+    assert '_log.emit("step_end"' in body
+    assert "_last_model" in body
+    assert "_last_usage" in body
+    assert "**_last_usage" in body
