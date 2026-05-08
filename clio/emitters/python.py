@@ -399,9 +399,12 @@ class PythonEmitter(BaseEmitter):
         if graph.flow is None:
             return '"""No FLOW declared."""\n\ndef run(**kwargs):\n    return {}\n'
 
-        chain_lines: list[str] = []
+        chain_groups: list[list[str]] = []
         imported_steps: list[str] = []
         steps_by_name = {s.name: s for s in graph.steps}
+        # The currently-being-built group; reset between top-level items.
+        # Mutated (.append) by closures below; never reassigned inside them.
+        _current: list[str] = []
 
         def _emit_call(call: CallIR, indent: str, scope_local: set[str]) -> None:
             step = next(s for s in graph.steps if s.name == call.step_name)
@@ -423,18 +426,18 @@ class PythonEmitter(BaseEmitter):
             # (no accumulation semantic in v0); the call is invoked for its side
             # effects on whatever it explicitly writes.
             if scope_local:
-                chain_lines.append(
+                _current.append(
                     f"{indent}{step.name}_mod.{step.name}({kwargs_str})"
                 )
             else:
-                chain_lines.append(
+                _current.append(
                     f"{indent}state[{out_name!r}] = {step.name}_mod.{step.name}({kwargs_str})"
                 )
 
         def _emit_item(item, indent: str, scope_local: set[str]) -> None:
             if isinstance(item, ForEachIR):
                 if item.parallel:
-                    chain_lines.append(emit_parallel_for_each_python(item, steps_by_name, indent))
+                    _current.append(emit_parallel_for_each_python(item, steps_by_name, indent))
                     inner = item.body[0]
                     if inner.step_name not in imported_steps:
                         imported_steps.append(inner.step_name)
@@ -446,11 +449,11 @@ class PythonEmitter(BaseEmitter):
                     if item.collection in scope_local
                     else f"state[{item.collection!r}]"
                 )
-                chain_lines.append(f"{indent}for {item.loop_var} in {source}:")
+                _current.append(f"{indent}for {item.loop_var} in {source}:")
                 inner_scope = scope_local | {item.loop_var}
                 inner_indent = indent + "    "
                 if not item.body:
-                    chain_lines.append(f"{inner_indent}pass")
+                    _current.append(f"{inner_indent}pass")
                 for sub in item.body:
                     _emit_item(sub, inner_indent, inner_scope)
                 return
@@ -460,7 +463,9 @@ class PythonEmitter(BaseEmitter):
             raise ValueError(f"unknown flow item: {type(item).__name__}")
 
         for item in graph.flow.chain:
+            _current = []
             _emit_item(item, "    ", set())
+            chain_groups.append(list(_current))
 
         needs_concurrent = _has_parallel(graph.flow.chain)
         cf_import = (
@@ -470,13 +475,18 @@ class PythonEmitter(BaseEmitter):
 
         imports = "\n".join(f"from .steps import {n} as {n}_mod" for n in imported_steps)
 
-        # chain_lines start with "    " (4 spaces) for top-level items; some
-        # entries are multi-line strings (parallel FOR EACH). We re-indent every
-        # line of every entry by 4 more spaces so the chain runs inside `try:`.
-        chain_body = "\n".join(
-            "\n".join("    " + line for line in cl.split("\n"))
-            for cl in chain_lines
-        )
+        # Each group's lines were constructed at 4-space indent for top-level
+        # (deeper for nested). Re-indent every line +8 so the body lives at
+        # 12-space (inside try:8sp -> if start_at:12sp). Append a 12-space
+        # _persist_state(N, state) call after each group.
+        chain_body_parts: list[str] = []
+        for idx, group in enumerate(chain_groups, start=1):
+            chain_body_parts.append(f"        if start_at < {idx}:")
+            for line in group:
+                for sub in line.split("\n"):
+                    chain_body_parts.append("        " + sub)
+            chain_body_parts.append(f"            _persist_state({idx}, state)")
+        chain_body = "\n".join(chain_body_parts)
         # JSON-style double-quoted literal so callers can grep for
         # `set_flow("name")` consistently across emitters.
         flow_name_lit = json.dumps(graph.flow.name)

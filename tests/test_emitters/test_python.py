@@ -1166,3 +1166,63 @@ def test_flow_start_event_includes_resumed_from(tmp_path):
     PythonEmitter().emit(build_ir(parse(src)), tmp_path)
     flow_py = (tmp_path / "classify" / "flow.py").read_text()
     assert 'resumed_from=start_at if start_at > 0 else 0' in flow_py
+
+
+def test_chain_items_are_wrapped_in_start_at_gate(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = (tmp_path / "classify" / "flow.py").read_text()
+    # mvp_v03_skeleton has exactly 1 chain item
+    assert "if start_at < 1:" in flow_py
+
+
+def test_persist_state_called_after_each_chain_item(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = (tmp_path / "classify" / "flow.py").read_text()
+    assert "_persist_state(1, state)" in flow_py
+
+
+def test_three_chain_items_three_gates_three_persists(tmp_path):
+    # parallel_classify.clio has exactly 3 top-level chain items:
+    # load_corpus, FOR EACH PARALLEL, aggregate.
+    src = Path("examples/parallel_classify.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = next(tmp_path.rglob("flow.py")).read_text()
+    assert "if start_at < 1:" in flow_py
+    assert "if start_at < 2:" in flow_py
+    assert "if start_at < 3:" in flow_py
+    # _persist_state appears once as def + 3 times as calls
+    assert flow_py.count("_persist_state(") >= 3
+    assert "_persist_state(1, state)" in flow_py
+    assert "_persist_state(2, state)" in flow_py
+    assert "_persist_state(3, state)" in flow_py
+    assert "TOTAL_STEPS = 3" in flow_py
+
+
+def test_for_each_block_counts_as_one_chain_item(tmp_path):
+    src = Path("examples/classify_corpus.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = next(tmp_path.rglob("flow.py")).read_text()
+    # classify_corpus has 2 chain items: load_lines, FOR EACH ... classify
+    assert "if start_at < 1:" in flow_py
+    assert "if start_at < 2:" in flow_py
+    # Count _persist_state(<N>, state) call sites - should be exactly 2
+    import re
+    call_sites = re.findall(r"_persist_state\(\d+, state\)", flow_py)
+    assert len(call_sites) == 2, f"expected 2 call sites, got {call_sites}"
+    assert "TOTAL_STEPS = 2" in flow_py
+
+
+def test_parallel_block_counts_as_one_chain_item(tmp_path):
+    src = Path("examples/parallel_classify.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = next(tmp_path.rglob("flow.py")).read_text()
+    # parallel_classify has 3 chain items: load_corpus, FOR EACH PARALLEL, aggregate.
+    # The PARALLEL block is ONE chain item (not one gate per inner iteration).
+    assert "if start_at < 1:" in flow_py
+    assert "if start_at < 2:" in flow_py
+    assert "if start_at < 3:" in flow_py
+    import re
+    call_sites = re.findall(r"_persist_state\(\d+, state\)", flow_py)
+    assert len(call_sites) == 3, f"expected 3 call sites, got {call_sites}"
