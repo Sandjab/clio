@@ -579,3 +579,15 @@ def test_mcp_judgment_step_has_step_events(tmp_path):
     assert "_last_model" in body
     assert "_last_usage" in body
     assert "**_last_usage" in body
+
+
+def test_mcp_parallel_block_emits_block_events(tmp_path):
+    """A FOR EACH ... PARALLEL in mcp-server target emits parallel_block_start/end."""
+    parallel_src = Path("examples/parallel_classify.clio").read_text()
+    from clio.emitters.mcp_server import MCPServerEmitter
+    MCPServerEmitter().emit(build_ir(parse(parallel_src)), tmp_path)
+    flow_py = next(tmp_path.rglob("flow.py")).read_text()
+    assert '_log.emit("parallel_block_start"' in flow_py
+    assert '_log.emit("parallel_block_end"' in flow_py
+    assert "total_iterations=" in flow_py
+    assert "max_workers=10" in flow_py

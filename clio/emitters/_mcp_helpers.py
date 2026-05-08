@@ -413,8 +413,18 @@ def emit_parallel_for_each_mcp(
         f"{indent}async def {bound_name}({elem.loop_var}):\n"
         f"{indent}    async with _sem:\n"
         f"{indent}        return {call_expr}\n"
-        f"{indent}state[{elem.collector!r}] = await asyncio.gather("
-        f"*[{bound_name}(_x) for _x in _items])"
+        f'{indent}_log.emit("parallel_block_start", step={step.name!r}, '
+        f"collector={elem.collector!r}, total_iterations=len(_items), max_workers=10)\n"
+        f"{indent}_pblock_t0 = time.monotonic()\n"
+        f"{indent}_pblock_success = False\n"
+        f"{indent}try:\n"
+        f"{indent}    state[{elem.collector!r}] = await asyncio.gather("
+        f"*[{bound_name}(_x) for _x in _items])\n"
+        f"{indent}    _pblock_success = True\n"
+        f"{indent}finally:\n"
+        f'{indent}    _log.emit("parallel_block_end", step={step.name!r}, '
+        f"collector={elem.collector!r}, total_iterations=len(_items), "
+        f"duration_ms=int((time.monotonic() - _pblock_t0) * 1000), success=_pblock_success)"
     )
 
 
