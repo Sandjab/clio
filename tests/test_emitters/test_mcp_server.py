@@ -591,3 +591,27 @@ def test_mcp_parallel_block_emits_block_events(tmp_path):
     assert '_log.emit("parallel_block_end"' in flow_py
     assert "total_iterations=" in flow_py
     assert "max_workers=10" in flow_py
+
+
+def test_mcp_judgment_step_no_onfail_wraps_in_try_except(tmp_path):
+    """No-ON_FAIL judgment step must wrap body in try/except so a failed
+    sampling call still emits step_end with success=False before re-raising."""
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    from clio.emitters.mcp_server import MCPServerEmitter
+    MCPServerEmitter().emit(build_ir(parse(src)), tmp_path)
+    step_files = list((tmp_path / "classify" / "steps").glob("*.py"))
+    judgment_files = [
+        f for f in step_files
+        if "(judgment" in f.read_text() or "mcp_sampling" in f.read_text()
+    ]
+    assert judgment_files
+    body = judgment_files[0].read_text()
+    # The body should now contain try: ... except: emit step_end success=False; raise
+    assert "try:" in body
+    assert "except Exception" in body
+    # And both success and failure step_end paths should be present
+    assert body.count('_log.emit("step_end"') >= 2
+    # success=False must appear in a step_end (the failure path)
+    assert "success=False" in body
+    # And there should be a `raise` to re-throw the exception
+    assert "    raise" in body or "raise\n" in body

@@ -103,7 +103,12 @@ def detect_churn(*, customers: list[dict]) -> list[contracts.CustomerRisk]:
         esc_hit = _cache.cache_lookup(cache_dir, 'detect_churn', esc_key, 86400)
         if esc_hit is not None:
             try:
-                return (lambda raw: [contracts.CustomerRisk.model_validate(item) for item in raw])(json.loads(esc_hit))
+                _ret = (lambda raw: [contracts.CustomerRisk.model_validate(item) for item in raw])(json.loads(esc_hit))
+                _log.emit("step_end", step='detect_churn', mode="judgment",
+                          duration_ms=int((time.monotonic() - _t0) * 1000),
+                          cache_hit=True, model=_MODELS[model_idx],
+                          fallback_used=False, success=True)
+                return _ret
             except Exception:
                 pass  # stale escalate cache: fall through
         response = _attempt(_MODELS[model_idx], prompt)

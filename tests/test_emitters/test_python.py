@@ -1082,3 +1082,21 @@ def test_parallel_block_propagates_contextvar(tmp_path):
     assert "import contextvars" in flow_py
     assert "copy_context()" in flow_py
 
+
+def test_judgment_step_escalate_cache_hit_emits_step_end(tmp_path):
+    """When escalate hits a secondary-model cache, step_end must still be emitted."""
+    src = (FIXTURES / "mvp_v03_fallback.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    step_files = list((tmp_path / "retention" / "steps").glob("*.py"))
+    judgment_files = [f for f in step_files if "(judgment)" in f.read_text()]
+    body = judgment_files[0].read_text()
+    # The escalate path should now emit step_end before its return.
+    # Find the esc_hit handling block and verify step_end appears between
+    # "if esc_hit is not None:" and the next "return"
+    esc_idx = body.find("esc_hit is not None")
+    assert esc_idx > 0
+    # Within the next 800 chars (the block), find both step_end emission and a return
+    block = body[esc_idx:esc_idx + 800]
+    assert '_log.emit("step_end"' in block
+    assert "cache_hit=True" in block
+
