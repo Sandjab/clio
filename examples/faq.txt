@@ -1,0 +1,15 @@
+Q: Comment annuler mon abonnement ? R: Pour annuler votre abonnement, allez dans Compte > Abonnements et cliquez sur "Résilier". L'annulation prend effet à la fin de la période en cours déjà payée. Aucune pénalité.
+
+Q: Quel est le délai de remboursement ? R: Le délai de remboursement est de 14 jours après la souscription, hors période d'essai déjà consommée. Au-delà, seuls les abonnements annuels non utilisés peuvent être remboursés au prorata sur demande au support.
+
+Q: Comment changer de plan tarifaire ? R: Allez dans Compte > Plan et sélectionnez le nouveau plan. Le changement prend effet immédiatement, avec proratisation automatique de la différence sur la facture suivante.
+
+Q: Comment ajouter des membres à mon équipe ? R: Dans Compte > Équipe, cliquez sur "Inviter". Chaque membre ajouté augmente votre facture mensuelle selon le tarif "siège" du plan choisi. Les invitations expirent après 7 jours.
+
+Q: Mes données sont-elles chiffrées ? R: Oui — TLS 1.3 en transit, AES-256 au repos. Les clés sont gérées par AWS KMS avec rotation annuelle automatique. Aucun employé n'a accès aux données client en clair.
+
+Q: Comment exporter mes données (RGPD) ? R: Compte > Données personnelles > "Exporter mes données" génère une archive ZIP envoyée à votre adresse email vérifiée sous 48h. L'export inclut profil, historique d'usage et fichiers stockés.
+
+Q: Comment contacter le support technique ? R: Le support technique est joignable via Compte > Aide > "Ouvrir un ticket". Délai de réponse standard : 24h ouvrées. Les abonnements Pro et Enterprise bénéficient d'un canal prioritaire avec réponse sous 4h ouvrées.
+
+Q: Que se passe-t-il si je ne paie pas ma facture ? R: Après 7 jours de retard, l'accès passe en mode lecture seule. Après 30 jours, le compte est suspendu. Après 90 jours sans régularisation, les données sont supprimées définitivement conformément à notre politique de rétention.
