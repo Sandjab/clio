@@ -6,8 +6,11 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 
 import anthropic
+
+from ..clio_runtime import logging as _log
 
 from .. import contracts
 
@@ -22,26 +25,36 @@ _SYSTEM_PROMPT = (
 _MODELS = ('claude-haiku-4-5-20251001',)
 
 
-def _attempt(model, prompt):
-    """Single attempt: SDK call → markdown strip → Pydantic validation."""
-    try:
-        client = anthropic.Anthropic()
-        msg = client.messages.create(
-            model=model,
-            max_tokens=4096,
-            system=_SYSTEM_PROMPT,
-            messages=[{'role': 'user', 'content': prompt}],
-        )
-        raw = msg.content[0].text if msg.content else ''
-        if not raw:
-            return None
-        cleaned = '\n'.join(line for line in raw.splitlines() if not line.startswith('```'))
-        return (lambda raw: [contracts.CustomerRisk.model_validate(item) for item in raw])(json.loads(cleaned))
-    except Exception:
-        return None
-
-
 def detect_churn(*, customers: list[dict]) -> list[contracts.CustomerRisk]:
+    _t0 = time.monotonic()
+    _log.emit("step_start", step='detect_churn', mode="judgment")
+    _last_usage: dict = {}
+
+    def _attempt(model, prompt):
+        """Single attempt: SDK call → markdown strip → Pydantic validation."""
+        nonlocal _last_usage
+        try:
+            client = anthropic.Anthropic()
+            msg = client.messages.create(
+                model=model,
+                max_tokens=4096,
+                system=_SYSTEM_PROMPT,
+                messages=[{'role': 'user', 'content': prompt}],
+            )
+            if hasattr(msg, 'usage') and msg.usage is not None:
+                _last_usage = {
+                    'tokens_in': getattr(msg.usage, 'input_tokens', None),
+                    'tokens_out': getattr(msg.usage, 'output_tokens', None),
+                }
+                _last_usage = {k: v for k, v in _last_usage.items() if v is not None}
+            raw = msg.content[0].text if msg.content else ''
+            if not raw:
+                return None
+            cleaned = '\n'.join(line for line in raw.splitlines() if not line.startswith('```'))
+            return (lambda raw: [contracts.CustomerRisk.model_validate(item) for item in raw])(json.loads(cleaned))
+        except Exception:
+            return None
+
     prompt = _PROMPT_TEMPLATE
     prompt = prompt.replace('${customers}', json.dumps(customers))
     prompt = prompt.replace('${schema}', _INLINED_SCHEMA)
@@ -53,6 +66,14 @@ def detect_churn(*, customers: list[dict]) -> list[contracts.CustomerRisk]:
 
     if response is None:
         print('[clio] step detect_churn: ON_FAIL strategies exhausted', file=sys.stderr)
+        _log.emit("step_end", step='detect_churn', mode="judgment",
+                  duration_ms=int((time.monotonic() - _t0) * 1000),
+                  cache_hit=False, model=_MODELS[model_idx],
+                  fallback_used=False, success=False)
         raise SystemExit(1)
 
+    _log.emit("step_end", step='detect_churn', mode="judgment",
+              duration_ms=int((time.monotonic() - _t0) * 1000),
+              cache_hit=False, model=_MODELS[model_idx],
+              fallback_used=False, success=True, **_last_usage)
     return response

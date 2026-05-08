@@ -955,3 +955,57 @@ def test_flow_py_emits_set_flow_and_flow_events(tmp_path):
     assert "finally:" in flow_py
     assert "_log.set_flow(None)" in flow_py
 
+
+def test_judgment_step_imports_logging_and_time(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    step_files = list((tmp_path / "classify" / "steps").glob("*.py"))
+    judgment_files = [f for f in step_files if "(judgment)" in f.read_text()]
+    assert judgment_files, "expected at least one judgment step in fixture"
+    body = judgment_files[0].read_text()
+    assert "import time" in body
+    assert "from ..clio_runtime import logging as _log" in body
+
+
+def test_judgment_step_has_step_start(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    step_files = list((tmp_path / "classify" / "steps").glob("*.py"))
+    judgment_files = [f for f in step_files if "(judgment)" in f.read_text()]
+    body = judgment_files[0].read_text()
+    assert '_log.emit("step_start"' in body
+    assert 'mode="judgment"' in body
+
+
+def test_judgment_step_has_at_least_two_step_ends(tmp_path):
+    """A judgment step with cache + ON_FAIL has 3 return paths:
+    cache hit, success, abort. Each gets its own step_end."""
+    src = (FIXTURES / "mvp_v03_cache.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    step_files = list((tmp_path / "retention" / "steps").glob("*.py"))
+    judgment_files = [f for f in step_files if "(judgment)" in f.read_text()]
+    assert judgment_files
+    body = judgment_files[0].read_text()
+    count = body.count('_log.emit("step_end"')
+    assert count >= 2, f"expected >=2 step_end calls, got {count}"
+
+
+def test_judgment_step_step_end_carries_cache_hit_field(tmp_path):
+    src = (FIXTURES / "mvp_v03_cache.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    step_files = list((tmp_path / "retention" / "steps").glob("*.py"))
+    judgment_files = [f for f in step_files if "(judgment)" in f.read_text()]
+    body = judgment_files[0].read_text()
+    assert "cache_hit=True" in body
+    assert "cache_hit=False" in body
+
+
+def test_judgment_step_initializes_last_usage(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    step_files = list((tmp_path / "classify" / "steps").glob("*.py"))
+    judgment_files = [f for f in step_files if "(judgment)" in f.read_text()]
+    body = judgment_files[0].read_text()
+    assert "_last_usage" in body
+    assert "**_last_usage" in body
+

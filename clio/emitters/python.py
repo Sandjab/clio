@@ -206,6 +206,7 @@ class PythonEmitter(BaseEmitter):
             "",
             "import json",
             "import sys",
+            "import time",
         ]
         if cache_active or attempt_needs_os:
             header += ["import os"]
@@ -216,6 +217,7 @@ class PythonEmitter(BaseEmitter):
         ] + provider_imports + [
             "",
         ]
+        header += ["from ..clio_runtime import logging as _log", ""]
         if cache_active:
             header += ["from ..clio_runtime import cache as _cache", ""]
         header += [
@@ -230,9 +232,6 @@ class PythonEmitter(BaseEmitter):
             "    'and no leading or trailing whitespace beyond the JSON itself.'",
             ")",
             f"_MODELS = {models_array_repr}",
-            "",
-            "",
-        ] + attempt_lines + [
             "",
             "",
         ]
@@ -252,6 +251,13 @@ class PythonEmitter(BaseEmitter):
 
         body = list(header)
         body.append(f"def {step.name}({params}) -> {ret_type}:")
+        body.append("    _t0 = time.monotonic()")
+        body.append(f'    _log.emit("step_start", step={step.name!r}, mode="judgment")')
+        body.append("    _last_usage: dict = {}")
+        body.append("")
+        # Inline _attempt as a closure so it can nonlocal-bind _last_usage
+        body.extend("    " + line for line in attempt_lines)
+        body.append("")
         body.append("    prompt = _PROMPT_TEMPLATE")
         body += sub_lines
         body.append("")
@@ -273,7 +279,12 @@ class PythonEmitter(BaseEmitter):
                 f"    hit = _cache.cache_lookup(cache_dir, '{step.name}', primary_key, {ttl_repr})",
                 "    if hit is not None:",
                 "        try:",
-                f"            return {result_class}(json.loads(hit))",
+                f"            _ret = {result_class}(json.loads(hit))",
+                f'            _log.emit("step_end", step={step.name!r}, mode="judgment",',
+                "                      duration_ms=int((time.monotonic() - _t0) * 1000),",
+                "                      cache_hit=True, model=_MODELS[0],",
+                "                      fallback_used=False, success=True)",
+                "            return _ret",
                 "        except Exception:",
                 "            pass  # stale cache (schema changed): fall through to a fresh call",
                 "",
@@ -336,6 +347,10 @@ class PythonEmitter(BaseEmitter):
                 chain_lines += [
                     "    if response is None:",
                     f"        print({full_msg!r}, file=sys.stderr)",
+                    f'        _log.emit("step_end", step={step.name!r}, mode="judgment",',
+                    "                  duration_ms=int((time.monotonic() - _t0) * 1000),",
+                    "                  cache_hit=False, model=_MODELS[model_idx],",
+                    "                  fallback_used=False, success=False)",
                     "        raise SystemExit(1)",
                     "",
                 ]
@@ -344,6 +359,10 @@ class PythonEmitter(BaseEmitter):
             chain_lines += [
                 "    if response is None:",
                 f"        print('[clio] step {step.name}: ON_FAIL strategies exhausted', file=sys.stderr)",
+                f'        _log.emit("step_end", step={step.name!r}, mode="judgment",',
+                "                  duration_ms=int((time.monotonic() - _t0) * 1000),",
+                "                  cache_hit=False, model=_MODELS[model_idx],",
+                "                  fallback_used=False, success=False)",
                 "        raise SystemExit(1)",
                 "",
             ]
@@ -358,7 +377,14 @@ class PythonEmitter(BaseEmitter):
                 "",
             ]
 
-        chain_lines.append("    return response")
+        fb_field = "fallback_used=fallback_used" if has_fallback else "fallback_used=False"
+        chain_lines += [
+            f'    _log.emit("step_end", step={step.name!r}, mode="judgment",',
+            "              duration_ms=int((time.monotonic() - _t0) * 1000),",
+            f"              cache_hit=False, model=_MODELS[model_idx],",
+            f"              {fb_field}, success=True, **_last_usage)",
+            "    return response",
+        ]
 
         body += chain_lines
         body.append("")
