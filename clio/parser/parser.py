@@ -427,7 +427,7 @@ class _Parser:
         line: int, col: int,
         mode_line: int, mode_col: int,
     ) -> ShellImpl:
-        allowed = {"cmd", "timeout"}
+        allowed = {"cmd", "timeout", "parse"}
         unknown = set(fields.keys()) - allowed
         if unknown:
             sample = sorted(unknown)[0]
@@ -459,10 +459,21 @@ class _Parser:
                 )
             timeout_seconds = to
 
+        parse_value = "none"
+        if "parse" in fields:
+            pv, pline, pcol = fields["parse"]
+            if not isinstance(pv, str) or pv not in ("none", "json"):
+                raise ParseError(
+                    f"impl.parse must be one of: none, json (got {pv!r})",
+                    pline, pcol,
+                )
+            parse_value = pv
+
         return ShellImpl(
             line=line, col=col,
             cmd=cmd_value,
             timeout_seconds=timeout_seconds,
+            parse=parse_value,
         )
 
     def _build_rest_impl(

@@ -1,5 +1,6 @@
 import pytest
 from clio.parser.parser import parse, ParseError
+from clio.parser.ast_nodes import ShellImpl
 
 
 def test_parse_minimal_step():
@@ -489,6 +490,55 @@ def test_parse_impl_shell_unknown_field_raises():
     with pytest.raises(ParseError) as exc:
         parse(src)
     assert "stdin" in str(exc.value)
+
+
+def test_parse_impl_shell_with_parse_json():
+    src = (
+        "STEP load_corpus\n"
+        "  TAKES: file: str\n"
+        "  GIVES: corpus: List<str>\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode:  shell\n"
+        '    cmd:   "cat ${file}"\n'
+        "    parse: json\n"
+    )
+    program = parse(src)
+    step = program.decls[0]
+    assert isinstance(step.impl, ShellImpl)
+    assert step.impl.cmd == "cat ${file}"
+    assert step.impl.parse == "json"
+
+
+def test_parse_impl_shell_with_parse_none_explicit():
+    src = (
+        "STEP load_corpus\n"
+        "  TAKES: file: str\n"
+        "  GIVES: corpus: str\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode:  shell\n"
+        '    cmd:   "cat ${file}"\n'
+        "    parse: none\n"
+    )
+    program = parse(src)
+    step = program.decls[0]
+    assert step.impl.parse == "none"
+
+
+def test_parse_impl_shell_parse_invalid_value_raises():
+    src = (
+        "STEP load_corpus\n"
+        "  TAKES: file: str\n"
+        "  GIVES: corpus: str\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode:  shell\n"
+        '    cmd:   "cat ${file}"\n'
+        "    parse: yaml\n"
+    )
+    with pytest.raises(ParseError, match="impl.parse must be one of"):
+        parse(src)
 
 
 def test_parse_impl_on_judgment_step_raises():

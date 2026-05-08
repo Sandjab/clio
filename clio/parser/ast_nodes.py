@@ -212,6 +212,7 @@ class ShellImpl(ImplBlock):
     which is unsafe with user-provided strings)."""
     cmd: str
     timeout_seconds: int | None
+    parse: str = "none"   # "none" (stdout as str) | "json" (json.loads at runtime)
 
 
 @dataclass(frozen=True)
