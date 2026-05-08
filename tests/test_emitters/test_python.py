@@ -1100,3 +1100,27 @@ def test_judgment_step_escalate_cache_hit_emits_step_end(tmp_path):
     assert '_log.emit("step_end"' in block
     assert "cache_hit=True" in block
 
+
+def test_flow_py_contains_persist_state_helper(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = (tmp_path / "classify" / "flow.py").read_text()
+    assert "def _persist_state(step_idx: int, state: dict)" in flow_py
+    assert "os.environ.get(\"CLIO_STATE_FILE\", \"state.json\")" in flow_py
+    assert "json.dump" in flow_py and "default=str" in flow_py
+    assert "os.replace(tmp, path)" in flow_py
+
+
+def test_flow_py_contains_total_steps_constant(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = (tmp_path / "classify" / "flow.py").read_text()
+    # mvp_v03_skeleton has 1 step in its FLOW chain
+    assert "TOTAL_STEPS = 1" in flow_py
+
+
+def test_flow_py_imports_os_for_persist_state(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = (tmp_path / "classify" / "flow.py").read_text()
+    assert "import os" in flow_py

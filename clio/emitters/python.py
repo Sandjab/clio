@@ -480,16 +480,32 @@ class PythonEmitter(BaseEmitter):
         # JSON-style double-quoted literal so callers can grep for
         # `set_flow("name")` consistently across emitters.
         flow_name_lit = json.dumps(graph.flow.name)
+        total_steps = len(graph.flow.chain)
         return (
             f'"""FLOW {graph.flow.name}.\n\n'
             f'Auto-generated. Calls steps in chain order, threading state through a dict.\n'
             f'"""\n'
             f'\n'
+            f'import json\n'
+            f'import os\n'
             f'import time\n'
             f'{cf_import}'
             f'{imports}\n'
             f'\n'
             f'from .clio_runtime import logging as _log\n'
+            f'\n'
+            f'\n'
+            f'TOTAL_STEPS = {total_steps}\n'
+            f'\n'
+            f'\n'
+            f'def _persist_state(step_idx: int, state: dict) -> None:\n'
+            f'    """Atomic write of {{version, flow, step_index, state}} to state.json."""\n'
+            f'    path = os.environ.get("CLIO_STATE_FILE", "state.json")\n'
+            f'    payload = {{"version": 1, "flow": {flow_name_lit}, "step_index": step_idx, "state": state}}\n'
+            f'    tmp = path + ".tmp"\n'
+            f'    with open(tmp, "w") as f:\n'
+            f'        json.dump(payload, f, default=str)\n'
+            f'    os.replace(tmp, path)\n'
             f'\n'
             f'\n'
             f'def run(**initial: object) -> dict:\n'
