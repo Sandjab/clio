@@ -75,7 +75,13 @@ def emit(event: str, **fields) -> None:
 
     Never raises: any I/O error during the write is swallowed (logging must
     not break a flow). Reserved keys 'ts' and 'event' are always set by emit
-    itself; caller-supplied 'ts'/'event' would be overwritten."""
+    itself; caller-supplied 'ts'/'event' would be overwritten.
+
+    Caller-supplied 'flow' (including 'flow=None') overrides the ContextVar.
+    This is asymmetric with set_flow(None) which omits the 'flow' key entirely.
+
+    If a kwarg's value is not JSON-serializable, the event is silently dropped
+    (no exception, no partial line). Callers must ensure values are JSON-safe."""
     if not _enabled():
         return
     try:

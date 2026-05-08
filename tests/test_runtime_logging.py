@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import sys
 import threading
 from pathlib import Path
 
@@ -142,6 +141,7 @@ def test_contextvar_isolation_in_asyncio_tasks(capsys, monkeypatch):
 
     async def _task(flow_name: str, results: list) -> None:
         L.set_flow(flow_name)
+        await asyncio.sleep(0)  # yield — force interleaving with the other task
         L.emit("step_start", step="x", mode="judgment")
         results.append(flow_name)
 
