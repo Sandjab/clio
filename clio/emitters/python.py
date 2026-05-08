@@ -458,7 +458,10 @@ class PythonEmitter(BaseEmitter):
             _emit_item(item, "    ", set())
 
         needs_concurrent = _has_parallel(graph.flow.chain)
-        cf_import = "import concurrent.futures\n\n" if needs_concurrent else ""
+        cf_import = (
+            "import concurrent.futures\nimport contextvars\n\n"
+            if needs_concurrent else ""
+        )
 
         imports = "\n".join(f"from .steps import {n} as {n}_mod" for n in imported_steps)
 

@@ -1061,3 +1061,24 @@ def test_exact_step_imports_logging_and_time(tmp_path):
     assert "from ..clio_runtime import logging as _log" in body
     assert "import time" in body
 
+
+def test_parallel_block_emits_block_events(tmp_path):
+    """A FOR EACH ... PARALLEL emits parallel_block_start/end events."""
+    src = Path("examples/parallel_classify.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = next(tmp_path.rglob("flow.py")).read_text()
+    assert '_log.emit("parallel_block_start"' in flow_py
+    assert '_log.emit("parallel_block_end"' in flow_py
+    assert "total_iterations=" in flow_py
+    assert "max_workers=10" in flow_py
+
+
+def test_parallel_block_propagates_contextvar(tmp_path):
+    """Workers must see the flow ContextVar set by run() — wrap each
+    submitted task in copy_context().run()."""
+    src = Path("examples/parallel_classify.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = next(tmp_path.rglob("flow.py")).read_text()
+    assert "import contextvars" in flow_py
+    assert "copy_context()" in flow_py
+

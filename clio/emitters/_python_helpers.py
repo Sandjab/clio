@@ -662,7 +662,18 @@ def emit_parallel_for_each_python(
     The body is guaranteed (by IR validation) to be a single CallIR with a
     GIVES. Default cap is 10. Failure semantics: ThreadPoolExecutor's `with`
     exit cancels queued futures; in-flight tasks finish; the first
-    `_fut.result()` to raise propagates."""
+    `_fut.result()` to raise propagates.
+
+    Each task is wrapped in contextvars.copy_context().run(...) so the
+    _current_flow ContextVar set by run() propagates into worker threads.
+    Without this wrapping, in-block step events would lack the 'flow' field
+    because ThreadPoolExecutor workers don't inherit the parent's
+    ContextVar copy by default.
+
+    The block is bracketed by parallel_block_start/parallel_block_end events;
+    the end event is emitted in a finally clause and reports duration_ms +
+    success.
+    """
     inner = elem.body[0]
     step = steps_by_name[inner.step_name]
 
@@ -682,17 +693,30 @@ def emit_parallel_for_each_python(
 
     # The collection always lives in state for a parallel FOR EACH.
     items_lookup = f"state[{elem.collection!r}]"
+    step_call = f"{step.name}_mod.{step.name}"
 
     return (
         f"{indent}_items = {items_lookup}\n"
         f"{indent}_results = [None] * len(_items)\n"
-        f"{indent}with concurrent.futures.ThreadPoolExecutor(max_workers=10) as _ex:\n"
-        f"{indent}    _futures = {{_ex.submit({step.name}_mod.{step.name}, {kwargs_str}): _i "
+        f'{indent}_log.emit("parallel_block_start", step={step.name!r}, '
+        f"collector={elem.collector!r}, total_iterations=len(_items), max_workers=10)\n"
+        f"{indent}_pblock_t0 = time.monotonic()\n"
+        f"{indent}_pblock_success = False\n"
+        f"{indent}try:\n"
+        f"{indent}    def _task({elem.loop_var}):\n"
+        f"{indent}        return {step_call}({kwargs_str})\n"
+        f"{indent}    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as _ex:\n"
+        f"{indent}        _futures = {{_ex.submit(contextvars.copy_context().run, _task, {elem.loop_var}): _i "
         f"for _i, {elem.loop_var} in enumerate(_items)}}\n"
-        f"{indent}    for _fut in concurrent.futures.as_completed(_futures):\n"
-        f"{indent}        _idx = _futures[_fut]\n"
-        f"{indent}        _results[_idx] = _fut.result()\n"
-        f"{indent}state[{elem.collector!r}] = _results"
+        f"{indent}        for _fut in concurrent.futures.as_completed(_futures):\n"
+        f"{indent}            _idx = _futures[_fut]\n"
+        f"{indent}            _results[_idx] = _fut.result()\n"
+        f"{indent}    state[{elem.collector!r}] = _results\n"
+        f"{indent}    _pblock_success = True\n"
+        f"{indent}finally:\n"
+        f'{indent}    _log.emit("parallel_block_end", step={step.name!r}, '
+        f"collector={elem.collector!r}, total_iterations=len(_items), "
+        f"duration_ms=int((time.monotonic() - _pblock_t0) * 1000), success=_pblock_success)"
     )
 
 
