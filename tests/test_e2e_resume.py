@@ -83,7 +83,8 @@ def test_resume_with_prepopulated_state(tmp_path):
         cwd=out_dir, env=env, capture_output=True, text=True,
     )
     # No resume-validation failure should occur:
-    assert "missing" not in proc.stderr or "[clio] resume requested" not in proc.stderr, proc.stderr
+    assert "missing" not in proc.stderr, proc.stderr
+    assert "[clio] resume requested" not in proc.stderr, proc.stderr
     assert "flow mismatch" not in proc.stderr, proc.stderr
     assert "only reached step" not in proc.stderr, proc.stderr
     assert ">= total steps=" not in proc.stderr, proc.stderr

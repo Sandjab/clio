@@ -122,6 +122,10 @@ covering `flow_start`/`flow_end`, `step_start`/`step_end` (3 paths for judgment)
 `response.usage` (Anthropic `input_tokens`/`output_tokens`, OpenAI
 `prompt_tokens`/`completion_tokens`).
 
+**Resume** (v0.4+): emitted package writes `state.json` atomically after
+each top-level chain item; `python -m my_pkg --from-step N` reloads the
+state and skips items 1..N. Path via `CLIO_STATE_FILE` env var.
+
 ---
 
 ## `target: mcp-server`

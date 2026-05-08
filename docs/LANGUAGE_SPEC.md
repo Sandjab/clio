@@ -493,6 +493,42 @@ to OTLP spans can be added without changing the emission contract.
 `target: claude-cli` does **not** instrument logging in v0.4 — use
 `--target python` or `--target mcp-server` for observable runs.
 
+### Resume (v0.4+)
+
+The python target persists `state.json` after each top-level chain item
+completes. To resume from a specific step:
+
+```bash
+python -m my_pkg --from-step 3   # skip the first 3 chain items, resume from item 4
+```
+
+State file location: `./state.json` by default (cwd of the invocation),
+override via `CLIO_STATE_FILE=path/to/state.json`.
+
+State file schema:
+
+```json
+{
+  "version": 1,
+  "flow": "<flow_name>",
+  "step_index": <last completed top-level chain item, 1-based>,
+  "state": { "...accumulated state dict..." }
+}
+```
+
+Granularity: a `FOR EACH` (sequential or PARALLEL) is one chain item
+regardless of internal iterations. Mid-iteration resume is not supported.
+
+Failure modes (all `SystemExit(2)`):
+- `--from-step N` with N < 0
+- state.json missing
+- state.json `flow` field doesn't match the compiled package
+- state.json `step_index` < N
+- N >= TOTAL_STEPS
+
+Targets v1: python only. mcp-server is server-stateless by design;
+claude-cli deferred to v2.
+
 ## Types
 
 ### Primitives

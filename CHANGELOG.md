@@ -2,7 +2,16 @@
 
 ## Unreleased
 
-(no entries yet)
+### Resume
+
+- **W5 (short-term): Step-granularity resume.** Python emitter writes
+  `state.json` after each top-level chain item (atomic via
+  `os.replace(tmp, path)`). The emitted `__main__.py` accepts
+  `--from-step N` (1-based; reads `state.json` or `$CLIO_STATE_FILE`)
+  and skips items 1..N. Granularity is one top-level chain item: a
+  `FOR EACH` (sequential or PARALLEL) counts as one regardless of
+  internal iterations. Strict fail-fast on edge cases. Targets v1:
+  python only.
 
 ## v0.4.0 — 2026-05-08
 

@@ -94,6 +94,18 @@ Six event types cover flow start/end, step start/end (with `mode`,
 parallel-block start/end. The schema is OTel-mappable. See
 [docs/LANGUAGE_SPEC.md](docs/LANGUAGE_SPEC.md) for the full reference.
 
+### Resume
+
+If a long pipeline crashes mid-flow, resume from the last completed step:
+
+```bash
+python -m my_compiled_flow --from-step 3
+```
+
+The package writes `state.json` after each completed step (path via
+`CLIO_STATE_FILE`). See [docs/LANGUAGE_SPEC.md](docs/LANGUAGE_SPEC.md)
+for the schema.
+
 ## Example
 
 This is `examples/mvp.clio` — it compiles to both `claude-cli` and `python` with no edits beyond filling the EXACT step bodies.
