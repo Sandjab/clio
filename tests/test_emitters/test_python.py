@@ -270,6 +270,7 @@ def test_emit_onfail_fallback_uses_naive(tmp_path, monkeypatch):
 def test_emit_orchestrator_runs_full_flow(tmp_path, monkeypatch):
     src = (FIXTURES / "mvp_v03_contracts.clio").read_text()
     PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    monkeypatch.setenv("CLIO_STATE_FILE", str(tmp_path / "state.json"))
     import sys
     sys.path.insert(0, str(tmp_path))
     try:

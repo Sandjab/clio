@@ -202,3 +202,7 @@ $RECYCLE.BIN/
 *.lnk
 # git worktrees (used by subagent-driven-development)
 .worktrees/
+
+# clio resume state file (written by emitted python projects when run from cwd)
+state.json
+state.json.tmp
