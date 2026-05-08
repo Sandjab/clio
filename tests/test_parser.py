@@ -537,7 +537,7 @@ def test_parse_impl_shell_parse_invalid_value_raises():
         '    cmd:   "cat ${file}"\n'
         "    parse: yaml\n"
     )
-    with pytest.raises(ParseError, match="impl.parse must be one of"):
+    with pytest.raises(ParseError, match="unknown impl.parse"):
         parse(src)
 
 

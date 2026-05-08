@@ -42,6 +42,7 @@ _VALID_IMPL_MODES = {"code", "rest", "shell"}
 _VALID_HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 _VALID_INVOKE_MODES = {"cli", "api"}
 _VALID_PROTOCOLS = {"anthropic", "openai", "bedrock", "vertex"}
+_VALID_PARSE_MODES = {"none", "json"}
 
 
 class _Parser:
@@ -462,9 +463,9 @@ class _Parser:
         parse_value = "none"
         if "parse" in fields:
             pv, pline, pcol = fields["parse"]
-            if not isinstance(pv, str) or pv not in ("none", "json"):
+            if not isinstance(pv, str) or pv not in _VALID_PARSE_MODES:
                 raise ParseError(
-                    f"impl.parse must be one of: none, json (got {pv!r})",
+                    f"unknown impl.parse {pv!r}, expected one of {sorted(_VALID_PARSE_MODES)}",
                     pline, pcol,
                 )
             parse_value = pv
