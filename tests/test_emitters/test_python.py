@@ -641,6 +641,46 @@ def test_emit_shell_step_runtime_substitution(tmp_path, monkeypatch):
                 del sys.modules[k]
 
 
+def test_emit_shell_step_with_parse_json_imports_json_and_calls_loads(tmp_path):
+    src = (
+        "STEP load_corpus\n"
+        "  TAKES: file: str\n"
+        "  GIVES: corpus: List<str>\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode:  shell\n"
+        '    cmd:   "cat ${file}"\n'
+        "    parse: json\n"
+        "FLOW pipe\n"
+        '  load_corpus(file="x")\n'
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "pipe" / "steps" / "load_corpus.py").read_text()
+    assert "import json" in body
+    assert "json.loads(result.stdout)" in body
+    assert "return result.stdout" not in body
+
+
+def test_emit_shell_step_default_parse_returns_stdout_string(tmp_path):
+    """Regression guard for v0.4 behaviour — parse=none keeps the legacy emit."""
+    src = (
+        "STEP extract_pdf\n"
+        "  TAKES: file: str\n"
+        "  GIVES: text: str\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: shell\n"
+        '    cmd:  "pdftotext ${file} -"\n'
+        "FLOW pipe\n"
+        '  extract_pdf(file="x")\n'
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "pipe" / "steps" / "extract_pdf.py").read_text()
+    assert "return result.stdout" in body
+    assert "json.loads" not in body
+    assert "import json" not in body
+
+
 def test_emit_rest_step_templated_runtime_substitution(tmp_path, monkeypatch):
     import sys
     import types

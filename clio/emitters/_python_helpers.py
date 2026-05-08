@@ -626,6 +626,13 @@ def emit_shell_step(
         if impl.timeout_seconds is not None else "timeout=None"
     )
 
+    if impl.parse == "json":
+        json_import = "import json\n"
+        return_line = "    return json.loads(result.stdout)\n"
+    else:
+        json_import = ""
+        return_line = "    return result.stdout\n"
+
     return (
         f'"""STEP {step.name} (exact, impl: shell)\n'
         f'TAKES:\n'
@@ -638,6 +645,7 @@ def emit_shell_step(
         f'"""\n'
         f'from __future__ import annotations\n\n'
         f'import subprocess\n'
+        f'{json_import}'
         f'import time\n\n'
         f'from ..clio_runtime import logging as _log\n\n\n'
         f'def {step.name}({params}) -> {ret_type}:\n'
@@ -648,7 +656,7 @@ def emit_shell_step(
         f'    result = subprocess.run(_argv, capture_output=True, text=True, check=True, {timeout_arg})\n'
         f'    _log.emit("step_end", step={step.name!r}, mode="exact",\n'
         f'              duration_ms=int((time.monotonic() - _t0) * 1000), success=True)\n'
-        f'    return result.stdout\n'
+        f'{return_line}'
     )
 
 
