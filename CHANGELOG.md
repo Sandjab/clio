@@ -27,6 +27,16 @@
 - Both emitters: `impl.mode: shell` emits a step that calls `subprocess.run([...], capture_output=True, text=True, check=True, timeout=...)`. The argv list is `shlex.split` at compile time and `${var}` placeholders are substituted token-by-token at runtime — `shell=False` keeps shell-injection out of the picture by construction. Stdout becomes the step's `GIVES`. No pipes/redirections (wrap a pipeline in a script).
 - Python emitter: `pydantic>=2` is added to the emitted `pyproject.toml` only when at least one CONTRACT is declared. Skeleton flows (no contracts) no longer pull in an unused dependency.
 
+### Added
+
+- **W2 (short-term): Structured JSON-Line logging.** New `clio_runtime/logging.py`
+  module copied verbatim into emitted projects. Opt-in via `CLIO_LOG=1`,
+  destination via `CLIO_LOG_FILE` (default stderr). Six event types: `flow_start`/
+  `flow_end`, `step_start`/`step_end`, `parallel_block_start`/`parallel_block_end`.
+  `python` and `mcp-server` targets instrumented; `claude-cli` deferred to v2.
+  Schema is flat and OTel-mappable. ContextVar propagates `flow` natively
+  through asyncio; ThreadPoolExecutor uses `contextvars.copy_context().run`.
+
 ### CLI
 
 - New `clio graph <source>` subcommand that renders the FLOW as a Mermaid (default) or Graphviz DOT source. EXACT steps render as rectangles, JUDGMENT steps as parallelograms; FOR EACH renders as a labelled subgraph in Mermaid and as a dashed labelled edge in DOT (cluster-with-`lhead` machinery skipped on purpose). Output goes to stdout or to `--output FILE`. Designed for paste-into-GitHub-PR rendering since GitHub renders Mermaid natively.

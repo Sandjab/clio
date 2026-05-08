@@ -466,6 +466,33 @@ ON_FAIL: abort("reason")
 - `escalate` — switch to a more capable LLM model
 - `abort(message)` — stop the flow with an error
 
+## Observability (v0.4+)
+
+Every emitted project (`target: python` or `target: mcp-server`) embeds a
+small JSON-Line logger at `clio_runtime/logging.py`. The logger is **opt-in**:
+
+- `CLIO_LOG=1` enables emission. Anything else (unset, "0", empty) is no-op.
+- `CLIO_LOG_FILE=path/to/run.jsonl` redirects output to a file (default: `stderr`).
+
+Six event types are emitted:
+
+| Event | When | Required fields | Optional fields |
+|---|---|---|---|
+| `flow_start` | beginning of `run()` | `flow` | — |
+| `flow_end` | end of `run()` (`finally`) | `flow`, `duration_ms`, `success` | — |
+| `step_start` | first line of step body | `step`, `mode` (`exact`\|`judgment`) | `flow` |
+| `step_end` | before each return | `step`, `mode`, `duration_ms`, `success` | `flow`, `cache_hit`, `model`, `fallback_used`, `tokens_in`, `tokens_out` |
+| `parallel_block_start` | before ThreadPoolExecutor / `asyncio.gather` | `step`, `collector`, `total_iterations`, `max_workers` | `flow` |
+| `parallel_block_end` | after the gather (`finally`) | `step`, `collector`, `total_iterations`, `duration_ms`, `success` | `flow` |
+
+All events carry `ts` (ISO 8601 UTC, ms precision) and `event` (string).
+
+The schema is intentionally flat and OTel-mappable: a downstream converter
+to OTLP spans can be added without changing the emission contract.
+
+`target: claude-cli` does **not** instrument logging in v0.4 — use
+`--target python` or `--target mcp-server` for observable runs.
+
 ## Types
 
 ### Primitives

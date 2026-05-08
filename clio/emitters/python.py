@@ -1,8 +1,8 @@
 """Emitter for `target: python`.
 
 Produces a runnable Python package (Anthropic SDK + Pydantic v2) from a
-target-independent IR. Reuses `clio/runtime/cache.py` verbatim under the
-emitted package's `clio_runtime/`.
+target-independent IR. Reuses `clio/runtime/cache.py` and `clio/runtime/
+logging.py` verbatim under the emitted package's `clio_runtime/`.
 
 Module-level helpers live in `_python_helpers.py`; this file holds only
 the PythonEmitter class.

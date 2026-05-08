@@ -55,6 +55,9 @@ Each target is an emitter module that transforms the IR graph into a runnable pr
 
 **Contract validation**: hooks in `.claude/hooks.json` run a validation script after each judgment step. Validation is a simple `python -m jsonschema` call against the emitted `.schema.json` — no external lib beyond the stdlib-adjacent `jsonschema` package. If validation fails, the hook triggers the ON_FAIL strategy.
 
+**Logging**: not instrumented in v0.4. Use `--target python` or
+`--target mcp-server` for observable runs.
+
 ---
 
 ## `target: python`
@@ -112,6 +115,12 @@ Both targets read/write `<output>/.cache/<step_name>/<sha256>.json` with the sam
 ### System prompt
 
 Each judgment step's SDK call sends a strict JSON-only system prompt that aligns the model's behavior with `claude -p`'s built-in scaffolding. Ensures contract validation succeeds reliably.
+
+**Logging** (v0.4+): structured JSONL events via `CLIO_LOG=1`. Six event types
+covering `flow_start`/`flow_end`, `step_start`/`step_end` (3 paths for judgment),
+`parallel_block_start`/`parallel_block_end`. Tokens extracted from
+`response.usage` (Anthropic `input_tokens`/`output_tokens`, OpenAI
+`prompt_tokens`/`completion_tokens`).
 
 ---
 
@@ -175,6 +184,10 @@ These work identically to the `python` target (shared helpers in `_python_helper
 - `ON_FAIL: retry / escalate / fallback / abort` — full strategy chain.
 - `impl.mode: rest` — emits `requests.request(...)` with `${var}` URL templating.
 - `impl.mode: shell` — emits `subprocess.run([...], shell=False)`.
+
+**Logging** (v0.4+): same event taxonomy as `python` target. `model` field
+comes from the MCP sampling response. `tokens_in`/`tokens_out` emitted iff the
+sampling response carries `usage`.
 
 ---
 

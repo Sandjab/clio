@@ -80,6 +80,20 @@ pip install -e ./mcp-out
 pytest tests/ -v
 ```
 
+### Observability
+
+Set `CLIO_LOG=1` to emit structured JSON-Line events to stderr, or
+`CLIO_LOG_FILE=run.jsonl` to redirect to a file:
+
+```bash
+CLIO_LOG=1 CLIO_LOG_FILE=run.jsonl python -m my_compiled_flow
+```
+
+Six event types cover flow start/end, step start/end (with `mode`,
+`duration_ms`, optional `cache_hit`/`model`/`tokens_*`), and
+parallel-block start/end. The schema is OTel-mappable. See
+[docs/LANGUAGE_SPEC.md](docs/LANGUAGE_SPEC.md) for the full reference.
+
 ## Example
 
 This is `examples/mvp.clio` — it compiles to both `claude-cli` and `python` with no edits beyond filling the EXACT step bodies.
