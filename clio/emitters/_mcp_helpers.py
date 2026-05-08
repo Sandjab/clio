@@ -336,18 +336,40 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
     imports = "\n".join(f"from .steps import {n} as {n}_mod" for n in imported_steps)
     asyncio_import = "import asyncio\n\n" if _has_parallel(graph.flow.chain) else ""
 
+    # chain_lines start with "    " (4 spaces) for top-level items; some
+    # entries are multi-line strings (parallel FOR EACH). We re-indent every
+    # line of every entry by 4 more spaces so the chain runs inside `try:`.
+    chain_body = "\n".join(
+        "\n".join("    " + line for line in cl.split("\n"))
+        for cl in chain_lines
+    )
+    flow_name_lit = _json.dumps(graph.flow.name)
     return (
         '"""Async FLOW orchestrator. Auto-generated; do not edit."""\n'
         "from __future__ import annotations\n"
         "\n"
+        "import time\n"
         f"{asyncio_import}"
         f"{imports}\n"
+        "\n"
+        "from .clio_runtime import logging as _log\n"
         "\n"
         "\n"
         "async def run(*, _session=None, **initial: object) -> dict:\n"
         "    state: dict = dict(initial)\n"
-        + "\n".join(chain_lines)
-        + "\n    return state\n"
+        f"    _log.set_flow({flow_name_lit})\n"
+        '    _log.emit("flow_start")\n'
+        "    _success = False\n"
+        "    _t0 = time.monotonic()\n"
+        "    try:\n"
+        f"{chain_body}\n"
+        "        _success = True\n"
+        "        return state\n"
+        "    finally:\n"
+        '        _log.emit("flow_end", '
+        "duration_ms=int((time.monotonic() - _t0) * 1000), "
+        "success=_success)\n"
+        "        _log.set_flow(None)\n"
     )
 
 
