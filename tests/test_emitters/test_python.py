@@ -1035,6 +1035,7 @@ def test_judgment_step_initializes_last_usage(tmp_path):
     assert "**_last_usage" in body
 
 
+# Uses contracts fixture (has exact + judgment) since skeleton is judgment-only.
 def test_exact_step_emits_step_start_and_step_end(tmp_path):
     src = (FIXTURES / "mvp_v03_contracts.clio").read_text()
     PythonEmitter().emit(build_ir(parse(src)), tmp_path)
@@ -1044,8 +1045,13 @@ def test_exact_step_emits_step_start_and_step_end(tmp_path):
     body = exact_files[0].read_text()
     assert '_log.emit("step_start"' in body
     assert 'mode="exact"' in body
+    # Also assert step_end is emitted (plan calls for "exactly 1 step_start and 1 step_end").
+    assert '_log.emit("step_end"' in body
+    assert "duration_ms=" in body
+    assert "success=True" in body
 
 
+# Same fixture rationale as above.
 def test_exact_step_imports_logging_and_time(tmp_path):
     src = (FIXTURES / "mvp_v03_contracts.clio").read_text()
     PythonEmitter().emit(build_ir(parse(src)), tmp_path)
