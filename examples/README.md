@@ -110,3 +110,76 @@ iteration's `classify` result is computed but not retained for downstream
 aggregation. To aggregate, add a follow-up step after the loop that re-derives
 the per-line results (e.g. read them back from a side-channel the step writes
 to) or wait for the planned `FOR EACH x IN xs COLLECT y INTO ys:` syntax.
+
+## 4. `rag_basic.clio` / `rag_selfcontained.clio` — RAG-like (LLM-as-retriever)
+
+Pipeline: load corpus + question → score each chunk via an LLM (with reasoning) →
+answer the question quoting cited chunk ids. No embeddings, no vector store —
+the LLM is both retriever and generator.
+
+What these examples exercise that the others do not:
+
+- Three CONTRACTs in the same flow (`chunk`, `scored_chunk`, `rag_answer`).
+- A numeric ASSERT (`score >= 0.0`) compiled into a Pydantic `@field_validator`.
+  Note: the v0.1 expression parser supports a single comparator per ASSERT, so
+  the upper bound (`score <= 1.0`) is not expressed at the contract level — the
+  prompt is what asks the LLM to keep scores in [0, 1].
+- Multi-input judgment steps: `score_chunks(corpus, question)` and
+  `answer(question, scored, corpus)` — three TAKES references in one call.
+- `citations: List<int>` forcing the LLM to ground its answer in source ids.
+
+### Two variants — same flow, different load strategy
+
+| Variant | `load_corpus` | `load_question` | Manual edit needed |
+|---|---|---|---|
+| `rag_basic.clio` | stub (default `MODE: exact`) | stub (default `MODE: exact`) | yes — two short Python helpers (~10 lines each) |
+| `rag_selfcontained.clio` | `impl.shell` + `parse: json` on `faq.json` | `impl.shell` (`cat ${file}`) | none — compile-and-run |
+
+### Run `rag_basic.clio`
+
+```bash
+uv run python -m clio compile examples/rag_basic.clio --target python --output ./out
+# Edit ./out/rag_faq/steps/load_corpus.py:
+#
+#   from pathlib import Path
+#
+#   def load_corpus(file: str) -> list[Chunk]:
+#       paragraphs = Path(file).read_text().split("\n\n")
+#       return [Chunk(id=i+1, text=p.strip()) for i, p in enumerate(paragraphs) if p.strip()]
+#
+# Edit ./out/rag_faq/steps/load_question.py:
+#
+#   from pathlib import Path
+#
+#   def load_question(file: str) -> str:
+#       return Path(file).read_text().strip()
+#
+cp examples/faq.txt examples/question.txt ./out/
+uv pip install ./out
+ANTHROPIC_API_KEY=... rag_faq
+```
+
+### Run `rag_selfcontained.clio` (zero edits)
+
+```bash
+uv run python -m clio compile examples/rag_selfcontained.clio --target python --output ./out
+cp examples/faq.json examples/question.txt ./out/
+uv pip install ./out
+cd ./out && ANTHROPIC_API_KEY=... rag_faq
+# (cd into ./out is needed because cmd: "cat ${file}" resolves the path
+#  relative to the entrypoint's cwd. The trailing newline from `cat question.txt`
+#  is included verbatim in the question string — fine for v0.4, can be stripped
+#  in a future load step if needed.)
+```
+
+### Why two variants
+
+`rag_basic.clio` is the canonical pattern (matches `mvp.clio`, `entities.clio`,
+`classify_corpus.clio`): `MODE: exact` steps emit Python stubs the user fills.
+Use it when the file format needs conversion (CSV → records, raw text → chunks
+with custom splitting rules).
+
+`rag_selfcontained.clio` demonstrates the v0.5 `impl.shell.parse: json`
+extension: when the file already matches the `GIVES` shape (here a JSON array
+of `{id, text}` pairs), the loader becomes a one-line `cat`, parsed
+declaratively. No Python required.
