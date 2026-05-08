@@ -258,7 +258,7 @@ def _build_impl(decl: ImplBlock) -> ImplIR:
             raise IRBuildError(
                 f"line {decl.line}: impl.cmd must contain at least one token"
             )
-        return ShellImplIR(argv=argv, timeout_seconds=decl.timeout_seconds)
+        return ShellImplIR(argv=argv, timeout_seconds=decl.timeout_seconds, parse=decl.parse)
     raise IRBuildError(f"unknown ImplBlock subtype: {type(decl).__name__}")
 
 

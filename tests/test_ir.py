@@ -3,6 +3,7 @@ import pytest
 from clio.parser.parser import parse
 from clio.ir.builder import build_ir
 from clio.ir.contracts import type_to_json_schema
+from clio.ir.graph import ShellImplIR
 
 
 def test_build_ir_from_minimal_step():
@@ -333,6 +334,37 @@ def test_build_ir_impl_shell_empty_cmd_raises():
     with pytest.raises(IRBuildError) as exc:
         build_ir(parse(src))
     assert "at least one token" in str(exc.value)
+
+
+def test_build_ir_propagates_parse_json_to_shell_impl():
+    src = (
+        "STEP load_corpus\n"
+        "  TAKES: file: str\n"
+        "  GIVES: corpus: List<str>\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode:  shell\n"
+        '    cmd:   "cat ${file}"\n'
+        "    parse: json\n"
+    )
+    step = build_ir(parse(src)).steps[0]
+    assert isinstance(step.impl, ShellImplIR)
+    assert step.impl.argv == ("cat", "${file}")
+    assert step.impl.parse == "json"
+
+
+def test_build_ir_default_parse_is_none():
+    src = (
+        "STEP extract_pdf\n"
+        "  TAKES: file: str\n"
+        "  GIVES: text: str\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: shell\n"
+        '    cmd:  "pdftotext ${file} -"\n'
+    )
+    step = build_ir(parse(src)).steps[0]
+    assert step.impl.parse == "none"
 
 
 def test_build_ir_propagates_impl_code():

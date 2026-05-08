@@ -49,6 +49,7 @@ class ShellImplIR(ImplIR):
     substitute at runtime."""
     argv: tuple[str, ...]
     timeout_seconds: int | None
+    parse: str = "none"
 
 
 @dataclass(frozen=True)
