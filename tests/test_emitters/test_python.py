@@ -935,3 +935,23 @@ def test_python_does_not_import_concurrent_when_no_parallel(tmp_path):
     flow_py = (tmp_path / "pipe" / "flow.py").read_text()
     assert "concurrent.futures" not in flow_py
 
+
+def test_flow_py_imports_logging_and_time(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = (tmp_path / "classify" / "flow.py").read_text()
+    assert "import time" in flow_py
+    assert "from .clio_runtime import logging as _log" in flow_py
+
+
+def test_flow_py_emits_set_flow_and_flow_events(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = (tmp_path / "classify" / "flow.py").read_text()
+    assert '_log.set_flow("classify")' in flow_py
+    assert '_log.emit("flow_start")' in flow_py
+    assert '_log.emit("flow_end"' in flow_py
+    assert "try:" in flow_py
+    assert "finally:" in flow_py
+    assert "_log.set_flow(None)" in flow_py
+

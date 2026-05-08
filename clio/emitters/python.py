@@ -8,6 +8,7 @@ Module-level helpers live in `_python_helpers.py`; this file holds only
 the PythonEmitter class.
 """
 
+import json
 from pathlib import Path
 
 from clio.emitters._python_helpers import (
@@ -435,19 +436,43 @@ class PythonEmitter(BaseEmitter):
 
         imports = "\n".join(f"from .steps import {n} as {n}_mod" for n in imported_steps)
 
+        # chain_lines start with "    " (4 spaces) for top-level items; some
+        # entries are multi-line strings (parallel FOR EACH). We re-indent every
+        # line of every entry by 4 more spaces so the chain runs inside `try:`.
+        chain_body = "\n".join(
+            "\n".join("    " + line for line in cl.split("\n"))
+            for cl in chain_lines
+        )
+        # JSON-style double-quoted literal so callers can grep for
+        # `set_flow("name")` consistently across emitters.
+        flow_name_lit = json.dumps(graph.flow.name)
         return (
             f'"""FLOW {graph.flow.name}.\n\n'
             f'Auto-generated. Calls steps in chain order, threading state through a dict.\n'
             f'"""\n'
             f'\n'
+            f'import time\n'
             f'{cf_import}'
             f'{imports}\n'
+            f'\n'
+            f'from .clio_runtime import logging as _log\n'
             f'\n'
             f'\n'
             f'def run(**initial: object) -> dict:\n'
             f'    state: dict = dict(initial)\n'
-            + "\n".join(chain_lines)
-            + "\n    return state\n"
+            f'    _log.set_flow({flow_name_lit})\n'
+            f'    _log.emit("flow_start")\n'
+            f'    _success = False\n'
+            f'    _t0 = time.monotonic()\n'
+            f'    try:\n'
+            f'{chain_body}\n'
+            f'        _success = True\n'
+            f'        return state\n'
+            f'    finally:\n'
+            f'        _log.emit("flow_end", '
+            f'duration_ms=int((time.monotonic() - _t0) * 1000), '
+            f'success=_success)\n'
+            f'        _log.set_flow(None)\n'
         )
 
     def _emit_main(self, pkg_name: str) -> str:
