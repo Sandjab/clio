@@ -31,3 +31,23 @@ def test_compile_rag_basic_example(tmp_path):
     step_dir = out / "rag_faq" / "steps"
     step_files = {p.stem for p in step_dir.glob("*.py") if p.stem != "__init__"}
     assert step_files == {"load_corpus", "load_question", "score_chunks", "answer"}
+
+
+def test_compile_rag_selfcontained_example(tmp_path):
+    """rag_selfcontained.clio compiles cleanly. The two loader steps use
+    impl.shell (no manual edit) and load_corpus uses parse: json."""
+    out = _compile_to_tree(REPO_ROOT / "examples/rag_selfcontained.clio", tmp_path)
+    step_dir = out / "rag_faq" / "steps"
+    step_files = {p.stem for p in step_dir.glob("*.py") if p.stem != "__init__"}
+    assert step_files == {"load_corpus", "load_question", "score_chunks", "answer"}
+
+    # The two loader steps must be impl.shell — no NotImplementedError stub.
+    for loader in ("load_corpus", "load_question"):
+        body = (step_dir / f"{loader}.py").read_text()
+        assert "subprocess.run" in body, f"{loader} should use impl.shell (subprocess)"
+        assert "NotImplementedError" not in body, f"{loader} should not be a stub"
+
+    # load_corpus specifically uses parse:json → json.loads.
+    load_corpus_body = (step_dir / "load_corpus.py").read_text()
+    assert "import json" in load_corpus_body
+    assert "json.loads(result.stdout)" in load_corpus_body

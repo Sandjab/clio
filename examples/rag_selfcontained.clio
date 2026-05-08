@@ -1,0 +1,51 @@
+CONTRACT chunk
+  SHAPE:  {id: int, text: str(max=1000)}
+  ASSERT: id >= 1
+
+CONTRACT scored_chunk
+  SHAPE:  {id: int, score: float, reason: str(max=200)}
+  ASSERT: score >= 0.0
+
+CONTRACT rag_answer
+  SHAPE:  {answer: str(max=2000), citations: List<int>}
+  ASSERT: len(answer) > 0
+
+STEP load_corpus
+  TAKES: file:   str
+  GIVES: corpus: List<chunk>
+  MODE:  exact
+  impl:
+    mode:  shell
+    cmd:   "cat ${file}"
+    parse: json
+
+STEP load_question
+  TAKES: file:     str
+  GIVES: question: str
+  MODE:  exact
+  impl:
+    mode: shell
+    cmd:  "cat ${file}"
+
+STEP score_chunks
+  TAKES:   corpus: List<chunk>, question: str
+  GIVES:   scored: List<scored_chunk>
+  MODE:    judgment
+  CACHE:   ttl(7d)
+  ON_FAIL: retry(3) then escalate then abort("scoring failed")
+
+STEP answer
+  TAKES:   question: str, scored: List<scored_chunk>, corpus: List<chunk>
+  GIVES:   response: rag_answer
+  MODE:    judgment
+  ON_FAIL: retry(2) then escalate then abort("answer failed")
+
+FLOW rag_faq
+  load_corpus(file="faq.json")
+    -> load_question(file="question.txt")
+    -> score_chunks(corpus, question)
+    -> answer(question, scored, corpus)
+
+RESOURCES
+  target: claude-cli
+  models: [haiku, sonnet, opus]
