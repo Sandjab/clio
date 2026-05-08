@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.5.0 — 2026-05-08
+
 ### Language
 
 - `impl.mode: shell` accepts a new optional `parse:` field. Values: `none`
