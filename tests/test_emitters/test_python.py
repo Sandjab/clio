@@ -44,6 +44,16 @@ def test_emit_skeleton_copies_cache_verbatim(tmp_path):
     assert out_cache == src_cache
 
 
+def test_emit_skeleton_copies_logging_verbatim(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    src_logging = (
+        Path(__file__).parent.parent.parent / "clio" / "runtime" / "logging.py"
+    ).read_text()
+    out_logging = (tmp_path / "classify" / "clio_runtime" / "logging.py").read_text()
+    assert out_logging == src_logging
+
+
 def test_emit_contracts(tmp_path):
     src = (FIXTURES / "mvp_v03_contracts.clio").read_text()
     graph = build_ir(parse(src))

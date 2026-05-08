@@ -325,6 +325,17 @@ def test_emit_with_cache_directive_includes_cache_runtime(tmp_path):
     assert (tmp_path / "f" / "clio_runtime" / "cache.py").exists()
 
 
+def test_emit_copies_logging_verbatim(tmp_path):
+    """clio_runtime/logging.py must be byte-equal to the source, even when
+    no CACHE directive is present (logging is independent of caching)."""
+    MCPServerEmitter().emit(build_ir(parse(_SIMPLE_FLOW_SRC)), tmp_path)
+    src_logging = (
+        Path(__file__).parent.parent.parent / "clio" / "runtime" / "logging.py"
+    ).read_text()
+    out_logging = (tmp_path / "hello" / "clio_runtime" / "logging.py").read_text()
+    assert out_logging == src_logging
+
+
 def test_emit_on_fail_chain_appears_in_judgment_body(tmp_path):
     src = (
         "STEP classify\n  TAKES: text: str\n  GIVES: label: str\n  MODE: judgment\n"

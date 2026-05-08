@@ -49,17 +49,18 @@ class MCPServerEmitter(BaseEmitter):
         (pkg_dir / "flow.py").write_text(_emit_flow_module_async(graph))
         (pkg_dir / "contracts.py").write_text(emit_contracts(graph))
 
+        from clio import runtime as src_pkg
+        runtime_dir = pkg_dir / "clio_runtime"
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        (runtime_dir / "__init__.py").write_text("")
+        src_dir = Path(src_pkg.__file__).parent
+        (runtime_dir / "logging.py").write_text((src_dir / "logging.py").read_text())
         cache_active = any(
             s.cache is not None and s.cache.mode in ("on", "ttl")
             for s in graph.steps
         )
         if cache_active:
-            from clio import runtime as src_pkg
-            runtime_dir = pkg_dir / "clio_runtime"
-            runtime_dir.mkdir(parents=True, exist_ok=True)
-            (runtime_dir / "__init__.py").write_text("")
-            cache_src = Path(src_pkg.__file__).parent / "cache.py"
-            (runtime_dir / "cache.py").write_text(cache_src.read_text())
+            (runtime_dir / "cache.py").write_text((src_dir / "cache.py").read_text())
 
         contracts_by_name = {c.name: c for c in graph.contracts}
         for step in graph.steps:

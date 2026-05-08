@@ -101,8 +101,9 @@ class PythonEmitter(BaseEmitter):
         (pkg_dir / "__main__.py").write_text(self._emit_main(pkg_name))
 
         from clio import runtime as src_pkg
-        src = Path(src_pkg.__file__).parent / "cache.py"
-        (runtime_dir / "cache.py").write_text(src.read_text())
+        src_dir = Path(src_pkg.__file__).parent
+        (runtime_dir / "cache.py").write_text((src_dir / "cache.py").read_text())
+        (runtime_dir / "logging.py").write_text((src_dir / "logging.py").read_text())
 
     def _emit_contracts(self, graph: FlowGraph) -> str:
         return emit_contracts(graph)
