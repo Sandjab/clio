@@ -1,0 +1,15 @@
+STEP load_corpus
+  TAKES: file:   str
+  GIVES: corpus: List<str>
+  MODE:  exact
+  impl:
+    mode:  shell
+    cmd:   "cat ${file}"
+    parse: json
+
+FLOW shell_parse_pipe
+  load_corpus(file="data.json")
+
+RESOURCES
+  target: claude-cli
+  models: [haiku]

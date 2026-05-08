@@ -311,6 +311,17 @@ def test_emit_examples_mvp_python(tmp_path):
     assert actual == expected
 
 
+def test_emit_shell_parse_json_fixture_locked(tmp_path):
+    """Byte-identical lock for the parse:json shell-step fixture. Detects
+    accidental drift in emit output (whitespace, ordering, imports)."""
+    src = (FIXTURES / "shell_parse_json.clio").read_text()
+    graph = build_ir(parse(src))
+    PythonEmitter().emit(graph, tmp_path)
+    expected = _read_tree(FIXTURES / "expected" / "shell_parse_json")
+    actual = _read_tree(tmp_path)
+    assert actual == expected
+
+
 def test_emit_examples_classify_corpus_python(tmp_path):
     src = (Path(__file__).parent.parent.parent / "examples" / "classify_corpus.clio").read_text()
     PythonEmitter().emit(build_ir(parse(src)), tmp_path)
