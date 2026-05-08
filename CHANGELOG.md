@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Language
+
+- `impl.mode: shell` accepts a new optional `parse:` field. Values: `none`
+  (default — stdout returned as `str`, v0.4 behaviour) and `json` (stdout is
+  passed through `json.loads` before `GIVES` validation, enabling
+  `List<...>` / `Dict<...>` GIVES types from a `cat`-style command).
+  Backward-compatible: every existing `.clio` file parses unchanged.
+
+### Examples
+
+- `examples/rag_basic.clio` — RAG-like pipeline (LLM-as-retriever) with the
+  manual-edit loader pattern. Demonstrates 3 CONTRACTs, numeric ASSERT,
+  multi-input judgment steps, and `citations: List<int>` for grounded answers.
+- `examples/rag_selfcontained.clio` — same pipeline, zero-manual-edit using
+  the new `impl.shell.parse: json`. Pair with `examples/faq.json`.
+- `examples/faq.txt`, `examples/faq.json`, `examples/question.txt` — data
+  fixtures shared by both variants.
+- `examples/README.md` — new section 4 comparing the two variants.
+
 ### Resume
 
 - **W5 (short-term): Step-granularity resume.** Python emitter writes

@@ -33,7 +33,8 @@ v0 limitations carried forward, to be lifted in v0.3+:
 - `impl.rest` templates TAKES into the `url` via `${var}` substitution (since v0.4); headers/body templating is not yet supported.
 - `impl.rest` does not yet parse `query`/`headers`/`body` fields.
 - `impl.rest` `retries` is parsed but not honored at runtime.
-- `impl.shell` invokes argv-style (no shell pipes/redirections); the `cmd` string is `shlex.split` at compile time. Stdout is returned as a string. To use a pipeline (`cmd1 | cmd2`), wrap in a script and call that script.
+- `impl.shell` invokes argv-style (no shell pipes/redirections); the `cmd` string is `shlex.split` at compile time. Stdout is returned as a `str` unless `parse: json` is set (since v0.5). To use a pipeline (`cmd1 | cmd2`), wrap in a script and call that script.
+- `ASSERT` expressions support a single comparator per clause (e.g. `score >= 0.0`). Chained or conjoint forms (`0.0 <= score <= 1.0` or `score >= 0.0 and score <= 1.0`) are not supported; use the lower or upper bound and rely on the LLM prompt for the complementary constraint.
 - `FOR EACH` body call results are not accumulated into state — the step is invoked for side effects only.
 - `invoke.api` requires single-model overrides (no escalate chain when `invoke.model` is set).
 
@@ -168,6 +169,28 @@ STEP extract_pdf
 ```
 
 The `cmd` is a quoted string. The compiler `shlex.split`s it at compile time, then templates `${var}` per token at runtime — `subprocess.run([...], shell=False)` runs the resulting argv. No pipes/redirections (wrap a pipeline in a script if needed). Non-zero exit codes raise `subprocess.CalledProcessError`, which `ON_FAIL` will see.
+
+**`parse:`** (optional, default `none`) — controls how stdout is returned to the flow:
+
+| Value | Behaviour |
+|---|---|
+| `none` (default) | `result.stdout` returned as `str`. The step's `GIVES` must be a `str` for downstream Pydantic validation to pass. v0.4 behaviour. |
+| `json` | `json.loads(result.stdout)` runs at the end of the step. The parsed object goes through `GIVES` validation as usual — supports `List<...>`, `Dict<...>`, scalars, nested CONTRACTs. `JSONDecodeError` propagates and `ON_FAIL` (if any) handles it. |
+
+Example (load a JSON-array file directly into a typed `List<chunk>`):
+
+```
+STEP load_corpus
+  TAKES: file:   str
+  GIVES: corpus: List<chunk>
+  MODE:  exact
+  impl:
+    mode:  shell
+    cmd:   "cat ${file}"
+    parse: json
+```
+
+Other parse modes (`yaml`, `csv`, `lines`) are not supported in v0.5.
 
 #### `impl.mode: sql`
 
