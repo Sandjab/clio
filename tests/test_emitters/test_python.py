@@ -974,7 +974,7 @@ def test_flow_py_emits_set_flow_and_flow_events(tmp_path):
     PythonEmitter().emit(build_ir(parse(src)), tmp_path)
     flow_py = (tmp_path / "classify" / "flow.py").read_text()
     assert '_log.set_flow("classify")' in flow_py
-    assert '_log.emit("flow_start")' in flow_py
+    assert '_log.emit("flow_start"' in flow_py
     assert '_log.emit("flow_end"' in flow_py
     assert "try:" in flow_py
     assert "finally:" in flow_py
@@ -1124,3 +1124,45 @@ def test_flow_py_imports_os_for_persist_state(tmp_path):
     PythonEmitter().emit(build_ir(parse(src)), tmp_path)
     flow_py = (tmp_path / "classify" / "flow.py").read_text()
     assert "import os" in flow_py
+
+
+def test_run_signature_has_start_at_keyword_only(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = (tmp_path / "classify" / "flow.py").read_text()
+    assert "def run(*, start_at: int = 0, **initial: object)" in flow_py
+
+
+def test_run_emits_state_json_load_when_start_at_gt_zero(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = (tmp_path / "classify" / "flow.py").read_text()
+    assert "if start_at > 0:" in flow_py
+    assert 'os.environ.get("CLIO_STATE_FILE", "state.json")' in flow_py
+    assert "json.load(f)" in flow_py
+
+
+def test_run_emits_four_validation_systemexits(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = (tmp_path / "classify" / "flow.py").read_text()
+    assert flow_py.count("raise SystemExit(2)") >= 4
+    assert "missing" in flow_py
+    assert "flow mismatch" in flow_py
+    assert "only reached step" in flow_py
+    assert ">= total steps=" in flow_py
+
+
+def test_run_emits_else_branch_with_initial_state(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = (tmp_path / "classify" / "flow.py").read_text()
+    assert "state: dict = dict(initial)" in flow_py
+    assert "else:" in flow_py
+
+
+def test_flow_start_event_includes_resumed_from(tmp_path):
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = (tmp_path / "classify" / "flow.py").read_text()
+    assert 'resumed_from=start_at if start_at > 0 else 0' in flow_py
