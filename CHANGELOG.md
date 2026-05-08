@@ -27,7 +27,7 @@
 - Both emitters: `impl.mode: shell` emits a step that calls `subprocess.run([...], capture_output=True, text=True, check=True, timeout=...)`. The argv list is `shlex.split` at compile time and `${var}` placeholders are substituted token-by-token at runtime — `shell=False` keeps shell-injection out of the picture by construction. Stdout becomes the step's `GIVES`. No pipes/redirections (wrap a pipeline in a script).
 - Python emitter: `pydantic>=2` is added to the emitted `pyproject.toml` only when at least one CONTRACT is declared. Skeleton flows (no contracts) no longer pull in an unused dependency.
 
-### Added
+### Observability
 
 - **W2 (short-term): Structured JSON-Line logging.** New `clio_runtime/logging.py`
   module copied verbatim into emitted projects. Opt-in via `CLIO_LOG=1`,
