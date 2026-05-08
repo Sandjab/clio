@@ -1250,3 +1250,177 @@ def test_main_passes_start_at_to_run(tmp_path):
     PythonEmitter().emit(build_ir(parse(src)), tmp_path)
     main_py = (tmp_path / "classify" / "__main__.py").read_text()
     assert "run(start_at=args.from_step" in main_py or "start_at=args.from_step" in main_py
+
+
+# --- behavioral resume tests -----------------------------------------------
+
+def _stub_step(file_path, step_name, ret_value):
+    """Overwrite an emitted step file with a minimal stub that returns ret_value."""
+    file_path.write_text(
+        f'"""STEP {step_name} (stubbed for behavioral test)"""\n'
+        f'from __future__ import annotations\n'
+        f'def {step_name}(*args, **kw):\n'
+        f'    return {ret_value!r}\n'
+    )
+
+
+def _import_and_run(tmp_path, pkg_name, **run_kwargs):
+    """Add tmp_path to sys.path, import <pkg>.flow, call run(**kwargs), clean up."""
+    import sys
+    import importlib
+    sys.path.insert(0, str(tmp_path))
+    try:
+        # Reload in case sys.modules has a stale entry from a previous test
+        for k in list(sys.modules):
+            if k == pkg_name or k.startswith(pkg_name + "."):
+                del sys.modules[k]
+        flow_mod = importlib.import_module(f"{pkg_name}.flow")
+        return flow_mod.run(**run_kwargs)
+    finally:
+        if str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))
+        for k in list(sys.modules):
+            if k == pkg_name or k.startswith(pkg_name + "."):
+                del sys.modules[k]
+
+
+def test_state_json_written_with_clio_state_file_env(tmp_path, monkeypatch):
+    """When CLIO_STATE_FILE is set, state.json is written there after each step."""
+    src = (FIXTURES / "mvp_v03_skeleton.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+
+    # Stub the only step (mvp_v03_skeleton has 1 chain item: detect_topic)
+    _stub_step(tmp_path / "classify" / "steps" / "detect_topic.py", "detect_topic", "topic_value")
+
+    state_file = tmp_path / "state.json"
+    monkeypatch.setenv("CLIO_STATE_FILE", str(state_file))
+
+    _import_and_run(tmp_path, "classify", doc="hello")
+
+    assert state_file.exists()
+    import json as _json
+    payload = _json.loads(state_file.read_text())
+    assert payload["version"] == 1
+    assert payload["flow"] == "classify"
+    assert payload["step_index"] == 1
+
+
+def test_state_json_written_after_each_step_in_multi_step_flow(tmp_path, monkeypatch):
+    """In a multi-step flow, state.json is updated after each chain item."""
+    src = (FIXTURES / "mvp_v03_cache.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    # Stub each step
+    for sf in (tmp_path / "retention" / "steps").glob("*.py"):
+        if sf.name == "__init__.py":
+            continue
+        _stub_step(sf, sf.stem, "stub_value")
+
+    state_file = tmp_path / "state.json"
+    monkeypatch.setenv("CLIO_STATE_FILE", str(state_file))
+
+    _import_and_run(tmp_path, "retention")
+
+    # After full run, state.json should reflect the LAST step_index = TOTAL_STEPS.
+    import json as _json
+    payload = _json.loads(state_file.read_text())
+    assert payload["version"] == 1
+    assert payload["flow"] == "retention"
+    assert payload["step_index"] >= 1
+
+
+def test_resume_from_step_skips_chain_items(tmp_path, monkeypatch):
+    """--from-step N skips chain items 1..N and reloads state from state.json."""
+    src = (FIXTURES / "mvp_v03_cache.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    for sf in (tmp_path / "retention" / "steps").glob("*.py"):
+        if sf.name == "__init__.py":
+            continue
+        _stub_step(sf, sf.stem, f"stub_value_{sf.stem}")
+
+    # Pre-populate state.json claiming step 1 has completed.
+    # Include `customers` key so step 2's call detect_churn(customers=state['customers'])
+    # doesn't raise KeyError.
+    state_file = tmp_path / "state.json"
+    import json as _json
+    state_file.write_text(_json.dumps({
+        "version": 1,
+        "flow": "retention",
+        "step_index": 1,
+        "state": {
+            "preloaded_marker": "from_state_json",
+            "customers": [{"name": "preloaded", "revenue": 1.0}],
+        },
+    }))
+    monkeypatch.setenv("CLIO_STATE_FILE", str(state_file))
+
+    # Run with start_at=1 — items 2 onwards execute, state seeded from file.
+    result = _import_and_run(tmp_path, "retention", start_at=1)
+
+    # The preloaded marker should still be in the state (it was loaded, not from initial kwargs).
+    assert "preloaded_marker" in result, f"state lost the preloaded marker; got keys: {list(result.keys())}"
+    assert result["preloaded_marker"] == "from_state_json"
+
+
+def test_resume_fails_when_state_json_missing(tmp_path, monkeypatch):
+    """start_at > 0 with no state.json -> SystemExit(2)."""
+    src = (FIXTURES / "mvp_v03_cache.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    monkeypatch.setenv("CLIO_STATE_FILE", str(tmp_path / "nonexistent.json"))
+
+    with pytest.raises(SystemExit) as exc:
+        _import_and_run(tmp_path, "retention", start_at=1)
+    assert exc.value.code == 2
+
+
+def test_resume_fails_when_flow_mismatches(tmp_path, monkeypatch):
+    """start_at > 0 with state.json containing wrong flow name -> SystemExit(2)."""
+    src = (FIXTURES / "mvp_v03_cache.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    state_file = tmp_path / "state.json"
+    import json as _json
+    state_file.write_text(_json.dumps({
+        "version": 1, "flow": "DIFFERENT_FLOW_NAME", "step_index": 1, "state": {}
+    }))
+    monkeypatch.setenv("CLIO_STATE_FILE", str(state_file))
+
+    with pytest.raises(SystemExit) as exc:
+        _import_and_run(tmp_path, "retention", start_at=1)
+    assert exc.value.code == 2
+
+
+def test_resume_fails_when_step_index_too_low(tmp_path, monkeypatch):
+    """state_index < start_at -> SystemExit(2)."""
+    src = (FIXTURES / "mvp_v03_cache.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    state_file = tmp_path / "state.json"
+    import json as _json
+    state_file.write_text(_json.dumps({
+        "version": 1, "flow": "retention", "step_index": 0, "state": {}
+    }))
+    monkeypatch.setenv("CLIO_STATE_FILE", str(state_file))
+
+    # state only at step 0, can't resume from 1; this triggers the
+    # "step_index too low" check before the "start_at >= TOTAL_STEPS" check.
+    with pytest.raises(SystemExit) as exc:
+        _import_and_run(tmp_path, "retention", start_at=1)
+    assert exc.value.code == 2
+
+
+def test_resume_fails_when_start_at_exceeds_total_steps(tmp_path, monkeypatch):
+    """start_at >= TOTAL_STEPS -> SystemExit(2)."""
+    src = (FIXTURES / "mvp_v03_cache.clio").read_text()
+    g = build_ir(parse(src))
+    total = len(g.flow.chain)
+    PythonEmitter().emit(g, tmp_path)
+    state_file = tmp_path / "state.json"
+    import json as _json
+    # step_index=999 ensures the "step_index too low" check passes,
+    # so the start_at >= TOTAL_STEPS check is the one that fires.
+    state_file.write_text(_json.dumps({
+        "version": 1, "flow": "retention", "step_index": 999, "state": {}
+    }))
+    monkeypatch.setenv("CLIO_STATE_FILE", str(state_file))
+
+    with pytest.raises(SystemExit) as exc:
+        _import_and_run(tmp_path, "retention", start_at=total + 5)
+    assert exc.value.code == 2
