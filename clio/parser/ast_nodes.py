@@ -150,6 +150,16 @@ class CompareExpr(ExprNode):
 
 
 @dataclass(frozen=True)
+class BoolAndExpr(ExprNode):
+    """Conjunction of two boolean (compare) sub-expressions. Currently
+    produced only by chained comparator desugaring (`a <= b <= c` →
+    `(a <= b) and (b <= c)`); a future extension may parse explicit
+    `and` keywords."""
+    left: "ExprNode"
+    right: "ExprNode"
+
+
+@dataclass(frozen=True)
 class ResourcesDecl:
     target: str
     models: tuple[str, ...]

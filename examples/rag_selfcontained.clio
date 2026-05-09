@@ -4,7 +4,7 @@ CONTRACT chunk
 
 CONTRACT scored_chunk
   SHAPE:  {id: int, score: float, reason: str(max=200)}
-  ASSERT: score >= 0.0
+  ASSERT: 0.0 <= score <= 1.0
 
 CONTRACT rag_answer
   SHAPE:  {answer: str(max=2000), citations: List<int>}

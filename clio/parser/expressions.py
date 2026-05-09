@@ -1,4 +1,5 @@
 from clio.parser.ast_nodes import (
+    BoolAndExpr,
     CallExpr,
     CompareExpr,
     ExprNode,
@@ -42,17 +43,40 @@ class _ExprParser:
         return t
 
     def parse(self) -> ExprNode:
-        left = self.parse_term()
-        t = self.peek()
-        if t.type not in _OP_TYPES:
+        """Parse `term OP term (OP term)*`.
+
+        A single comparison returns a CompareExpr. A chained comparison
+        (`0.0 <= score <= 1.0`) is desugared to a left-associative
+        BoolAndExpr of pairwise CompareExprs — i.e.
+        `(0.0 <= score) and (score <= 1.0)`. This matches Python semantics."""
+        parts: list[ExprNode] = [self.parse_term()]
+        ops: list[str] = []
+        while self.pos < len(self.tokens) and self.peek().type in _OP_TYPES:
+            ops.append(_OP_TYPES[self.peek().type])
+            self.advance()
+            parts.append(self.parse_term())
+
+        if not ops:
+            if self.pos < len(self.tokens):
+                t = self.peek()
+                raise ExpressionError(
+                    f"expected comparison operator, got {t.type.value} {t.value!r}",
+                    t.line, t.col,
+                )
             raise ExpressionError(
-                f"expected comparison operator, got {t.type.value} {t.value!r}",
-                t.line, t.col,
+                "expected comparison operator at end of input", 0, 0,
             )
-        op = _OP_TYPES[t.type]
-        self.advance()
-        right = self.parse_term()
-        return CompareExpr(left=left, op=op, right=right)
+
+        compares = [
+            CompareExpr(left=parts[i], op=ops[i], right=parts[i + 1])
+            for i in range(len(ops))
+        ]
+        if len(compares) == 1:
+            return compares[0]
+        result: ExprNode = compares[0]
+        for c in compares[1:]:
+            result = BoolAndExpr(left=result, right=c)
+        return result
 
     def parse_term(self) -> ExprNode:
         t = self.peek()
@@ -116,6 +140,12 @@ def expr_to_json_ast(node: ExprNode) -> dict:
         return {
             "kind": "compare",
             "op": node.op,
+            "left": expr_to_json_ast(node.left),
+            "right": expr_to_json_ast(node.right),
+        }
+    if isinstance(node, BoolAndExpr):
+        return {
+            "kind": "bool_and",
             "left": expr_to_json_ast(node.left),
             "right": expr_to_json_ast(node.right),
         }

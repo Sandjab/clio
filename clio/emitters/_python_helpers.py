@@ -166,6 +166,8 @@ def _ast_to_python(node: dict) -> str:
     if kind == "compare":
         op = node["op"]
         return f"({_ast_to_python(node['left'])} {op} {_ast_to_python(node['right'])})"
+    if kind == "bool_and":
+        return f"({_ast_to_python(node['left'])} and {_ast_to_python(node['right'])})"
     raise ValueError(f"unhandled assert AST kind: {kind!r}")
 
 

@@ -400,6 +400,38 @@ def test_emit_rejects_pydantic_reserved_field_names(tmp_path):
         PythonEmitter().emit(graph, tmp_path)
 
 
+def test_emit_chained_assert_validates_at_runtime(tmp_path):
+    """ASSERT `0.0 <= score <= 1.0` desugars to a bool_and AST; the emitted
+    Pydantic validator should accept in-range values and reject out-of-range
+    on both sides."""
+    src = (
+        "CONTRACT scored\n"
+        "  SHAPE:  {score: float}\n"
+        "  ASSERT: 0.0 <= score <= 1.0\n"
+        "STEP load\n"
+        "  GIVES: r: List<scored>\n"
+        "  MODE:  exact\n"
+        "FLOW f\n"
+        "  load()\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    contracts_path = tmp_path / "f" / "contracts.py"
+    body = contracts_path.read_text()
+    # The emitted validator body uses Python `and` joining the two compares.
+    assert "(0.0 <= score) and (score <= 1.0)" in body
+
+    mod = _load_module("clio_chained_assert_test", contracts_path)
+    Scored = mod.Scored
+    assert Scored.model_validate({"score": 0.5}).score == 0.5
+    assert Scored.model_validate({"score": 0.0}).score == 0.0
+    assert Scored.model_validate({"score": 1.0}).score == 1.0
+    import pydantic
+    with pytest.raises(pydantic.ValidationError):
+        Scored.model_validate({"score": -0.1})
+    with pytest.raises(pydantic.ValidationError):
+        Scored.model_validate({"score": 1.1})
+
+
 def test_emit_rejects_multifield_assert(tmp_path):
     """Latent #2: ASSERT referencing more than one field would generate a
     @field_validator whose body references idents not in scope at runtime

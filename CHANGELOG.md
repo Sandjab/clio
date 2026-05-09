@@ -4,6 +4,13 @@
 
 ### Language
 
+- `ASSERT` expressions now accept **chained comparators** —
+  `0.0 <= score <= 1.0` desugars to `(0.0 <= score) and (score <= 1.0)`
+  per Python semantics. Left-associative: `a < b < c < d` becomes
+  `((a<b) and (b<c)) and (c<d)`. The chain must reference a single
+  field (multi-field asserts remain rejected at emit time). Examples
+  `rag_basic.clio` and `rag_selfcontained.clio` updated to use the new
+  form (`0.0 <= score <= 1.0` instead of just the lower bound).
 - `RESOURCES target:` now accepts `python` and `mcp-server` in addition
   to `claude-cli` (previously only `claude-cli` was allowed at parse
   time, forcing examples that compile to other targets to omit

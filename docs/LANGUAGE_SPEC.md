@@ -35,7 +35,7 @@ v0 limitations carried forward, to be lifted in v0.3+:
 - `impl.rest` does not yet parse `query`/`headers`/`body` fields.
 - `impl.rest` `retries` is parsed but not honored at runtime.
 - `impl.shell` invokes argv-style (no shell pipes/redirections); the `cmd` string is `shlex.split` at compile time. Stdout is returned as a `str` unless `parse: json` is set (since v0.5). To use a pipeline (`cmd1 | cmd2`), wrap in a script and call that script.
-- `ASSERT` expressions support a single comparator per clause (e.g. `score >= 0.0`). Chained or conjoint forms (`0.0 <= score <= 1.0` or `score >= 0.0 and score <= 1.0`) are not supported; use the lower or upper bound and rely on the LLM prompt for the complementary constraint.
+- `ASSERT` expressions support a single comparator clause or a **chained comparator** (`0.0 <= score <= 1.0`), which desugars to a left-associative `(a <= b) and (b <= c) and ...` per Python semantics. Boolean conjunction with explicit `and`/`or` keywords is not yet parsed (planned for v0.7). All chained sub-expressions must reference the same single field — multi-field asserts (e.g. `a > b`) remain rejected at emit time.
 - `FOR EACH` body call results are not accumulated into state — the step is invoked for side effects only.
 - `invoke.api` requires single-model overrides (no escalate chain when `invoke.model` is set).
 

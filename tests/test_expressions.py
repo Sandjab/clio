@@ -56,3 +56,58 @@ def test_parse_ident_compare_ident():
         "left": {"kind": "ident", "name": "a"},
         "right": {"kind": "ident", "name": "b"},
     }
+
+
+def test_parse_chained_comparator_double():
+    """`0.0 <= score <= 1.0` desugars to `(0.0 <= score) and (score <= 1.0)`.
+    Matches Python's chained-comparison semantics."""
+    expr, _ = parse_expression(_toks("0.0 <= score <= 1.0"))
+    assert expr_to_json_ast(expr) == {
+        "kind": "bool_and",
+        "left": {
+            "kind": "compare",
+            "op": "<=",
+            "left": {"kind": "float", "value": 0.0},
+            "right": {"kind": "ident", "name": "score"},
+        },
+        "right": {
+            "kind": "compare",
+            "op": "<=",
+            "left": {"kind": "ident", "name": "score"},
+            "right": {"kind": "float", "value": 1.0},
+        },
+    }
+
+
+def test_parse_chained_comparator_triple_left_associative():
+    """`a < b < c < d` builds left-associative bool_and:
+    `((a<b) and (b<c)) and (c<d)`."""
+    expr, _ = parse_expression(_toks("a < b < c < d"))
+    ast = expr_to_json_ast(expr)
+    assert ast["kind"] == "bool_and"
+    assert ast["right"] == {
+        "kind": "compare", "op": "<",
+        "left": {"kind": "ident", "name": "c"},
+        "right": {"kind": "ident", "name": "d"},
+    }
+    assert ast["left"]["kind"] == "bool_and"
+    assert ast["left"]["right"] == {
+        "kind": "compare", "op": "<",
+        "left": {"kind": "ident", "name": "b"},
+        "right": {"kind": "ident", "name": "c"},
+    }
+    assert ast["left"]["left"] == {
+        "kind": "compare", "op": "<",
+        "left": {"kind": "ident", "name": "a"},
+        "right": {"kind": "ident", "name": "b"},
+    }
+
+
+def test_parse_chained_comparator_mixed_ops():
+    """`0 < score <= 1` mixes < and <= — both produced as plain compares
+    inside a bool_and."""
+    expr, _ = parse_expression(_toks("0 < score <= 1"))
+    ast = expr_to_json_ast(expr)
+    assert ast["kind"] == "bool_and"
+    assert ast["left"]["op"] == "<"
+    assert ast["right"]["op"] == "<="
