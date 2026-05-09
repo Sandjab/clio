@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.6.0 — 2026-05-09
+
 ### Language
 
 - `ASSERT` expressions now accept **chained comparators** —
