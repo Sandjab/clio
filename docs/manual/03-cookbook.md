@@ -1,0 +1,172 @@
+# Cookbook
+
+Recipes for patterns that come up repeatedly. Each one references a runnable example in `examples/` so you can compile, run, and adapt.
+
+## 1. Single-record classification with retry chain
+
+**Pattern:** load one record, classify it via an LLM, fall back to a heuristic if the LLM fails repeatedly.
+
+**Reference:** [`examples/mvp.clio`](../../examples/mvp.clio)
+
+```
+STEP detect_churn
+  TAKES:   customers: List<{name: str, revenue: float}>
+  GIVES:   risks:     List<customer_risk>
+  MODE:    judgment
+  CACHE:   ttl(24h)
+  ON_FAIL: retry(3) then escalate then fallback(detect_churn_naive) then abort("nope")
+
+STEP detect_churn_naive
+  TAKES: customers: List<{name: str, revenue: float}>
+  GIVES: risks:     List<customer_risk>
+  MODE:  exact         # a Python heuristic the user fills in
+```
+
+Key idea: `fallback(other_step)` substitutes a deterministic step when the LLM keeps failing. The `other_step` must have the same `GIVES` type.
+
+## 2. List-input classification with PARALLEL
+
+**Pattern:** classify each item of a list independently, collect typed results.
+
+**Reference:** [`examples/parallel_classify.clio`](../../examples/parallel_classify.clio)
+
+```
+STEP classify
+  TAKES: text:  str
+  GIVES: label: str
+  MODE:  judgment
+
+FLOW pipe
+  load_corpus()
+    -> FOR EACH doc IN docs PARALLEL AS labels:
+         classify(text=doc)
+    -> aggregate(labels=labels)
+```
+
+Key idea: `FOR EACH ... PARALLEL AS results` is the only loop today that **accumulates** results into state. Sequential `FOR EACH` is fire-and-forget. Default cap is 10 concurrent calls.
+
+## 3. Multi-field structured judgment + summary digest
+
+**Pattern:** each item is classified into a multi-field record (category, priority, team, etc.), then a separate JUDGMENT step turns the typed list into a narrative digest.
+
+**Reference:** [`examples/ticket_routing.clio`](../../examples/ticket_routing.clio)
+
+```
+CONTRACT classified_ticket
+  SHAPE: {id: int, category: enum(bug|billing|...), priority: enum(low|...|urgent),
+          team: enum(...), urgency_score: float}
+  ASSERT: 0.0 <= urgency_score <= 1.0
+
+STEP classify_ticket
+  TAKES:   ticket: support_ticket
+  GIVES:   result: classified_ticket
+  MODE:    judgment
+
+STEP summarize_routing
+  TAKES: classifications: List<classified_ticket>
+  GIVES: summary:         routing_summary
+  MODE:  judgment
+
+FLOW ticket_routing
+  load_tickets(file="tickets.json")
+    -> FOR EACH t IN tickets PARALLEL AS classifications:
+         classify_ticket(ticket=t)
+    -> summarize_routing(classifications)
+```
+
+Key idea: a single LLM call per item produces a multi-field structured output (4 fields here) — much denser than calling the model once per field. The summary step is also `judgment`, demonstrating LLM-as-aggregator.
+
+## 4. RAG without embeddings
+
+**Pattern:** load a corpus, score each chunk against the question via an LLM-as-retriever, then answer using only the highest-scoring chunks. No embeddings, no vector store.
+
+**Reference:** [`examples/rag_basic.clio`](../../examples/rag_basic.clio) and [`examples/rag_selfcontained.clio`](../../examples/rag_selfcontained.clio)
+
+```
+STEP score_chunks
+  TAKES:   corpus: List<chunk>, question: str
+  GIVES:   scored: List<scored_chunk>
+  MODE:    judgment
+  CACHE:   ttl(7d)
+
+STEP answer
+  TAKES: question: str, scored: List<scored_chunk>, corpus: List<chunk>
+  GIVES: response: rag_answer
+  MODE:  judgment
+
+FLOW rag_faq
+  load_corpus(file="faq.json")
+    -> load_question(file="question.txt")
+    -> score_chunks(corpus, question)
+    -> answer(question, scored, corpus)
+```
+
+Key idea: `multi-input judgment` steps. `score_chunks(corpus, question)` and `answer(question, scored, corpus)` both reference multiple upstream outputs. The `rag_answer` contract enforces `citations: List<int>` so the LLM must ground its answer in source IDs.
+
+## 5. Zero-edit data ingestion with `parse: json`
+
+**Pattern:** when your input file is already in the shape your contract expects, skip the manual loader.
+
+**Reference:** [`examples/rag_selfcontained.clio`](../../examples/rag_selfcontained.clio), [`examples/ticket_routing.clio`](../../examples/ticket_routing.clio)
+
+```
+STEP load_tickets
+  TAKES: file:    str
+  GIVES: tickets: List<support_ticket>
+  MODE:  exact
+  impl:
+    mode:  shell
+    cmd:   "cat ${file}"
+    parse: json
+```
+
+Key idea: `parse: json` runs `json.loads(stdout)` before returning. With a `tickets.json` already containing `List<{id,title,body}>`, no manual Python is needed — the emitted `load_tickets.py` is runnable as-is.
+
+Without `parse: json`, the stdout is returned as `str`. For a CSV, you'd need `MODE: exact` (no impl) and fill the Python stub.
+
+## 6. Calling a non-Anthropic model via OpenAI compat
+
+**Pattern:** point `judgment` steps at any OpenAI-compatible endpoint (LiteLLM, OpenRouter, Ollama, vLLM, Together, Groq).
+
+**Reference:** [`examples/classify_corpus.clio`](../../examples/classify_corpus.clio)
+
+```
+STEP classify
+  TAKES: text:   str
+  GIVES: result: classification
+  MODE:  judgment
+  invoke:
+    mode:        api
+    protocol:    openai
+    base_url:    "http://localhost:4000"      # LiteLLM proxy
+    model:       "gemini-1.5-pro"
+    auth:        "env:LITELLM_KEY"
+    temperature: 0.0
+```
+
+Key idea: `protocol: openai` + `base_url` decouples the **wire protocol** (OpenAI Chat Completions API) from the **actual model** behind the endpoint. The Python emitter adds `openai>=1.0` to `pyproject.toml` only when needed.
+
+## 7. Numeric range constraints with chained ASSERT
+
+**Pattern:** lock a float into a valid range at the contract level (since v0.6).
+
+```
+CONTRACT scored_chunk
+  SHAPE:  {id: int, score: float, reason: str(max=200)}
+  ASSERT: 0.0 <= score <= 1.0
+```
+
+Key idea: chained comparators desugar to a left-associative `(a<=b) and (b<=c)`. The Pydantic field validator runs at every `model_validate` call, so a model returning `score: 1.5` triggers a `ValidationError` and the step's `ON_FAIL` chain kicks in (typically `retry`).
+
+Single-field constraint only — for cross-field invariants like `created_at < updated_at`, see *future plans* in the spec.
+
+## What's not in the cookbook (yet)
+
+- **WHILE / IF / MATCH** — control flow specced but not implemented.
+- **Multi-field ASSERT** — accept `a > b` between two fields. Specced, planned.
+- **Boolean `and`/`or` keywords in ASSERT** — natural extension of the chained-comparator desugaring.
+- **`auto` MODE routing** — parsed, runtime decision not yet implemented.
+
+When these land, this page gets new recipes. (See [the changelog](../../CHANGELOG.md) for what's recently moved out of "not yet".)
+
+Next: [targets](04-targets.md) for choosing where to compile.

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Documentation
+
+- New structured user manual at `docs/manual/`: getting-started tutorial,
+  language tour, cookbook (7 recipes referencing every polished
+  example), targets guide, CLI reference, and troubleshooting page.
+  Linked from the main README. Complements the exhaustive
+  `LANGUAGE_SPEC.md` reference with a parcours pédagogique.
+
 ## v0.6.0 — 2026-05-09
 
 ### Language

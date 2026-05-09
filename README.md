@@ -162,16 +162,20 @@ docs/
 
 ## Documentation
 
-- [Language Specification](docs/LANGUAGE_SPEC.md) — full grammar, types, and keywords
-- [Architecture](docs/ARCHITECTURE.md) — compiler pipeline, design decisions
-- [Compilation Targets](docs/COMPILATION_TARGETS.md) — what each target emits
-- [Design Document (FR)](docs/clio-spec.md) — original design rationale (in French)
+- **[User manual](docs/manual/README.md)** — start here. Tutorial, language tour, cookbook, CLI reference, troubleshooting.
+- [Language specification](docs/LANGUAGE_SPEC.md) — full grammar, types, and keywords (authoritative reference).
+- [Architecture](docs/ARCHITECTURE.md) — compiler pipeline, design decisions.
+- [Compilation targets](docs/COMPILATION_TARGETS.md) — what each target emits.
+- [Positioning](docs/POSITIONING.md) — strategy, comparisons (DSPy, LangGraph, Outlines).
+- [Design document (FR)](docs/clio-spec.md) — original design rationale (in French).
+- [Examples README](examples/README.md) — guided tour of the polished `.clio` files in `examples/`.
+- [Changelog](CHANGELOG.md) — what's landed in each tag.
 
 ## Current status
 
-**v0.3 (current)**: v0.2 + `target: python` emitter. The same `.clio` source compiles to either a Claude Code project (bash + claude-cli) or a runnable Python package (Anthropic SDK + Pydantic). Both targets implement identical CACHE + ON_FAIL semantics; their `.cache/` layouts are interchangeable. See the v0.3 design at `docs/superpowers/specs/2026-05-03-clio-v0.3-python-emitter-design.md`.
+**v0.6.0 (current)**: 3 compilation targets (`claude-cli`, `python`, `mcp-server`). 6 polished examples (mvp, entities, classify_corpus, parallel_classify, rag_basic, rag_selfcontained, ticket_routing). Rich-card HTML viewer (`clio graph --format html`). `FOR EACH PARALLEL`, `impl.shell parse:json`, `ASSERT` chained comparators (`0.0 <= score <= 1.0`), step-granularity resume on the python target. 403 unit tests + 13 gated e2e.
 
-**Phase 2** (future): natural language → `.clio` frontend, additional emitters (`docker`, OpenAI-flavored Python), control flow (`FOR EACH`, `WHILE`, `IF`, `MATCH`), `MODE: auto` inference, optimizer (batching, model routing, context budget), `CONFIDENCE` thresholds, `VALIDATE` post-conditions, async step execution.
+**Phase 2** (future): natural language → `.clio` frontend (the `gen` command is a first cut), additional emitters (LangGraph bridge, OpenAI-flavored Python), control flow (`WHILE`, `IF`, `MATCH`), `MODE: auto` inference, optimizer (batching, model routing, context budget), `CONFIDENCE` thresholds, `VALIDATE` post-conditions, async step execution.
 
 ## License
 
