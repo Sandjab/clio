@@ -7,7 +7,7 @@ from pathlib import Path
 
 from clio.emitters.claude_cli import ClaudeCLIEmitter
 from clio.emitters.python import PythonEmitter
-from clio.graph_render import to_dot, to_mermaid
+from clio.graph_render import to_dot, to_html, to_mermaid
 from clio.ir.builder import build_ir
 from clio.parser.parser import ParseError, parse
 
@@ -26,7 +26,7 @@ def main(argv: list[str] | None = None) -> int:
 
     graph_p = sub.add_parser("graph")
     graph_p.add_argument("source")
-    graph_p.add_argument("--format", choices=["mermaid", "dot"], default="mermaid")
+    graph_p.add_argument("--format", choices=["mermaid", "dot", "html"], default="mermaid")
     graph_p.add_argument("--output", default=None)
 
     gen_p = sub.add_parser("gen")
@@ -101,7 +101,12 @@ def _cmd_graph(source: str, fmt: str, output: str | None) -> int:
         print(f"{src_path.name}:{e}", flush=True)
         return 1
 
-    rendered = to_mermaid(graph) if fmt == "mermaid" else to_dot(graph)
+    if fmt == "mermaid":
+        rendered = to_mermaid(graph)
+    elif fmt == "dot":
+        rendered = to_dot(graph)
+    else:
+        rendered = to_html(graph)
     if output is None:
         sys.stdout.write(rendered)
     else:

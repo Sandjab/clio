@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### CLI
+
+- `clio graph <file.clio> --format html` emits a single self-contained HTML
+  viewer: the FLOW rendered by the existing Mermaid backend (loaded
+  client-side from the mermaid.js ESM CDN), plus a click-to-inspect side
+  panel that surfaces each step's TAKES, GIVES, mode, line, CACHE, ON_FAIL,
+  IMPL, INVOKE, and the JSON Schema of every CONTRACT it references. No
+  build step, no server. Open the HTML in any browser. The panel is
+  populated via DOM API (textContent / appendChild), never `innerHTML`, so
+  step or contract names containing HTML metacharacters are safe.
+
 ### Examples
 
 - `examples/ticket_routing.clio` — support-ticket routing pipeline. Three

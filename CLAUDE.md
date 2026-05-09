@@ -163,9 +163,13 @@ pytest tests/ -v
 # Validate a .clio file without emitting
 python -m clio check examples/analyse.clio
 
-# Render the FLOW as a Mermaid (default) or DOT graph (stdout, or --output FILE)
+# Render the FLOW as a Mermaid (default), DOT, or self-contained HTML viewer
+# (stdout, or --output FILE). The HTML viewer is a single file: the Mermaid
+# graph + a click-to-inspect side panel showing each step's contracts,
+# cache, retry policy, and exec details.
 python -m clio graph examples/analyse.clio
 python -m clio graph examples/analyse.clio --format dot
+python -m clio graph examples/analyse.clio --format html --output graph.html
 
 # Generate a .clio source from natural language (requires `pip install -e .[gen]` and ANTHROPIC_API_KEY)
 python -m clio gen "describe a pipeline that ..."
