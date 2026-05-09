@@ -75,3 +75,5 @@ class Keyword(str, Enum):
     MATCH = "MATCH"
     CASE = "CASE"
     DEFAULT = "DEFAULT"
+    WHILE = "WHILE"
+    MAX = "MAX"

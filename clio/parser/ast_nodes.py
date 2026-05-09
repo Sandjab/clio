@@ -91,7 +91,7 @@ class ForEachBlock:
     each item, and results are collected into `state[<collector>]` as a list."""
     loop_var: str
     collection: str
-    body: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock, ...]"
+    body: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock, ...]"
     line: int
     col: int
     parallel: bool = False
@@ -110,8 +110,8 @@ class IfBlock:
     ASSERT also stops at single comparisons here). `else_body` is `()` when
     no ELSE branch is provided."""
     condition: "CompareExpr"
-    then_body: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock, ...]"
-    else_body: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock, ...]"
+    then_body: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock, ...]"
+    else_body: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock, ...]"
     line: int
     col: int
 
@@ -121,7 +121,7 @@ class MatchCase:
     """One CASE <value>: <body> arm of a MATCH block. `value` is None for the
     DEFAULT arm; otherwise it's the bare-ident or string literal to match."""
     value: str | None
-    body: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock, ...]"
+    body: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock, ...]"
     line: int
     col: int
 
@@ -143,9 +143,24 @@ class MatchBlock:
 
 
 @dataclass(frozen=True)
+class WhileBlock:
+    """WHILE <condition> MAX <int>:
+           <body>
+
+    Bounded loop: re-evaluates <condition> after each body iteration; stops
+    when the condition becomes false OR after MAX iterations (whichever
+    comes first). MAX is mandatory — unbounded loops are forbidden."""
+    condition: "CompareExpr"
+    max_iters: int
+    body: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock, ...]"
+    line: int
+    col: int
+
+
+@dataclass(frozen=True)
 class FlowDecl:
     name: str
-    chain: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock, ...]"
+    chain: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock, ...]"
     line: int
     col: int
 

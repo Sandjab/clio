@@ -22,6 +22,7 @@ from clio.ir.graph import (
     RestImplIR,
     ShellImplIR,
     StepIR,
+    WhileBlockIR,
 )
 from clio.ir.types import names_equal, types_equal
 from clio.parser.ast_nodes import (
@@ -55,6 +56,7 @@ from clio.parser.ast_nodes import (
     StepDecl,
     StrExpr,
     TypeExpr,
+    WhileBlock,
 )
 
 
@@ -347,6 +349,9 @@ def _build_flow_items(
         if isinstance(item, MatchBlock):
             out.append(_build_match_block(item, steps_by_name, contracts, available))
             continue
+        if isinstance(item, WhileBlock):
+            out.append(_build_while_block(item, steps_by_name, contracts, available))
+            continue
         # StepCall path
         out.append(_build_call(item, steps_by_name, contracts, available))
         step = steps_by_name[item.name]
@@ -502,6 +507,28 @@ def _build_condition(
         op=cond.op,
         literal_value=literal_value,
         literal_kind=literal_kind,
+    )
+
+
+def _build_while_block(
+    decl: WhileBlock,
+    steps_by_name: dict[str, StepIR],
+    contracts: dict[str, ContractIR],
+    outer_available: dict[str, TypeExpr],
+) -> WhileBlockIR:
+    """Validate and build a WHILE block IR node. Reuses _build_condition for
+    the condition validation (same shape as IF). Body is built in its own
+    scope copy."""
+    cond_ir = _build_condition(
+        decl.condition, contracts, outer_available, decl.line, decl.col,
+    )
+    body_scope = dict(outer_available)
+    body_items = _build_flow_items(decl.body, steps_by_name, contracts, body_scope)
+    return WhileBlockIR(
+        condition=cond_ir,
+        max_iters=decl.max_iters,
+        body=tuple(body_items),
+        line=decl.line,
     )
 
 
@@ -685,6 +712,10 @@ def _validate_parallel_for_each(graph: FlowGraph) -> None:
             if isinstance(elem, MatchBlockIR):
                 for arm in elem.cases:
                     _walk(arm.body)
+                continue
+
+            if isinstance(elem, WhileBlockIR):
+                _walk(elem.body)
                 continue
 
             # ForEachIR

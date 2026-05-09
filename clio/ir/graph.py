@@ -177,9 +177,20 @@ class MatchBlockIR:
 
 
 @dataclass(frozen=True)
+class WhileBlockIR:
+    """IR mirror of WhileBlock. `max_iters` is the mandatory MAX bound; the
+    runtime stops the loop when EITHER the condition turns false OR the body
+    has executed `max_iters` times."""
+    condition: ConditionIR
+    max_iters: int
+    body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
+    line: int
+
+
+@dataclass(frozen=True)
 class FlowIR:
     name: str
-    chain: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR, ...]"
+    chain: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
     line: int
 
 

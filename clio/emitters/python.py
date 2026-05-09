@@ -48,6 +48,7 @@ from clio.ir.graph import (
     RestImplIR,
     ShellImplIR,
     StepIR,
+    WhileBlockIR,
 )
 
 
@@ -492,6 +493,17 @@ class PythonEmitter(BaseEmitter):
                         _current.append(f"{body_indent}pass")
                     for sub in arm.body:
                         _emit_item(sub, body_indent, scope_local)
+                return
+            if isinstance(item, WhileBlockIR):
+                cond_expr = _python_condition_expr(item.condition, scope_local)
+                _current.append(f"{indent}for _i in range({item.max_iters}):")
+                inner_indent = indent + "    "
+                _current.append(f"{inner_indent}if not ({cond_expr}):")
+                _current.append(f"{inner_indent}    break")
+                if not item.body:
+                    _current.append(f"{inner_indent}pass")
+                for sub in item.body:
+                    _emit_item(sub, inner_indent, scope_local)
                 return
             if isinstance(item, CallIR):
                 _emit_call(item, indent, scope_local)

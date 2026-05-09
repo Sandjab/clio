@@ -13,6 +13,7 @@ from clio.ir.graph import (
     IfBlockIR,
     MatchBlockIR,
     StepIR,
+    WhileBlockIR,
 )
 from clio.parser.ast_nodes import ContractRef, ListType
 
@@ -363,6 +364,17 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
                     chain_lines.append(f"{body_indent}pass")
                 for sub in arm.body:
                     _emit_item(sub, body_indent, scope_local)
+            return
+        if isinstance(item, WhileBlockIR):
+            cond_expr = _python_condition_expr(item.condition, scope_local)
+            chain_lines.append(f"{indent}for _i in range({item.max_iters}):")
+            inner_indent = indent + "    "
+            chain_lines.append(f"{inner_indent}if not ({cond_expr}):")
+            chain_lines.append(f"{inner_indent}    break")
+            if not item.body:
+                chain_lines.append(f"{inner_indent}pass")
+            for sub in item.body:
+                _emit_item(sub, inner_indent, scope_local)
             return
         if isinstance(item, CallIR):
             _emit_call(item, indent, scope_local)

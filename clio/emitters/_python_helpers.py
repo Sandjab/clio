@@ -776,6 +776,7 @@ def _has_parallel(chain) -> bool:
         ForEachIR,
         IfBlockIR,
         MatchBlockIR,
+        WhileBlockIR,
     )
     for elem in chain:
         if isinstance(elem, ForEachIR):
@@ -790,6 +791,9 @@ def _has_parallel(chain) -> bool:
             for arm in elem.cases:
                 if _has_parallel(arm.body):
                     return True
+        elif isinstance(elem, WhileBlockIR):
+            if _has_parallel(elem.body):
+                return True
     return False
 
 

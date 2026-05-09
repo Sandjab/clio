@@ -26,6 +26,7 @@ from clio.ir.graph import (
     RestImplIR,
     ShellImplIR,
     StepIR,
+    WhileBlockIR,
 )
 from clio.parser.ast_nodes import (
     ConstrainedType,
@@ -473,24 +474,24 @@ def _render_node_card_html(step: StepIR) -> str:
 
 def _to_mermaid_rich_labels(
     graph: FlowGraph,
-) -> tuple[str, dict[str, dict], dict[str, dict], dict[str, dict]]:
+) -> tuple[str, dict[str, dict], dict[str, dict], dict[str, dict], dict[str, dict]]:
     """Mermaid source where each node label is the rich Tabloid-style HTML
     card. The viewer's CSS hides the underlying SVG rect so only the HTML
     label shows.
 
-    Returns (mermaid_source, foreach_meta, if_meta, match_meta). foreach_meta
-    maps each foreach_N subgraph id to loop metadata; if_meta maps each
-    decision node id to its condition fields; match_meta maps each match
-    node id to its scrutinee + arms. The viewer JS uses these to enrich the
-    Mermaid output with chip-pills / decision cards.
+    Returns (mermaid_source, foreach_meta, if_meta, match_meta, while_meta).
+    Each meta dict maps a node/cluster id to control-flow specifics; the
+    viewer JS uses them to enrich the Mermaid output with chip-pills /
+    decision cards.
     """
     steps_by_name = {s.name: s for s in graph.steps}
     lines: list[str] = ["flowchart TD"]
     declared: set[str] = set()
-    state = {"foreach_idx": 0, "if_idx": 0, "match_idx": 0}
+    state = {"foreach_idx": 0, "if_idx": 0, "match_idx": 0, "while_idx": 0}
     foreach_meta: dict[str, dict] = {}
     if_meta: dict[str, dict] = {}
     match_meta: dict[str, dict] = {}
+    while_meta: dict[str, dict] = {}
 
     def declare(step_name: str, indent: str) -> None:
         if step_name in declared:
@@ -579,6 +580,29 @@ def _to_mermaid_rich_labels(
                 else:
                     else_terminals = [dec_id]
                 prev_ids = then_terminals + else_terminals
+            elif isinstance(elem, WhileBlockIR):
+                state["while_idx"] += 1
+                w_id = f"while_{state['while_idx']}"
+                cond = elem.condition
+                while_meta[w_id] = {
+                    "state_field": cond.step_name,
+                    "sub_field": cond.field,
+                    "op": cond.op,
+                    "literal": cond.literal_value,
+                    "literal_kind": cond.literal_kind,
+                    "max_iters": elem.max_iters,
+                }
+                lit_repr = repr(cond.literal_value)
+                label = (
+                    f"WHILE {cond.step_name}.{cond.field} {cond.op} {lit_repr} "
+                    f"MAX {elem.max_iters}"
+                )
+                lines.append(f'{indent}subgraph {w_id}["{label}"]')
+                walk(elem.body, indent + "    ", [])
+                lines.append(f"{indent}end")
+                for p in prev_ids:
+                    lines.append(f"{indent}{p} --> {w_id}")
+                prev_ids = [w_id]
             elif isinstance(elem, MatchBlockIR):
                 state["match_idx"] += 1
                 m_id = f"match_{state['match_idx']}"
@@ -617,7 +641,13 @@ def _to_mermaid_rich_labels(
     else:
         walk(graph.flow.chain, "    ", [])
 
-    return "\n".join(lines) + "\n", foreach_meta, if_meta, match_meta
+    return (
+        "\n".join(lines) + "\n",
+        foreach_meta,
+        if_meta,
+        match_meta,
+        while_meta,
+    )
 
 
 def _step_to_dict(step: StepIR) -> dict:
@@ -1134,6 +1164,7 @@ const MERMAID_SRC = __MERMAID_JSON__;
 const FOREACH_META = __FOREACH_META_JSON__;
 const IF_META = __IF_META_JSON__;
 const MATCH_META = __MATCH_META_JSON__;
+const WHILE_META = __WHILE_META_JSON__;
 
 document.title = 'CLIO graph — ' + TITLE;
 document.getElementById('flow-title').textContent = TITLE;
@@ -1365,7 +1396,9 @@ def to_html(graph: FlowGraph) -> str:
     the HTML in any browser with internet access (mermaid.js + Geist fonts
     are loaded from CDN).
     """
-    mermaid_source, foreach_meta, if_meta, match_meta = _to_mermaid_rich_labels(graph)
+    mermaid_source, foreach_meta, if_meta, match_meta, while_meta = (
+        _to_mermaid_rich_labels(graph)
+    )
     mermaid_source = mermaid_source.rstrip("\n")
     steps_data = {s.name: _step_to_dict(s) for s in graph.steps}
     contracts_data = {c.name: _contract_to_dict(c) for c in graph.contracts}
@@ -1400,4 +1433,5 @@ def to_html(graph: FlowGraph) -> str:
         .replace("__FOREACH_META_JSON__", json.dumps(foreach_meta, ensure_ascii=False))
         .replace("__IF_META_JSON__", json.dumps(if_meta, ensure_ascii=False))
         .replace("__MATCH_META_JSON__", json.dumps(match_meta, ensure_ascii=False))
+        .replace("__WHILE_META_JSON__", json.dumps(while_meta, ensure_ascii=False))
     )

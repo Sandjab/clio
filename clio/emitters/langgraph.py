@@ -43,6 +43,7 @@ from clio.ir.graph import (
     RestImplIR,
     ShellImplIR,
     StepIR,
+    WhileBlockIR,
 )
 
 
@@ -122,7 +123,7 @@ class LangGraphEmitter(BaseEmitter):
         # IfBlockIR is now supported (mono-step branches; ELSE required) but
         # we surface the constraints with friendly errors before reaching the
         # emit_flow_module walker.
-        def _reject_foreach(chain) -> None:
+        def _reject_unsupported(chain) -> None:
             for elem in chain:
                 if isinstance(elem, ForEachIR):
                     kind = "PARALLEL" if elem.parallel else "sequential"
@@ -131,14 +132,21 @@ class LangGraphEmitter(BaseEmitter):
                         "use --target python for FOR EACH today (LangGraph Send-API support "
                         "is planned for v0.7)"
                     )
+                if isinstance(elem, WhileBlockIR):
+                    raise ValueError(
+                        f"WHILE is not supported by the langgraph target in v0.7 "
+                        f"(line {elem.line}); a bounded loop in LangGraph requires "
+                        "cyclic edges + state reducers (planned for v0.8). Use "
+                        "--target python or --target mcp-server today."
+                    )
                 if isinstance(elem, IfBlockIR):
-                    _reject_foreach(elem.then_body)
-                    _reject_foreach(elem.else_body)
+                    _reject_unsupported(elem.then_body)
+                    _reject_unsupported(elem.else_body)
                 if isinstance(elem, MatchBlockIR):
                     for arm in elem.cases:
-                        _reject_foreach(arm.body)
+                        _reject_unsupported(arm.body)
 
-        _reject_foreach(graph.flow.chain)
+        _reject_unsupported(graph.flow.chain)
 
         for step in graph.steps:
             if isinstance(step.invoke, CliInvokeIR):

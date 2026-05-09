@@ -32,6 +32,7 @@ from clio.parser.ast_nodes import (
     StepDecl,
     StrExpr,
     TypeExpr,
+    WhileBlock,
 )
 from clio.parser.lexer import lex
 from clio.parser.tokens import Token, TokenType
@@ -988,7 +989,7 @@ class _Parser:
         self.expect(TokenType.NEWLINE)
         self.expect(TokenType.INDENT)
 
-        chain: list[StepCall | ForEachBlock | IfBlock | MatchBlock] = [self.parse_flow_item()]
+        chain: list[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock] = [self.parse_flow_item()]
         # Skip newlines and indent/dedent changes between chain elements,
         # then look for ARROW. The -> may appear on a more-indented continuation line.
         while True:
@@ -1006,8 +1007,8 @@ class _Parser:
 
         return FlowDecl(name=ident.value, chain=tuple(chain), line=kw.line, col=kw.col)
 
-    def parse_flow_item(self) -> "StepCall | ForEachBlock | IfBlock | MatchBlock":
-        """A FLOW (or any nested body) item: step call, FOR EACH, IF/ELSE, or MATCH."""
+    def parse_flow_item(self) -> "StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock":
+        """A FLOW (or any nested body) item: step call, FOR EACH, IF/ELSE, MATCH, or WHILE."""
         t = self.peek()
         if t.type == TokenType.KEYWORD and t.value == "FOR":
             return self.parse_for_each()
@@ -1015,6 +1016,8 @@ class _Parser:
             return self.parse_if_block()
         if t.type == TokenType.KEYWORD and t.value == "MATCH":
             return self.parse_match_block()
+        if t.type == TokenType.KEYWORD and t.value == "WHILE":
+            return self.parse_while_block()
         return self.parse_step_call()
 
     def parse_for_each(self) -> ForEachBlock:
@@ -1056,7 +1059,7 @@ class _Parser:
         self.expect(TokenType.NEWLINE)
         self.expect(TokenType.INDENT)
 
-        body: list[StepCall | ForEachBlock | IfBlock | MatchBlock] = [self.parse_flow_item()]
+        body: list[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock] = [self.parse_flow_item()]
         while True:
             while self.peek().type in (TokenType.NEWLINE, TokenType.INDENT):
                 self.advance()
@@ -1136,6 +1139,44 @@ class _Parser:
                 break
             self.advance()
         return tuple(chain)
+
+    def parse_while_block(self) -> WhileBlock:
+        """WHILE <condition> MAX <int>:
+            <flow_item> -> <flow_item> -> ...
+
+        MAX is mandatory — bounds the loop iterations to keep LLM-driven
+        flows terminating."""
+        kw = self.expect(TokenType.KEYWORD, "WHILE")
+        condition = self.parse_condition()
+        max_kw = self.peek()
+        if not (max_kw.type == TokenType.KEYWORD and max_kw.value == "MAX"):
+            raise ParseError(
+                "WHILE requires a `MAX <int>` iteration bound",
+                max_kw.line, max_kw.col,
+            )
+        self.advance()
+        max_tok = self.expect(TokenType.NUMBER)
+        if "." in max_tok.value:
+            raise ParseError(
+                f"WHILE MAX must be an integer, got {max_tok.value!r}",
+                max_tok.line, max_tok.col,
+            )
+        max_iters = int(max_tok.value)
+        if max_iters <= 0:
+            raise ParseError(
+                f"WHILE MAX must be > 0, got {max_iters}",
+                max_tok.line, max_tok.col,
+            )
+        self.expect(TokenType.COLON)
+        self.expect(TokenType.NEWLINE)
+        self.expect(TokenType.INDENT)
+        body = self._parse_block_chain()
+        return WhileBlock(
+            condition=condition,
+            max_iters=max_iters,
+            body=body,
+            line=kw.line, col=kw.col,
+        )
 
     def parse_match_block(self) -> MatchBlock:
         """MATCH <state_field>.<sub_field>:
