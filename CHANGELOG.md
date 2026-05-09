@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Emitters
+
+- New `--target langgraph` emitter compiles a `.clio` source to a Python
+  package whose `flow.py` builds a `langgraph.graph.StateGraph` (LangGraph
+  1.0+). Each `STEP` becomes a node function `(state: State) -> dict`;
+  `State` is a `TypedDict` aggregating every TAKES/GIVES field. `retry(N)`
+  translates to `RetryPolicy(max_attempts=N)` on `add_node`. Step files
+  are reused verbatim from the python target; only the orchestrator
+  changes. Bridges CLIO into the LangChain ecosystem.
+- v0 LangGraph scope: linear FLOW, `judgment.api.anthropic` (default
+  `invoke`), `exact` (code stub / shell / rest), CONTRACT + Pydantic,
+  CACHE, `retry(N)` + `abort`. Rejected at compile time with clear
+  messages: FOR EACH (any kind), `invoke.cli`,
+  `invoke.api.openai/bedrock/vertex`, ON_FAIL `escalate`/`fallback`.
+  Send-API support for FOR EACH PARALLEL is planned for v0.7.
+
 ### Documentation
 
 - New structured user manual at `docs/manual/`: getting-started tutorial,

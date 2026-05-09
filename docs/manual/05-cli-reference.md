@@ -11,7 +11,7 @@ clio compile <source.clio> --target <target> --output <dir>
 | Flag | Required | Default | Notes |
 |---|:-:|---|---|
 | `<source.clio>` | yes | — | Path to the `.clio` file. |
-| `--target` | yes | — | One of `claude-cli`, `python`, `mcp-server`. |
+| `--target` | yes | — | One of `claude-cli`, `python`, `mcp-server`, `langgraph`. |
 | `--output` | yes | — | Directory to write the project into. Created if missing. **Overwrites** existing files. |
 
 **Examples:**
@@ -20,6 +20,7 @@ clio compile <source.clio> --target <target> --output <dir>
 clio compile examples/mvp.clio --target claude-cli --output ./out
 clio compile examples/mvp.clio --target python --output ./out
 clio compile examples/ticket_routing.clio --target mcp-server --output ./out
+clio compile examples/entities.clio --target langgraph --output ./out
 ```
 
 **Errors you may see:** `ParseError` on bad syntax; `IRBuildError` on type mismatches; `ValueError` from emitter when the target rejects a feature (e.g. `FOR EACH PARALLEL` on `claude-cli`).

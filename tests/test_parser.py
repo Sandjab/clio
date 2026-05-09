@@ -253,14 +253,24 @@ def test_parse_resources_target_mcp_server():
     assert res[0].target == "mcp-server"
 
 
+def test_parse_resources_target_langgraph():
+    """RESOURCES target: langgraph is accepted since v0.7."""
+    src = "STEP foo\n  MODE: exact\nRESOURCES\n  target: langgraph\n"
+    program = parse(src)
+    res = [d for d in program.decls if d.__class__.__name__ == "ResourcesDecl"]
+    assert len(res) == 1
+    assert res[0].target == "langgraph"
+
+
 def test_parse_resources_unknown_target_rejected():
-    """Unknown targets get a clear, enumerated error."""
+    """Unknown targets get a clear, enumerated error listing all 4 valid ones."""
     src = "STEP foo\n  MODE: exact\nRESOURCES\n  target: rust\n"
     with pytest.raises(ParseError) as exc:
         parse(src)
     msg = str(exc.value)
     assert "rust" in msg
-    assert "claude-cli" in msg and "python" in msg and "mcp-server" in msg
+    for t in ("claude-cli", "python", "mcp-server", "langgraph"):
+        assert t in msg
 
 
 def test_parse_step_with_cache_off():

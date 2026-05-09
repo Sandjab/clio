@@ -18,7 +18,10 @@ def main(argv: list[str] | None = None) -> int:
 
     compile_p = sub.add_parser("compile")
     compile_p.add_argument("source")
-    compile_p.add_argument("--target", required=True, choices=["claude-cli", "python", "mcp-server"])
+    compile_p.add_argument(
+        "--target", required=True,
+        choices=["claude-cli", "python", "mcp-server", "langgraph"],
+    )
     compile_p.add_argument("--output", required=True)
 
     check_p = sub.add_parser("check")
@@ -72,6 +75,9 @@ def _cmd_compile(source: str, target: str, output: str) -> int:
     elif target == "mcp-server":
         from clio.emitters.mcp_server import MCPServerEmitter
         MCPServerEmitter().emit(graph, out_path)
+    elif target == "langgraph":
+        from clio.emitters.langgraph import LangGraphEmitter
+        LangGraphEmitter().emit(graph, out_path)
     else:
         return 2
     return 0

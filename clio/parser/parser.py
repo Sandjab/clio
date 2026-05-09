@@ -104,10 +104,10 @@ class _Parser:
                 self.advance()
                 self.expect(TokenType.COLON)
                 value_tok = self.expect(TokenType.KEYWORD)
-                if value_tok.value not in {"claude-cli", "python", "mcp-server"}:
+                if value_tok.value not in {"claude-cli", "python", "mcp-server", "langgraph"}:
                     raise ParseError(
                         f"target {value_tok.value!r} is not supported "
-                        "(valid targets: claude-cli, python, mcp-server)",
+                        "(valid targets: claude-cli, python, mcp-server, langgraph)",
                         value_tok.line, value_tok.col,
                     )
                 target = value_tok.value
@@ -140,9 +140,9 @@ class _Parser:
         if target is None:
             raise ParseError("RESOURCES is missing required `target` field", kw.line, kw.col)
         # `models:` is only meaningful for the claude-cli target (it drives the
-        # haiku→sonnet→opus escalation chain). Python and mcp-server targets
-        # take per-step model overrides via invoke.api.model, so `models:` is
-        # optional for them.
+        # haiku→sonnet→opus escalation chain). Python, mcp-server, and langgraph
+        # targets take per-step model overrides via invoke.api.model, so `models:`
+        # is optional for them.
         if target == "claude-cli" and not models:
             raise ParseError(
                 "RESOURCES with target: claude-cli requires a `models` field",
