@@ -12,6 +12,22 @@
   build step, no server. Open the HTML in any browser. The panel is
   populated via DOM API (textContent / appendChild), never `innerHTML`, so
   step or contract names containing HTML metacharacters are safe.
+- `clio graph --format html` viewer redesign — Tabloid-grade rich cards.
+  Cream paper background with a charcoal dot grid; each node is rendered
+  as a Tabloid-style card with a colour-coded tinted head (icon + step
+  name + kicker), a Lucide-style mode icon (sparkles for `judgment`, `>_`
+  for `impl.shell`, code chevrons for `impl.code`, arrows for
+  `impl.rest`), and a meta footer surfacing the most informative
+  attributes (cache TTL, retry policy, gives type, parse mode). Mode
+  classes — `judgment` / `exact-shell` / `exact-rest` / `exact-code` —
+  drive both the node card and the detail panel theming. The kicker shows
+  the next-level distinguishing detail (`cli`, `haiku`, `sonnet`, `cat`,
+  `jq`, `GET`, `python`) instead of repeating the mode the icon already
+  conveys. Typography: Geist Sans + Geist Mono (Google Fonts). Icons use
+  the head's hue darkened (not the saturated brand colour), enforced via
+  `!important` to defeat Mermaid's label-colour cascade. Vanilla
+  `to_mermaid()` (used for `--format mermaid`) is unchanged so GitHub
+  rendering is unaffected.
 
 ### Examples
 

@@ -6,6 +6,7 @@ project — each returns one source string per call.
 """
 from __future__ import annotations
 
+import html as _html
 import json
 
 from clio.ir.graph import (
@@ -40,6 +41,11 @@ _MERMAID_CLASSDEFS = (
     "    classDef exact fill:#fff3e0,stroke:#f57c00,color:#bf360c",
 )
 
+_BLUEPRINT_CLASSDEFS = (
+    "    classDef judgment fill:#ffffff,stroke:#1a3550,color:#0e2236,stroke-width:1.25px",
+    "    classDef exact fill:#ffffff,stroke:#1a3550,color:#0e2236,stroke-width:1.25px",
+)
+
 
 def _mermaid_node(step: StepIR) -> str:
     label = f"{step.name}<br/>{step.mode}"
@@ -48,12 +54,18 @@ def _mermaid_node(step: StepIR) -> str:
     return f'{step.name}["{label}"]:::exact'
 
 
-def to_mermaid(graph: FlowGraph) -> str:
+def to_mermaid(
+    graph: FlowGraph,
+    classdefs: tuple[str, ...] = _MERMAID_CLASSDEFS,
+) -> str:
     """Render a FlowGraph as a Mermaid `flowchart TD` source string.
 
     EXACT steps render as rectangles, JUDGMENT steps as parallelograms.
     FOR EACH blocks render as labelled subgraphs containing their body;
     edges from a previous step land on the subgraph border.
+
+    `classdefs` lets the HTML viewer inject a blueprint-themed palette
+    without changing the GitHub-rendered Mermaid output.
     """
     steps_by_name = {s.name: s for s in graph.steps}
     lines: list[str] = ["flowchart TD"]
@@ -98,7 +110,7 @@ def to_mermaid(graph: FlowGraph) -> str:
     else:
         walk(graph.flow.chain, "    ", None)
 
-    lines.extend(_MERMAID_CLASSDEFS)
+    lines.extend(classdefs)
     return "\n".join(lines) + "\n"
 
 
@@ -306,6 +318,211 @@ def _invoke_to_dict(i: InvokeIR) -> dict:
     return {"mode": type(i).__name__}
 
 
+def _step_mode_class(step: StepIR) -> str:
+    """Map a step to its visual mode class for the HTML viewer.
+
+    judgment      → 'judgment'   (LLM call, blue)
+    exact + shell → 'exact-shell' (orange)
+    exact + rest  → 'exact-rest'  (teal)
+    exact + code  → 'exact-code'  (slate)  — also default for stub steps
+    """
+    if step.mode == "judgment":
+        return "judgment"
+    if isinstance(step.impl, ShellImplIR):
+        return "exact-shell"
+    if isinstance(step.impl, RestImplIR):
+        return "exact-rest"
+    return "exact-code"
+
+
+# Recognised model nicknames in priority order. The first match in the model
+# string wins. Keep sorted from most specific to least specific.
+_MODEL_NICKNAMES = (
+    "haiku", "sonnet", "opus",
+    "gpt-5", "gpt-4o", "gpt-4", "gpt-3.5",
+    "gemini-pro", "gemini",
+    "mistral", "llama", "qwen", "deepseek",
+)
+
+
+def _step_kicker(step: StepIR) -> str | None:
+    """The 'next-level' detail to show in the card head, beyond the icon's
+    semantics. For judgment: the model nickname or 'cli'. For exact: the
+    invoked command (shell), HTTP method (rest), or language (code).
+    Returns None when nothing distinctive can be said."""
+    if step.mode == "judgment":
+        if step.invoke is None:
+            return "cli"  # default = invoke.cli (Claude CLI)
+        if isinstance(step.invoke, CliInvokeIR):
+            return "cli"
+        if isinstance(step.invoke, ApiInvokeIR):
+            model = (step.invoke.model or "").lower()
+            for nick in _MODEL_NICKNAMES:
+                if nick in model:
+                    return nick
+            # truncate long model names so they fit the chip
+            return (step.invoke.model or "api")[:14]
+        return "api"
+    # exact mode
+    if isinstance(step.impl, ShellImplIR):
+        return step.impl.argv[0] if step.impl.argv else "shell"
+    if isinstance(step.impl, RestImplIR):
+        return step.impl.method or "GET"
+    if isinstance(step.impl, CodeImplIR):
+        return step.impl.lang or "code"
+    return None
+
+
+def _step_meta_rows(step: StepIR) -> list[tuple[str, str]]:
+    """Up to two key/value rows shown in the meta footer of the node card.
+    Picks the most informative attributes per step. Truncates long values."""
+    rows: list[tuple[str, str]] = []
+    if step.cache is not None:
+        rows.append(("cache", _cache_to_str(step.cache)))
+    if step.on_fail is not None and len(rows) < 2:
+        of = _on_fail_to_str(step.on_fail)
+        if len(of) > 28:
+            of = of[:26] + "…"
+        rows.append(("retry", of))
+    if isinstance(step.impl, ShellImplIR) and step.impl.parse != "none" and len(rows) < 2:
+        rows.append(("parse", step.impl.parse))
+    if len(rows) < 2 and step.gives is not None:
+        gv = _type_to_str(step.gives.type)
+        if len(gv) > 28:
+            gv = gv[:26] + "…"
+        rows.append(("gives", gv))
+    return rows[:2]
+
+
+# Lucide-style stroke icons per mode. Same width=24 viewBox; rendered at
+# 20px in production via CSS. Stroke-width set on the SVG itself (1.5).
+_MODE_ICONS = {
+    "judgment": (
+        '<svg viewBox="0 0 24 24" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936'
+        'A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5'
+        'A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063'
+        'a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>'
+        '<path d="M20 3v4"/><path d="M22 5h-4"/>'
+        '<path d="M4 17v2"/><path d="M5 18H3"/>'
+        '</svg>'
+    ),
+    "exact-shell": (
+        '<svg viewBox="0 0 24 24" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'
+        '<polyline points="4 17 10 11 4 5"/>'
+        '<line x1="12" y1="19" x2="20" y2="19"/>'
+        '</svg>'
+    ),
+    "exact-rest": (
+        '<svg viewBox="0 0 24 24" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M5 9l-3 3 3 3"/>'
+        '<path d="M2 12h20"/>'
+        '<path d="M19 15l3-3-3-3"/>'
+        '</svg>'
+    ),
+    "exact-code": (
+        '<svg viewBox="0 0 24 24" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'
+        '<polyline points="16 18 22 12 16 6"/>'
+        '<polyline points="8 6 2 12 8 18"/>'
+        '</svg>'
+    ),
+}
+
+
+def _render_node_card_html(step: StepIR) -> str:
+    """Render the rich Tabloid-style HTML card for a single step. Used as
+    the inline label in the Mermaid source for the HTML viewer.
+
+    HTML attributes are quoted with single quotes so the surrounding Mermaid
+    `node["..."]` double-quoted form stays intact. Dynamic values are
+    HTML-escaped to handle types like `List<...>` safely."""
+    mode_class = _step_mode_class(step)
+    icon_svg = _MODE_ICONS.get(mode_class, "")
+    kicker = _step_kicker(step)
+    meta_rows = _step_meta_rows(step)
+
+    # Use single-quoted HTML attrs throughout. html.escape with quote=True
+    # turns " into &quot; and ' into &#x27;, both safe in either delimiter.
+    def esc(s: str) -> str:
+        return _html.escape(s, quote=True)
+
+    parts = [
+        f"<div class='node-card {mode_class}'>",
+        "<div class='head'>",
+        f"<span class='icon'>{icon_svg}</span>",
+        f"<span class='name'>{esc(step.name)}</span>",
+    ]
+    if kicker:
+        parts.append(f"<span class='kicker'>{esc(kicker)}</span>")
+    parts.append("</div>")
+    if meta_rows:
+        parts.append("<div class='meta'>")
+        for key, val in meta_rows:
+            parts.append(
+                "<div class='row'>"
+                f"<span class='key'>{esc(key)}</span>"
+                f"<span class='val'>{esc(val)}</span>"
+                "</div>"
+            )
+        parts.append("</div>")
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def _to_mermaid_rich_labels(graph: FlowGraph) -> str:
+    """Mermaid source where each node label is the rich Tabloid-style HTML
+    card. The viewer's CSS hides the underlying SVG rect so only the HTML
+    label shows. classDefs are kept for the rare case Mermaid still needs
+    to size something based on class — but they don't affect rendering."""
+    steps_by_name = {s.name: s for s in graph.steps}
+    lines: list[str] = ["flowchart TD"]
+    declared: set[str] = set()
+    state = {"foreach_idx": 0}
+
+    def declare(step_name: str, indent: str) -> None:
+        if step_name in declared:
+            return
+        step = steps_by_name.get(step_name)
+        if step is not None:
+            card = _render_node_card_html(step)
+            lines.append(f'{indent}{step_name}["{card}"]')
+        else:
+            lines.append(f'{indent}{step_name}["{step_name}<br/>?"]')
+        declared.add(step_name)
+
+    def walk(chain, indent: str, prev_id: str | None) -> str | None:
+        for elem in chain:
+            if isinstance(elem, CallIR):
+                declare(elem.step_name, indent)
+                if prev_id is not None:
+                    lines.append(f"{indent}{prev_id} --> {elem.step_name}")
+                prev_id = elem.step_name
+            elif isinstance(elem, ForEachIR):
+                state["foreach_idx"] += 1
+                sg_id = f"foreach_{state['foreach_idx']}"
+                if elem.parallel:
+                    label = f"FOR EACH {elem.loop_var} IN {elem.collection} [parallel]"
+                else:
+                    label = f"FOR EACH {elem.loop_var} IN {elem.collection}"
+                lines.append(f'{indent}subgraph {sg_id}["{label}"]')
+                walk(elem.body, indent + "    ", None)
+                lines.append(f"{indent}end")
+                if prev_id is not None:
+                    lines.append(f"{indent}{prev_id} --> {sg_id}")
+                prev_id = sg_id
+        return prev_id
+
+    if graph.flow is None:
+        for s in graph.steps:
+            card = _render_node_card_html(s)
+            lines.append(f'    {s.name}["{card}"]')
+            declared.add(s.name)
+    else:
+        walk(graph.flow.chain, "    ", None)
+
+    return "\n".join(lines) + "\n"
+
+
 def _step_to_dict(step: StepIR) -> dict:
     refs: list[str] = []
     for f in step.takes:
@@ -319,6 +536,8 @@ def _step_to_dict(step: StepIR) -> dict:
     d: dict = {
         "name": step.name,
         "mode": step.mode,
+        "mode_class": _step_mode_class(step),
+        "kicker": _step_kicker(step),
         "line": step.line,
         "takes": [{"name": f.name, "type": _type_to_str(f.type)} for f in step.takes],
         "gives": (
@@ -354,59 +573,409 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <title>CLIO graph &mdash; __TITLE__</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-:root { --fg: #1f2933; --muted: #6b7280; --border: #e5e7eb; --bg: #fafafa; --judgment: #0d47a1; --judgment-bg: #e3f2fd; --exact: #bf360c; --exact-bg: #fff3e0; }
+:root { color-scheme: light; }
 * { box-sizing: border-box; }
-body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; color: var(--fg); background: white; }
-header.top { padding: 16px 24px; border-bottom: 1px solid var(--border); }
-header.top h1 { margin: 0; font-size: 18px; font-weight: 600; }
-header.top .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
-.layout { display: grid; grid-template-columns: 1fr 380px; min-height: calc(100vh - 56px); }
-.graph { padding: 24px; overflow: auto; background: var(--bg); }
-.panel { padding: 20px; border-left: 1px solid var(--border); overflow-y: auto; max-height: calc(100vh - 56px); }
-.panel.empty { color: var(--muted); font-size: 13px; }
-.panel h2 { margin: 0 0 4px 0; font-size: 16px; font-family: "SF Mono", Menlo, Consolas, monospace; }
-.panel h3 { margin: 16px 0 6px 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; }
-.panel section { margin-top: 12px; }
-.panel ul { list-style: none; padding: 0; margin: 0; }
-.panel li { padding: 4px 0; font-size: 13px; }
-.panel code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; background: #f3f4f6; padding: 1px 5px; border-radius: 3px; }
-.panel pre { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 11px; background: #f3f4f6; padding: 8px 10px; border-radius: 4px; overflow-x: auto; margin: 6px 0; line-height: 1.5; }
-.panel details { margin: 6px 0; }
-.panel details > summary { cursor: pointer; font-size: 13px; padding: 4px 0; }
-.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; vertical-align: middle; margin-left: 6px; }
-.badge.judgment { color: var(--judgment); background: var(--judgment-bg); }
-.badge.exact { color: var(--exact); background: var(--exact-bg); }
-.empty-hint { color: var(--muted); font-size: 13px; line-height: 1.6; }
-g.node { cursor: pointer; }
-g.node.selected rect, g.node.selected polygon { stroke-width: 3px !important; }
-.line { color: var(--muted); font-size: 11px; }
+html { color-scheme: light; }
+body {
+  margin: 0;
+  font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.viewer {
+  --bg: oklch(96.5% 0.022 78);
+  --surface: oklch(99% 0.012 78);
+  --ink: oklch(20% 0.012 50);
+  --ink-soft: oklch(32% 0.014 50);
+  --muted: oklch(50% 0.015 50);
+  --rule: oklch(86% 0.018 60);
+  --rule-soft: oklch(91% 0.015 60);
+  --grid-dot: oklch(45% 0.014 50 / 0.18);
+  --neutral-strong: oklch(38% 0.012 240);
+  --neutral-med: oklch(50% 0.014 240);
+  --jdg-strong: oklch(35% 0.16 260);
+  --jdg-tint:   oklch(91% 0.045 260);
+  --jdg-icon:   oklch(38% 0.14 260);
+  --shl-strong: oklch(45% 0.155 38);
+  --shl-tint:   oklch(91% 0.045 38);
+  --shl-icon:   oklch(45% 0.14 38);
+  --rst-strong: oklch(45% 0.105 210);
+  --rst-tint:   oklch(91% 0.04 210);
+  --rst-icon:   oklch(40% 0.1 210);
+  --cod-strong: oklch(40% 0.025 240);
+  --cod-tint:   oklch(92% 0.012 240);
+  --cod-icon:   oklch(38% 0.025 240);
+  --shadow-card:  0 1px 2px rgba(82, 38, 19, 0.06), 0 4px 12px rgba(82, 38, 19, 0.04);
+  --shadow-hover: 0 2px 6px rgba(82, 38, 19, 0.10), 0 12px 28px rgba(82, 38, 19, 0.08);
+  font-size: 13.5px;
+  line-height: 1.55;
+  background: var(--bg);
+  color: var(--ink);
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+}
+
+.viewer .v-toolbar {
+  background: var(--surface);
+  border-bottom: 1px solid var(--rule);
+  padding: 12px 28px;
+  display: flex; align-items: center; gap: 10px;
+}
+.viewer .v-toolbar .title { font-weight: 600; font-size: 16px; letter-spacing: -0.02em; color: var(--ink); margin-right: 6px; }
+.viewer .v-toolbar .pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; font-size: 12px; font-weight: 500;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  color: var(--neutral-strong);
+  border-radius: 999px;
+}
+.viewer .v-toolbar .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--neutral-med); }
+.viewer .v-toolbar .spacer { flex: 1; }
+.viewer .v-toolbar .credit { font-family: 'Geist Mono', monospace; font-size: 11px; color: var(--neutral-med); letter-spacing: 0.02em; }
+
+.viewer .layout { display: grid; grid-template-columns: 1fr 380px; }
+@media (max-width: 1100px) { .viewer .layout { grid-template-columns: 1fr; } }
+
+.viewer .v-graph {
+  padding: 32px 28px;
+  background:
+    radial-gradient(circle, var(--grid-dot) 1px, transparent 1.5px) 0 0 / 18px 18px,
+    var(--bg);
+  position: relative;
+  min-height: 380px;
+  overflow: auto;
+}
+.viewer .v-graph .axis-meta {
+  position: absolute;
+  top: 14px; left: 18px;
+  font-family: 'Geist Mono', monospace;
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* Mermaid wrappers — collapse padding/margin around HTML labels */
+.viewer .mermaid svg { background: transparent !important; max-width: 100%; overflow: visible !important; }
+.viewer .mermaid svg .node rect, .viewer .mermaid svg .node polygon { fill: transparent !important; stroke: transparent !important; }
+.viewer .mermaid svg foreignObject { overflow: visible !important; }
+.viewer .mermaid svg foreignObject > div,
+.viewer .mermaid svg foreignObject .label,
+.viewer .mermaid svg foreignObject .nodeLabel,
+.viewer .mermaid svg .nodeLabel,
+.viewer .mermaid svg .label {
+  padding: 0 !important;
+  margin: 0 !important;
+  line-height: 1 !important;
+  white-space: normal !important;
+}
+.viewer .mermaid svg foreignObject .node-card { display: flex !important; }
+.viewer .mermaid svg .edgePath path { stroke-linecap: round; stroke-linejoin: round; }
+
+/* ============== Node cards (rich Tabloid-style HTML labels) ============== */
+.node-card {
+  display: flex; flex-direction: column;
+  background: var(--surface);
+  border-radius: 8px;
+  border: 1px solid var(--rule);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  min-width: 220px;
+  font-family: 'Geist', sans-serif;
+  transition: box-shadow 180ms ease-out, transform 180ms ease-out, border-color 180ms ease-out;
+  cursor: pointer;
+}
+.node-card:hover { box-shadow: var(--shadow-hover); transform: translateY(-2px); border-color: var(--accent-strong); }
+g.node.selected .node-card,
+g.node:focus-visible .node-card {
+  border-color: var(--accent-strong);
+  box-shadow: 0 0 0 2px var(--accent-strong), var(--shadow-hover);
+  outline: none;
+}
+
+.node-card .head {
+  display: flex; align-items: center; gap: 9px;
+  padding: 8px 12px;
+  background: var(--accent-tint);
+}
+.node-card .head .icon {
+  width: 20px; height: 20px;
+  flex-shrink: 0;
+  color: var(--accent-icon) !important;
+  display: inline-flex;
+}
+.node-card .head .icon svg {
+  width: 100%; height: 100%;
+  fill: none !important;
+  stroke: currentColor !important;
+}
+.node-card .head .icon svg path,
+.node-card .head .icon svg polyline,
+.node-card .head .icon svg line,
+.node-card .head .icon svg circle,
+.node-card .head .icon svg rect,
+.node-card .head .icon svg ellipse {
+  fill: none !important;
+  stroke: currentColor !important;
+}
+.node-card .head .name { font-weight: 600; font-size: 14px; letter-spacing: -0.015em; color: var(--ink); white-space: nowrap; }
+.node-card .head .kicker {
+  margin-left: auto;
+  font-family: 'Geist Mono', monospace;
+  font-size: 10px; font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 1px 7px; border-radius: 3px;
+  background: white;
+  color: var(--accent-strong);
+}
+.node-card .meta {
+  padding: 6px 12px 8px;
+  font-family: 'Geist Mono', monospace;
+  font-size: 11px;
+  display: flex; flex-direction: column; gap: 2px;
+  color: var(--muted);
+}
+.node-card .meta .row { display: inline-flex; gap: 8px; align-items: baseline; }
+.node-card .meta .key { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; min-width: 38px; opacity: 0.85; }
+.node-card .meta .val { color: var(--ink-soft); font-weight: 500; }
+.node-card .meta:empty { display: none; }
+
+.node-card.judgment    { --accent-strong: var(--jdg-strong); --accent-tint: var(--jdg-tint); --accent-icon: var(--jdg-icon); }
+.node-card.exact-shell { --accent-strong: var(--shl-strong); --accent-tint: var(--shl-tint); --accent-icon: var(--shl-icon); }
+.node-card.exact-rest  { --accent-strong: var(--rst-strong); --accent-tint: var(--rst-tint); --accent-icon: var(--rst-icon); }
+.node-card.exact-code  { --accent-strong: var(--cod-strong); --accent-tint: var(--cod-tint); --accent-icon: var(--cod-icon); }
+
+/* ============== Detail panel (editorial, not card-replay) ============== */
+.viewer .v-panel {
+  border-left: 1px solid var(--rule);
+  background: var(--surface);
+  padding: 28px 28px 32px;
+  overflow-y: auto;
+  position: relative;
+  max-height: calc(100vh - 60px);
+}
+.viewer .v-panel::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 32px;
+  width: 3px; height: 56px;
+  background: var(--accent-strong, var(--neutral-strong));
+}
+.viewer .v-panel.judgment    { --accent-strong: var(--jdg-strong); }
+.viewer .v-panel.exact-shell { --accent-strong: var(--shl-strong); }
+.viewer .v-panel.exact-rest  { --accent-strong: var(--rst-strong); }
+.viewer .v-panel.exact-code  { --accent-strong: var(--cod-strong); }
+.viewer .v-panel.empty { color: var(--muted); }
+.viewer .v-panel.empty::before { background: var(--neutral-med); height: 32px; }
+
+.viewer .v-panel h2.step-name {
+  margin: 0 0 4px 0;
+  font-weight: 700;
+  font-size: 26px;
+  letter-spacing: -0.025em;
+  color: var(--ink);
+  word-break: break-word;
+}
+.viewer .v-panel .step-meta {
+  display: flex; gap: 10px; align-items: center;
+  font-family: 'Geist Mono', monospace;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 18px;
+  letter-spacing: 0.02em;
+}
+.viewer .v-panel .step-meta .accent {
+  color: var(--accent-strong);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.viewer .v-panel h3 {
+  font-weight: 600;
+  font-size: 11px;
+  margin: 22px 0 6px 0;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.viewer .v-panel ul { list-style: none; padding: 0; margin: 0; }
+.viewer .v-panel li {
+  padding: 6px 0;
+  font-size: 13px;
+  display: flex; gap: 10px; align-items: baseline;
+  border-bottom: 1px dashed var(--rule-soft);
+}
+.viewer .v-panel li:last-child { border-bottom: none; }
+.viewer .v-panel .field { font-weight: 600; color: var(--ink); }
+.viewer .v-panel .sep { color: var(--muted); opacity: 0.5; }
+.viewer .v-panel code {
+  font-family: 'Geist Mono', monospace;
+  font-size: 12px;
+  color: var(--accent-strong, var(--ink));
+  font-weight: 500;
+}
+.viewer .v-panel .pair {
+  display: flex; gap: 14px; padding: 6px 0; font-size: 13px;
+  align-items: baseline;
+  border-bottom: 1px dashed var(--rule-soft);
+}
+.viewer .v-panel .pair:last-child { border-bottom: none; }
+.viewer .v-panel .pair .l {
+  font-family: 'Geist Mono', monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  min-width: 92px; flex-shrink: 0;
+}
+.viewer .v-panel .pair .v { color: var(--ink); font-family: 'Geist Mono', monospace; font-size: 12px; font-weight: 500; }
+.viewer .v-panel details { margin: 6px 0; }
+.viewer .v-panel details + details { border-top: 1px dashed var(--rule-soft); padding-top: 8px; }
+.viewer .v-panel details > summary {
+  cursor: pointer; font-size: 13px;
+  list-style: none; padding: 4px 0;
+  display: flex; align-items: center; gap: 8px;
+}
+.viewer .v-panel details > summary::-webkit-details-marker { display: none; }
+.viewer .v-panel details > summary::before {
+  content: '+';
+  color: var(--accent-strong, var(--ink));
+  font-family: 'Geist Mono', monospace;
+  font-size: 13px;
+  width: 12px;
+  display: inline-block;
+}
+.viewer .v-panel details[open] > summary::before { content: '−'; }
+.viewer .v-panel details > summary code { color: var(--ink); background: none; padding: 0; }
+.viewer .v-panel details .asserts {
+  font-family: 'Geist Mono', monospace;
+  font-size: 10px;
+  color: var(--accent-strong);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+.viewer .v-panel pre {
+  font-family: 'Geist Mono', monospace;
+  font-size: 11px;
+  background: var(--bg);
+  border: 1px solid var(--rule-soft);
+  border-radius: 4px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  margin: 6px 0 0 0;
+}
+.viewer .empty-hint {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* Footer */
+.viewer .v-credit {
+  text-align: right;
+  font-family: 'Geist Mono', monospace;
+  font-size: 11px;
+  color: var(--muted);
+  padding: 10px 28px;
+  border-top: 1px solid var(--rule-soft);
+  letter-spacing: 0.04em;
+}
+.viewer .v-credit em { color: var(--ink-soft); font-style: normal; font-weight: 500; }
+
+:focus-visible { outline: 2px solid var(--neutral-strong); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation-duration: 0.001ms !important; }
+}
 </style>
 </head>
 <body>
-<header class="top">
-  <h1 id="flow-title"></h1>
-  <div class="meta" id="flow-subtitle"></div>
-</header>
-<div class="layout">
-  <div class="graph">
-    <pre class="mermaid" id="mermaid-src"></pre>
+<div class="viewer">
+  <div class="v-toolbar">
+    <span class="title" id="flow-title"></span>
+    <span class="pill" id="flow-target"><span class="dot"></span><span id="flow-target-text"></span></span>
+    <span class="pill" id="flow-counts"></span>
+    <span class="spacer"></span>
+    <span class="credit">CLIO viewer</span>
   </div>
-  <aside class="panel empty" id="panel"></aside>
+  <main class="layout">
+    <div class="v-graph" role="img" aria-label="Pipeline diagram">
+      <div class="axis-meta">flow &middot; 01</div>
+      <pre class="mermaid" id="mermaid-src"></pre>
+    </div>
+    <aside class="v-panel empty" id="panel" aria-live="polite" aria-atomic="false" aria-label="Step details"></aside>
+  </main>
+  <div class="v-credit">Compiled with <em>CLIO</em></div>
 </div>
 <script type="module">
   import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
-  mermaid.initialize({ startOnLoad: true, securityLevel: 'loose', flowchart: { htmlLabels: true } });
+  mermaid.initialize({
+    startOnLoad: true,
+    securityLevel: 'loose',
+    flowchart: { htmlLabels: true, curve: 'basis', padding: 4, nodeSpacing: 40, rankSpacing: 42 },
+    theme: 'base',
+    themeVariables: {
+      background: 'transparent',
+      mainBkg: 'transparent',
+      primaryColor: 'transparent',
+      primaryBorderColor: 'transparent',
+      primaryTextColor: '#1f2937',
+      lineColor: '#9a8470',
+      secondaryColor: 'transparent',
+      tertiaryColor: 'transparent',
+      clusterBkg: 'rgba(154, 132, 112, 0.04)',
+      clusterBorder: '#9a8470',
+      titleColor: '#1f2937',
+      edgeLabelBackground: '#f5efe6',
+      fontFamily: '"Geist", -apple-system, sans-serif',
+      fontSize: '13px',
+    }
+  });
+  /* After Mermaid renders, make nodes keyboard-accessible. */
+  window.addEventListener('load', () => {
+    setTimeout(() => {
+      document.querySelectorAll('g.node').forEach(n => {
+        n.setAttribute('tabindex', '0');
+        n.setAttribute('role', 'button');
+        const id = n.id || '';
+        const m = id.match(/^flowchart-(.+?)-\\d+$/);
+        if (m) n.setAttribute('aria-label', 'Inspect step ' + m[1]);
+      });
+    }, 250);
+  });
 </script>
 <script>
 const STEPS = __STEPS_JSON__;
 const CONTRACTS = __CONTRACTS_JSON__;
 const TITLE = __TITLE_JSON__;
 const SUBTITLE = __SUBTITLE_JSON__;
+const TARGET = __TARGET_JSON__;
+const COUNTS = __COUNTS_JSON__;
 const MERMAID_SRC = __MERMAID_JSON__;
 
+document.title = 'CLIO graph — ' + TITLE;
 document.getElementById('flow-title').textContent = TITLE;
-document.getElementById('flow-subtitle').textContent = SUBTITLE;
+const targetPill = document.getElementById('flow-target');
+if (TARGET) {
+  document.getElementById('flow-target-text').textContent = TARGET;
+} else {
+  targetPill.style.display = 'none';
+}
+const countsPill = document.getElementById('flow-counts');
+if (COUNTS) {
+  countsPill.textContent = COUNTS;
+} else {
+  countsPill.style.display = 'none';
+}
 document.getElementById('mermaid-src').textContent = MERMAID_SRC;
 
 function el(tag, opts) {
@@ -414,9 +983,6 @@ function el(tag, opts) {
   if (opts) {
     if (opts.cls) n.className = opts.cls;
     if (opts.text != null) n.textContent = opts.text;
-    if (opts.html != null) {
-      // intentionally not used; we never inject HTML strings
-    }
     if (opts.children) for (const c of opts.children) if (c) n.appendChild(c);
   }
   return n;
@@ -426,11 +992,9 @@ function fieldList(items) {
   const ul = el('ul');
   for (const f of items) {
     const li = el('li');
-    const nameCode = el('code', { text: f.name });
-    const typeCode = el('code', { text: f.type });
-    li.appendChild(nameCode);
-    li.appendChild(document.createTextNode(' : '));
-    li.appendChild(typeCode);
+    li.appendChild(el('span', { cls: 'field', text: f.name }));
+    li.appendChild(el('span', { cls: 'sep', text: ':' }));
+    li.appendChild(el('code', { text: f.type }));
     ul.appendChild(li);
   }
   return ul;
@@ -443,9 +1007,10 @@ function section(title, body) {
   return sec;
 }
 
-function codeLine(text) {
-  const div = el('div');
-  div.appendChild(el('code', { text: text }));
+function inlinePair(label, value) {
+  const div = el('div', { cls: 'pair' });
+  div.appendChild(el('span', { cls: 'l', text: label }));
+  div.appendChild(el('span', { cls: 'v', text: value }));
   return div;
 }
 
@@ -453,46 +1018,57 @@ function preJson(obj) {
   return el('pre', { text: JSON.stringify(obj, null, 2) });
 }
 
+const PANEL_MODE_CLASSES = ['judgment', 'exact-shell', 'exact-rest', 'exact-code', 'empty'];
+
 function showStep(name) {
   const s = STEPS[name];
   const panel = document.getElementById('panel');
   panel.replaceChildren();
+  for (const c of PANEL_MODE_CLASSES) panel.classList.remove(c);
   if (!s) {
     panel.classList.add('empty');
     panel.appendChild(el('p', { cls: 'empty-hint', text: 'Unknown step: ' + name }));
     return;
   }
-  panel.classList.remove('empty');
+  panel.classList.add(s.mode_class);
 
-  const header = el('header');
-  header.style.border = 'none';
-  header.style.padding = '0';
-  const h2 = el('h2', { text: s.name });
-  const badge = el('span', { cls: 'badge ' + s.mode, text: s.mode });
-  h2.appendChild(badge);
-  header.appendChild(h2);
-  header.appendChild(el('div', { cls: 'line', text: 'defined at line ' + s.line }));
-  panel.appendChild(header);
+  panel.appendChild(el('h2', { cls: 'step-name', text: s.name }));
 
-  if (s.takes && s.takes.length) panel.appendChild(section('TAKES', fieldList(s.takes)));
-  if (s.gives) panel.appendChild(section('GIVES', fieldList([s.gives])));
-  if (s.cache) panel.appendChild(section('CACHE', codeLine(s.cache)));
-  if (s.on_fail) panel.appendChild(section('ON_FAIL', codeLine(s.on_fail)));
-  if (s.impl) panel.appendChild(section('IMPL', preJson(s.impl)));
-  if (s.invoke) panel.appendChild(section('INVOKE', preJson(s.invoke)));
-  if (s.lang) panel.appendChild(section('LANG', codeLine(s.lang)));
+  const stepMeta = el('div', { cls: 'step-meta' });
+  const accentBits = [s.mode];
+  if (s.kicker) accentBits.push(s.kicker);
+  stepMeta.appendChild(el('span', { cls: 'accent', text: accentBits.join(' · ') }));
+  stepMeta.appendChild(el('span', { text: '·' }));
+  stepMeta.appendChild(el('span', { text: 'line ' + s.line }));
+  panel.appendChild(stepMeta);
+
+  if (s.takes && s.takes.length) panel.appendChild(section('Takes', fieldList(s.takes)));
+  if (s.gives) panel.appendChild(section('Gives', fieldList([s.gives])));
+
+  const inline = [];
+  if (s.cache) inline.push(['Cache', s.cache]);
+  if (s.on_fail) inline.push(['On fail', s.on_fail]);
+  if (s.lang) inline.push(['Lang', s.lang]);
+  if (inline.length) {
+    const sec = el('section');
+    sec.appendChild(el('h3', { text: 'Policy' }));
+    for (const [label, value] of inline) sec.appendChild(inlinePair(label, value));
+    panel.appendChild(sec);
+  }
+
+  if (s.impl) panel.appendChild(section('Impl', preJson(s.impl)));
+  if (s.invoke) panel.appendChild(section('Invoke', preJson(s.invoke)));
 
   if (s.contracts && s.contracts.length) {
     const sec = el('section');
-    sec.appendChild(el('h3', { text: 'CONTRACTS REFERENCED' }));
+    sec.appendChild(el('h3', { text: 'Contracts referenced' }));
     for (const cname of s.contracts) {
       const c = CONTRACTS[cname];
       const det = el('details');
       const sum = el('summary');
       sum.appendChild(el('code', { text: cname }));
       if (c && c.has_assert) {
-        sum.appendChild(document.createTextNode(' '));
-        sum.appendChild(el('span', { cls: 'line', text: '(has ASSERT)' }));
+        sum.appendChild(el('span', { cls: 'asserts', text: 'asserts' }));
       }
       det.appendChild(sum);
       if (c) det.appendChild(preJson(c.json_schema));
@@ -512,21 +1088,32 @@ function showStep(name) {
 function showEmpty() {
   const panel = document.getElementById('panel');
   panel.replaceChildren();
+  for (const c of PANEL_MODE_CLASSES) panel.classList.remove(c);
   panel.classList.add('empty');
   panel.appendChild(el('p', {
     cls: 'empty-hint',
-    text: 'Click a step in the graph to inspect its TAKES / GIVES, mode, contracts, cache, retry policy, and exec details.'
+    text: 'Pick a step from the diagram to inspect its takes, gives, contracts, cache, retry policy, and exec details.'
   }));
 }
 
 showEmpty();
 
-document.addEventListener('click', (e) => {
-  const node = e.target.closest('g.node');
-  if (!node) return;
+function activateNode(node) {
   const id = node.id || '';
   const m = id.match(/^flowchart-(.+?)-\\d+$/);
   if (m) showStep(m[1]);
+}
+
+document.addEventListener('click', (e) => {
+  const node = e.target.closest('g.node');
+  if (node) activateNode(node);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const node = document.activeElement && document.activeElement.closest('g.node');
+  if (!node) return;
+  e.preventDefault();
+  activateNode(node);
 });
 </script>
 </body>
@@ -537,25 +1124,33 @@ document.addEventListener('click', (e) => {
 def to_html(graph: FlowGraph) -> str:
     """Render a FlowGraph as a single self-contained HTML viewer.
 
-    The page embeds the Mermaid source (rendered client-side via the
-    mermaid.js ESM CDN module), a per-step JSON catalog, and a click
-    handler that populates a side panel with TAKES / GIVES / mode /
-    referenced contracts / cache / on_fail / impl / invoke for the
-    selected step. No build step, no server — open the HTML in any
-    browser with internet access.
+    The page embeds a Mermaid source where every node is rendered as a rich
+    Tabloid-style HTML card (icon, name, kicker, key/val meta footer), plus
+    a per-step JSON catalog and a click handler that populates a side panel
+    with TAKES / GIVES / mode / referenced contracts / cache / on_fail /
+    impl / invoke for the selected step. No build step, no server — open
+    the HTML in any browser with internet access (mermaid.js + Geist fonts
+    are loaded from CDN).
     """
-    mermaid_source = to_mermaid(graph).rstrip("\n")
+    mermaid_source = _to_mermaid_rich_labels(graph).rstrip("\n")
     steps_data = {s.name: _step_to_dict(s) for s in graph.steps}
     contracts_data = {c.name: _contract_to_dict(c) for c in graph.contracts}
 
     flow_name = graph.flow.name if graph.flow is not None else "(no FLOW)"
     n_steps = len(graph.steps)
     n_contracts = len(graph.contracts)
-    subtitle_parts = [f"{n_steps} step" + ("s" if n_steps != 1 else "")]
+
+    target = graph.resources.target if graph.resources is not None else None
+
+    counts_parts: list[str] = []
     if n_contracts:
-        subtitle_parts.append(f"{n_contracts} contract" + ("s" if n_contracts != 1 else ""))
-    if graph.resources is not None:
-        subtitle_parts.append(f"target: {graph.resources.target}")
+        counts_parts.append(f"{n_contracts} contract" + ("s" if n_contracts != 1 else ""))
+    counts_parts.append(f"{n_steps} step" + ("s" if n_steps != 1 else ""))
+    counts = " · ".join(counts_parts)
+
+    subtitle_parts = list(counts_parts)
+    if target is not None:
+        subtitle_parts.insert(0, f"target: {target}")
     subtitle = " · ".join(subtitle_parts)
 
     return (
@@ -565,5 +1160,7 @@ def to_html(graph: FlowGraph) -> str:
         .replace("__CONTRACTS_JSON__", json.dumps(contracts_data, ensure_ascii=False))
         .replace("__TITLE_JSON__", json.dumps(flow_name, ensure_ascii=False))
         .replace("__SUBTITLE_JSON__", json.dumps(subtitle, ensure_ascii=False))
+        .replace("__TARGET_JSON__", json.dumps(target, ensure_ascii=False))
+        .replace("__COUNTS_JSON__", json.dumps(counts, ensure_ascii=False))
         .replace("__MERMAID_JSON__", json.dumps(mermaid_source, ensure_ascii=False))
     )

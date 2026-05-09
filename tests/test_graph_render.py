@@ -300,3 +300,68 @@ def test_cli_graph_html_writes_to_output_file(tmp_path):
     body = out.read_text()
     assert body.startswith("<!DOCTYPE html>\n")
     assert "flowchart TD" in body
+
+
+def test_html_step_exposes_mode_class_and_kicker():
+    """Each step in STEPS gets a mode_class (judgment | exact-shell | exact-rest |
+    exact-code) used to colour the panel + node card, and a kicker (next-level
+    detail like 'cli', 'haiku', 'cat', 'GET', 'python') shown beside the icon."""
+    src = (
+        "STEP detect\n  TAKES: text: str\n  GIVES: topic: str\n  MODE: judgment\n"
+        "STEP load\n"
+        "  TAKES: file: str\n  GIVES: lines: List<str>\n  MODE: exact\n"
+        "  impl:\n    mode: shell\n    cmd: \"cat ${file}\"\n"
+    )
+    out = _html(src)
+    steps = _extract_js_const(out, "STEPS")
+    # judgment with no invoke block defaults to 'cli' (Claude CLI)
+    assert steps["detect"]["mode_class"] == "judgment"
+    assert steps["detect"]["kicker"] == "cli"
+    # exact + impl.shell → 'exact-shell' class, kicker = first argv token
+    assert steps["load"]["mode_class"] == "exact-shell"
+    assert steps["load"]["kicker"] == "cat"
+
+
+def test_html_kicker_extracts_model_nickname():
+    """For judgment + invoke.api with a known provider model, the kicker is
+    the model's nickname (haiku, sonnet, gpt-4o, ...) — much more useful than
+    repeating 'LLM' or the full model id."""
+    src = (
+        "STEP classify\n"
+        "  TAKES: text: str\n  GIVES: label: str\n  MODE: judgment\n"
+        "  invoke:\n    mode: api\n    protocol: anthropic\n    model: \"claude-haiku-4-5\"\n"
+    )
+    out = _html(src)
+    steps = _extract_js_const(out, "STEPS")
+    assert steps["classify"]["kicker"] == "haiku"
+
+
+def test_html_mermaid_source_uses_rich_html_labels():
+    """The HTML viewer's Mermaid source carries a Tabloid-style rich card per
+    node, so the graph itself shows mode/icon/meta even before the user clicks.
+    Vanilla `to_mermaid()` (used for --format mermaid on GitHub) is unchanged."""
+    out = _html(_FLOW_SRC)
+    mermaid_src = _extract_js_const(out, "MERMAID_SRC")
+    # Each step is rendered as a div.node-card with its mode class.
+    assert "<div class='node-card judgment'>" in mermaid_src
+    assert "<div class='node-card exact-code'>" in mermaid_src
+    # Step name appears inside a span.name (HTML-escaped form)
+    assert "<span class='name'>detect_topic</span>" in mermaid_src
+    assert "<span class='name'>summarize</span>" in mermaid_src
+    # Vanilla Mermaid source (no rich labels) used for --format mermaid is
+    # untouched: should still produce the simple "name<br/>mode" labels.
+    vanilla = _mermaid(_FLOW_SRC)
+    assert "<div class='node-card" not in vanilla
+    assert "detect_topic<br/>judgment" in vanilla
+
+
+def test_html_panel_has_mode_class_hooks():
+    """The panel applies a class derived from STEPS[name].mode_class so the
+    CSS can theme borders/text per mode without baking the mode into HTML."""
+    out = _html(_FLOW_SRC)
+    # The JS uses PANEL_MODE_CLASSES to add/remove panel mode classes.
+    assert "PANEL_MODE_CLASSES" in out
+    # The mode tokens themselves appear in the CSS rules.
+    for cls in ("judgment", "exact-shell", "exact-rest", "exact-code"):
+        assert f".v-panel.{cls}" in out
+        assert f".node-card.{cls}" in out
