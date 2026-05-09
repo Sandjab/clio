@@ -772,11 +772,36 @@ def _has_parallel(chain) -> bool:
     """Return True if any ForEachIR in the chain (or nested) has parallel=True.
     Used by emitters to decide whether to emit `import concurrent.futures` /
     `import asyncio` at module top of the emitted flow.py."""
-    from clio.ir.graph import ForEachIR  # avoid top-level circular import
+    from clio.ir.graph import ForEachIR, IfBlockIR  # avoid top-level circular import
     for elem in chain:
         if isinstance(elem, ForEachIR):
             if elem.parallel:
                 return True
             if _has_parallel(elem.body):
                 return True
+        elif isinstance(elem, IfBlockIR):
+            if _has_parallel(elem.then_body) or _has_parallel(elem.else_body):
+                return True
     return False
+
+
+def _python_condition_expr(condition, scope_local: set[str]) -> str:
+    """Render an IF/WHILE ConditionIR as a Python boolean expression.
+
+    Reads the contract field via attribute access (Pydantic models): if the
+    state field is in `scope_local` (e.g. inside a FOR EACH body) it's a bare
+    name, otherwise it's `state[<name>]`."""
+    base = (
+        condition.step_name
+        if condition.step_name in scope_local
+        else f"state[{condition.step_name!r}]"
+    )
+    access = f"{base}.{condition.field}"
+    if condition.literal_kind == "int":
+        lit = str(condition.literal_value)
+    elif condition.literal_kind == "float":
+        lit = repr(condition.literal_value)
+    else:
+        # str | ident — both rendered as Python string literals
+        lit = repr(condition.literal_value)
+    return f"{access} {condition.op} {lit}"

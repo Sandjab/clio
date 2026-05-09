@@ -18,6 +18,7 @@ from clio.ir.graph import (
     ContractIR,
     FlowGraph,
     ForEachIR,
+    IfBlockIR,
     ImplIR,
     InvokeIR,
     OnFailChainIR,
@@ -469,21 +470,23 @@ def _render_node_card_html(step: StepIR) -> str:
     return "".join(parts)
 
 
-def _to_mermaid_rich_labels(graph: FlowGraph) -> tuple[str, dict[str, dict]]:
+def _to_mermaid_rich_labels(graph: FlowGraph) -> tuple[str, dict[str, dict], dict[str, dict]]:
     """Mermaid source where each node label is the rich Tabloid-style HTML
     card. The viewer's CSS hides the underlying SVG rect so only the HTML
     label shows.
 
-    Returns (mermaid_source, foreach_meta) where foreach_meta maps each
-    subgraph id (foreach_N) to its loop_var/collection/parallel metadata.
-    The viewer's JS uses that metadata to inject a chip-pill banner inside
-    each cluster-label foreignObject after Mermaid renders.
+    Returns (mermaid_source, foreach_meta, if_meta). `foreach_meta` maps each
+    foreach_N subgraph id to its loop_var/collection/parallel metadata; the
+    viewer's JS uses it to inject a chip-pill banner. `if_meta` maps each
+    decision node id (if_N) to {state_field, sub_field, op, literal}; the
+    viewer renders it as a small decision card.
     """
     steps_by_name = {s.name: s for s in graph.steps}
     lines: list[str] = ["flowchart TD"]
     declared: set[str] = set()
-    state = {"foreach_idx": 0}
+    state = {"foreach_idx": 0, "if_idx": 0}
     foreach_meta: dict[str, dict] = {}
+    if_meta: dict[str, dict] = {}
 
     def declare(step_name: str, indent: str) -> None:
         if step_name in declared:
@@ -496,13 +499,23 @@ def _to_mermaid_rich_labels(graph: FlowGraph) -> tuple[str, dict[str, dict]]:
             lines.append(f'{indent}{step_name}["{step_name}<br/>?"]')
         declared.add(step_name)
 
-    def walk(chain, indent: str, prev_id: str | None) -> str | None:
+    def _first_id(chain) -> str | None:
+        for elem in chain:
+            if isinstance(elem, CallIR):
+                return elem.step_name
+            if isinstance(elem, ForEachIR):
+                return _first_id(elem.body)
+            if isinstance(elem, IfBlockIR):
+                return _first_id(elem.then_body)
+        return None
+
+    def walk(chain, indent: str, prev_ids: list[str]) -> list[str]:
         for elem in chain:
             if isinstance(elem, CallIR):
                 declare(elem.step_name, indent)
-                if prev_id is not None:
-                    lines.append(f"{indent}{prev_id} --> {elem.step_name}")
-                prev_id = elem.step_name
+                for p in prev_ids:
+                    lines.append(f"{indent}{p} --> {elem.step_name}")
+                prev_ids = [elem.step_name]
             elif isinstance(elem, ForEachIR):
                 state["foreach_idx"] += 1
                 sg_id = f"foreach_{state['foreach_idx']}"
@@ -516,12 +529,50 @@ def _to_mermaid_rich_labels(graph: FlowGraph) -> tuple[str, dict[str, dict]]:
                     "parallel": elem.parallel,
                 }
                 lines.append(f'{indent}subgraph {sg_id}["{label}"]')
-                walk(elem.body, indent + "    ", None)
+                walk(elem.body, indent + "    ", [])
                 lines.append(f"{indent}end")
-                if prev_id is not None:
-                    lines.append(f"{indent}{prev_id} --> {sg_id}")
-                prev_id = sg_id
-        return prev_id
+                for p in prev_ids:
+                    lines.append(f"{indent}{p} --> {sg_id}")
+                prev_ids = [sg_id]
+            elif isinstance(elem, IfBlockIR):
+                state["if_idx"] += 1
+                dec_id = f"if_{state['if_idx']}"
+                cond = elem.condition
+                if_meta[dec_id] = {
+                    "state_field": cond.step_name,
+                    "sub_field": cond.field,
+                    "op": cond.op,
+                    "literal": cond.literal_value,
+                    "literal_kind": cond.literal_kind,
+                }
+                # Decision node — diamond shape via {{...}} (hexagon-ish)
+                # Mermaid renders it without a foreignObject; the viewer's
+                # JS swaps in a small chip-pill via if_meta.
+                lit_repr = repr(cond.literal_value)
+                cond_label = (
+                    f"{cond.step_name}.{cond.field} {cond.op} {lit_repr}"
+                )
+                lines.append(f'{indent}{dec_id}{{"IF {cond_label}"}}')
+                for p in prev_ids:
+                    lines.append(f"{indent}{p} --> {dec_id}")
+                # Then branch — connect with a labelled edge.
+                if elem.then_body:
+                    first_then = _first_id(elem.then_body)
+                    if first_then is not None:
+                        lines.append(f'{indent}{dec_id} -- "yes" --> {first_then}')
+                    then_terminals = walk(elem.then_body, indent, [])
+                else:
+                    then_terminals = [dec_id]
+                # Else branch
+                if elem.else_body:
+                    first_else = _first_id(elem.else_body)
+                    if first_else is not None:
+                        lines.append(f'{indent}{dec_id} -- "no" --> {first_else}')
+                    else_terminals = walk(elem.else_body, indent, [])
+                else:
+                    else_terminals = [dec_id]
+                prev_ids = then_terminals + else_terminals
+        return prev_ids
 
     if graph.flow is None:
         for s in graph.steps:
@@ -529,9 +580,9 @@ def _to_mermaid_rich_labels(graph: FlowGraph) -> tuple[str, dict[str, dict]]:
             lines.append(f'    {s.name}["{card}"]')
             declared.add(s.name)
     else:
-        walk(graph.flow.chain, "    ", None)
+        walk(graph.flow.chain, "    ", [])
 
-    return "\n".join(lines) + "\n", foreach_meta
+    return "\n".join(lines) + "\n", foreach_meta, if_meta
 
 
 def _step_to_dict(step: StepIR) -> dict:
@@ -1046,6 +1097,7 @@ const TARGET = __TARGET_JSON__;
 const COUNTS = __COUNTS_JSON__;
 const MERMAID_SRC = __MERMAID_JSON__;
 const FOREACH_META = __FOREACH_META_JSON__;
+const IF_META = __IF_META_JSON__;
 
 document.title = 'CLIO graph — ' + TITLE;
 document.getElementById('flow-title').textContent = TITLE;
@@ -1277,7 +1329,7 @@ def to_html(graph: FlowGraph) -> str:
     the HTML in any browser with internet access (mermaid.js + Geist fonts
     are loaded from CDN).
     """
-    mermaid_source, foreach_meta = _to_mermaid_rich_labels(graph)
+    mermaid_source, foreach_meta, if_meta = _to_mermaid_rich_labels(graph)
     mermaid_source = mermaid_source.rstrip("\n")
     steps_data = {s.name: _step_to_dict(s) for s in graph.steps}
     contracts_data = {c.name: _contract_to_dict(c) for c in graph.contracts}
@@ -1310,4 +1362,5 @@ def to_html(graph: FlowGraph) -> str:
         .replace("__COUNTS_JSON__", json.dumps(counts, ensure_ascii=False))
         .replace("__MERMAID_JSON__", json.dumps(mermaid_source, ensure_ascii=False))
         .replace("__FOREACH_META_JSON__", json.dumps(foreach_meta, ensure_ascii=False))
+        .replace("__IF_META_JSON__", json.dumps(if_meta, ensure_ascii=False))
     )

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json as _json
 
-from clio.emitters._python_helpers import _has_parallel
+from clio.emitters._python_helpers import _has_parallel, _python_condition_expr
 from clio.ir.contracts import type_to_json_schema
-from clio.ir.graph import CallIR, FlowGraph, ForEachIR, StepIR
+from clio.ir.graph import CallIR, FlowGraph, ForEachIR, IfBlockIR, StepIR
 from clio.parser.ast_nodes import ContractRef, ListType
 
 
@@ -324,6 +324,19 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
                 chain_lines.append(f"{inner_indent}pass")
             for sub in item.body:
                 _emit_item(sub, inner_indent, inner_scope)
+            return
+        if isinstance(item, IfBlockIR):
+            cond_expr = _python_condition_expr(item.condition, scope_local)
+            chain_lines.append(f"{indent}if {cond_expr}:")
+            inner_indent = indent + "    "
+            if not item.then_body:
+                chain_lines.append(f"{inner_indent}pass")
+            for sub in item.then_body:
+                _emit_item(sub, inner_indent, scope_local)
+            if item.else_body:
+                chain_lines.append(f"{indent}else:")
+                for sub in item.else_body:
+                    _emit_item(sub, inner_indent, scope_local)
             return
         if isinstance(item, CallIR):
             _emit_call(item, indent, scope_local)

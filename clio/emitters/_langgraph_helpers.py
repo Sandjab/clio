@@ -15,13 +15,27 @@ from __future__ import annotations
 
 import keyword
 
-from clio.emitters._python_helpers import _type_to_python
+from clio.emitters._python_helpers import _python_condition_expr, _type_to_python
 from clio.ir.graph import (
     CallIR,
     ContractIR,
     FlowGraph,
+    IfBlockIR,
     StepIR,
 )
+
+
+def _collect_all_calls(chain) -> list[CallIR]:
+    """Flatten a FlowIR chain to every CallIR it contains, including those
+    nested inside IfBlockIR branches. Used to enumerate add_node calls."""
+    out: list[CallIR] = []
+    for item in chain:
+        if isinstance(item, CallIR):
+            out.append(item)
+        elif isinstance(item, IfBlockIR):
+            out.extend(_collect_all_calls(item.then_body))
+            out.extend(_collect_all_calls(item.else_body))
+    return out
 
 
 def _to_field_name(name: str) -> str:
@@ -127,8 +141,8 @@ def emit_flow_module(
         )
 
     steps_by_name = {s.name: s for s in graph.steps}
-    calls = [item for item in graph.flow.chain if isinstance(item, CallIR)]
-    if not calls:
+    all_calls = _collect_all_calls(graph.flow.chain)
+    if not all_calls:
         return (
             '"""FLOW has no step calls."""\n'
             "from __future__ import annotations\n\n"
@@ -144,7 +158,7 @@ def emit_flow_module(
         "from langgraph.graph import START, END, StateGraph",
     ]
     needs_retry = any(
-        _retry_max_attempts(steps_by_name[c.step_name]) is not None for c in calls
+        _retry_max_attempts(steps_by_name[c.step_name]) is not None for c in all_calls
     )
     if needs_retry:
         imports.append("from langgraph.types import RetryPolicy")
@@ -154,7 +168,7 @@ def emit_flow_module(
         imports.append("")
 
     imported_steps: list[str] = []
-    for c in calls:
+    for c in all_calls:
         if c.step_name not in imported_steps:
             imported_steps.append(c.step_name)
     imports += [f"from .steps import {n} as {n}_mod" for n in imported_steps]
@@ -163,10 +177,18 @@ def emit_flow_module(
 
     state_block = emit_state_typeddict(graph, contracts_by_name)
 
-    # Node wrappers
+    # Node wrappers (one per step, dedup'd)
     node_wrappers: list[str] = []
-    for call in calls:
+    seen_nodes: set[str] = set()
+    for call in all_calls:
+        if call.step_name in seen_nodes:
+            continue
+        seen_nodes.add(call.step_name)
         node_wrappers.append(_emit_node_wrapper(call, steps_by_name[call.step_name]))
+
+    # Router functions for IF blocks (emitted before build_graph so they are
+    # in scope when add_conditional_edges references them).
+    router_funcs: list[str] = []
 
     # Graph builder
     graph_lines: list[str] = [
@@ -174,7 +196,11 @@ def emit_flow_module(
         '    """Compile and return the StateGraph for this flow."""',
         "    workflow = StateGraph(State)",
     ]
-    for call in calls:
+    added_nodes: set[str] = set()
+    for call in all_calls:
+        if call.step_name in added_nodes:
+            continue
+        added_nodes.add(call.step_name)
         step = steps_by_name[call.step_name]
         max_attempts = _retry_max_attempts(step)
         if max_attempts is not None:
@@ -187,17 +213,77 @@ def emit_flow_module(
                 f"    workflow.add_node({step.name!r}, {step.name}_node)"
             )
 
-    for i, call in enumerate(calls):
-        step = steps_by_name[call.step_name]
-        if i == 0:
-            graph_lines.append(f"    workflow.add_edge(START, {step.name!r})")
-        else:
-            prev = steps_by_name[calls[i - 1].step_name]
-            graph_lines.append(
-                f"    workflow.add_edge({prev.name!r}, {step.name!r})"
+    # Walk the chain producing add_edge / add_conditional_edges in order.
+    # `terminals` is the list of node names whose outgoing edge has not yet
+    # been wired (typically [last_node]; becomes [then_node, else_node] after
+    # an IfBlock).
+    terminals: list[str] = ["START"]
+
+    def _emit_edge(src: str, dst: str) -> None:
+        src_lit = "START" if src == "START" else repr(src)
+        dst_lit = "END" if dst == "END" else repr(dst)
+        graph_lines.append(f"    workflow.add_edge({src_lit}, {dst_lit})")
+
+    def _emit_conditional(src: str, router_name: str, mapping: dict[str, str]) -> None:
+        src_lit = "START" if src == "START" else repr(src)
+        items = ", ".join(f"{k!r}: {v!r}" for k, v in mapping.items())
+        graph_lines.append(
+            f"    workflow.add_conditional_edges({src_lit}, {router_name}, "
+            f"{{{items}}})"
+        )
+
+    for item in graph.flow.chain:
+        if isinstance(item, CallIR):
+            for src in terminals:
+                _emit_edge(src, item.step_name)
+            terminals = [item.step_name]
+            continue
+
+        if isinstance(item, IfBlockIR):
+            # v0.7 langgraph constraints: each branch is exactly one CallIR,
+            # and the IF must have an ELSE.
+            if not item.else_body:
+                raise ValueError(
+                    f"langgraph target requires IF to have an ELSE branch in v0.7 "
+                    f"(line {item.line}); use --target python for IF without ELSE"
+                )
+            if (
+                len(item.then_body) != 1
+                or not isinstance(item.then_body[0], CallIR)
+                or len(item.else_body) != 1
+                or not isinstance(item.else_body[0], CallIR)
+            ):
+                raise ValueError(
+                    f"langgraph target requires each IF branch to contain exactly "
+                    f"one step call in v0.7 (line {item.line}); use --target python "
+                    "for multi-step branches"
+                )
+            then_step = item.then_body[0].step_name
+            else_step = item.else_body[0].step_name
+
+            cond_expr = _python_condition_expr(item.condition, set())
+            router_name = f"_route_to_{then_step}_or_{else_step}"
+            router_funcs.append(
+                f"def {router_name}(state: State) -> str:\n"
+                f"    if {cond_expr}:\n"
+                f"        return {then_step!r}\n"
+                f"    return {else_step!r}"
             )
-    last = steps_by_name[calls[-1].step_name]
-    graph_lines.append(f"    workflow.add_edge({last.name!r}, END)")
+
+            for src in terminals:
+                _emit_conditional(
+                    src, router_name, {then_step: then_step, else_step: else_step},
+                )
+            terminals = [then_step, else_step]
+            continue
+
+        # ForEach / unknown — should have been rejected by validate.
+        raise ValueError(
+            f"langgraph emitter cannot lower flow item of type {type(item).__name__}"
+        )
+
+    for src in terminals:
+        _emit_edge(src, "END")
     graph_lines.append("    return workflow.compile()")
 
     # run() entrypoint
@@ -209,10 +295,11 @@ def emit_flow_module(
         "    return dict(result)",
     ])
 
-    return "\n".join(
-        imports + [state_block, "", ""]
-        + ["\n\n".join(node_wrappers), "", "", "\n".join(graph_lines), "", "", run_block, ""]
-    )
+    sections = imports + [state_block, "", ""] + ["\n\n".join(node_wrappers)]
+    if router_funcs:
+        sections += ["", "", "\n\n".join(router_funcs)]
+    sections += ["", "", "\n".join(graph_lines), "", "", run_block, ""]
+    return "\n".join(sections)
 
 
 def emit_main_module(pkg_name: str, graph: FlowGraph) -> str:

@@ -15,6 +15,7 @@ class TokenType(str, Enum):
     OP_LE = "OP_LE"        # <=
     COLON = "COLON"
     COMMA = "COMMA"
+    DOT = "DOT"
     ARROW = "ARROW"
     LANGLE = "LANGLE"
     RANGLE = "RANGLE"

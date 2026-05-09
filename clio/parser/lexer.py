@@ -7,6 +7,7 @@ _KEYWORD_VALUES = {k.value for k in Keyword}
 _SINGLE_CHAR_TOKENS = {
     ":": TokenType.COLON,
     ",": TokenType.COMMA,
+    ".": TokenType.DOT,
     "<": TokenType.LANGLE,
     ">": TokenType.RANGLE,
     "{": TokenType.LBRACE,

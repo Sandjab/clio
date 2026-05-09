@@ -5,11 +5,13 @@ from clio.ir.graph import (
     CallIR,
     CliInvokeIR,
     CodeImplIR,
+    ConditionIR,
     ContractIR,
     FieldIR,
     FlowGraph,
     FlowIR,
     ForEachIR,
+    IfBlockIR,
     ImplIR,
     InvokeIR,
     OnFailChainIR,
@@ -24,13 +26,19 @@ from clio.parser.ast_nodes import (
     ApiInvoke,
     CliInvoke,
     CodeImpl,
+    CompareExpr,
     ConstrainedType,
     ContractDecl,
     ContractRef,
     EnumType,
+    FieldRefExpr,
+    FloatExpr,
     FlowDecl,
     ForEachBlock,
+    IdentExpr,
+    IfBlock,
     ImplBlock,
+    IntExpr,
     InvokeBlock,
     ListType,
     PrimitiveType,
@@ -41,6 +49,7 @@ from clio.parser.ast_nodes import (
     ShellImpl,
     StepCall,
     StepDecl,
+    StrExpr,
     TypeExpr,
 )
 
@@ -308,7 +317,7 @@ def _build_flow(
 
 
 def _build_flow_items(
-    chain: "tuple[StepCall | ForEachBlock, ...]",
+    chain: "tuple[StepCall | ForEachBlock | IfBlock, ...]",
     steps_by_name: dict[str, StepIR],
     contracts: dict[str, ContractIR],
     available: dict[str, TypeExpr],
@@ -327,6 +336,9 @@ def _build_flow_items(
                     body_step = steps_by_name.get(body_call.step_name)
                     if body_step is not None and body_step.gives is not None:
                         available[foreach_ir.collector] = ListType(inner=body_step.gives.type)
+            continue
+        if isinstance(item, IfBlock):
+            out.append(_build_if_block(item, steps_by_name, contracts, available))
             continue
         # StepCall path
         out.append(_build_call(item, steps_by_name, contracts, available))
@@ -375,6 +387,115 @@ def _build_call(
                 )
 
     return CallIR(step_name=call.name, kwargs=call.kwargs, line=call.line)
+
+
+def _build_if_block(
+    decl: IfBlock,
+    steps_by_name: dict[str, StepIR],
+    contracts: dict[str, ContractIR],
+    outer_available: dict[str, TypeExpr],
+) -> IfBlockIR:
+    """Validate and build an IF block IR node.
+
+    The condition must be `<state_field>.<sub_field> <op> <literal>` where:
+    - <state_field> was produced by an upstream step
+    - that field's type is a ContractRef (so it has nested sub-fields)
+    - <sub_field> is declared in that contract's RecordType shape
+    - <literal> is a string / number / bare-ident (enum value)
+
+    Both branches are built in their own scope copy — fields produced inside
+    a branch do not leak to the outer chain (no type narrowing in v0)."""
+    cond_ir = _build_condition(decl.condition, contracts, outer_available, decl.line, decl.col)
+
+    then_scope = dict(outer_available)
+    then_items = _build_flow_items(decl.then_body, steps_by_name, contracts, then_scope)
+
+    else_scope = dict(outer_available)
+    else_items = _build_flow_items(decl.else_body, steps_by_name, contracts, else_scope)
+
+    return IfBlockIR(
+        condition=cond_ir,
+        then_body=tuple(then_items),
+        else_body=tuple(else_items),
+        line=decl.line,
+    )
+
+
+def _build_condition(
+    cond: CompareExpr,
+    contracts: dict[str, ContractIR],
+    available: dict[str, TypeExpr],
+    line: int,
+    col: int,
+) -> ConditionIR:
+    """Validate a CompareExpr representing an IF/WHILE condition.
+
+    Left must be a `FieldRefExpr` (`<state_field>.<sub_field>`); right must
+    be a literal node (StrExpr / IntExpr / FloatExpr / IdentExpr — the latter
+    treated as a bare-ident enum value).
+    """
+    if not isinstance(cond.left, FieldRefExpr):
+        raise IRBuildError(
+            f"line {line}:{col}: IF/WHILE condition must start with "
+            "<state_field>.<sub_field>, got an unsupported left-hand side"
+        )
+    state_field = cond.left.step_name
+    sub_field = cond.left.field
+
+    if state_field not in available:
+        raise IRBuildError(
+            f"line {line}:{col}: IF/WHILE references {state_field!r} which is "
+            "not produced by any previous step"
+        )
+
+    state_type = available[state_field]
+    if not isinstance(state_type, ContractRef):
+        raise IRBuildError(
+            f"line {line}:{col}: IF/WHILE condition reads {state_field}.{sub_field} "
+            f"but {state_field!r} is not a CONTRACT — wrap the value in a CONTRACT "
+            "to expose named fields for the condition"
+        )
+    contract = contracts.get(state_type.name)
+    if contract is None:
+        raise IRBuildError(
+            f"line {line}:{col}: unknown contract {state_type.name!r}"
+        )
+
+    schema = contract.json_schema or {}
+    props = schema.get("properties", {}) if isinstance(schema, dict) else {}
+    if sub_field not in props:
+        known = sorted(props.keys())
+        raise IRBuildError(
+            f"line {line}:{col}: contract {state_type.name!r} has no field "
+            f"{sub_field!r} (known: {known})"
+        )
+
+    if isinstance(cond.right, StrExpr):
+        literal_value: object = cond.right.value
+        literal_kind = "str"
+    elif isinstance(cond.right, IntExpr):
+        literal_value = cond.right.value
+        literal_kind = "int"
+    elif isinstance(cond.right, FloatExpr):
+        literal_value = cond.right.value
+        literal_kind = "float"
+    elif isinstance(cond.right, IdentExpr):
+        # Bare-ident: treated as an enum-value ident in v0 (str at runtime).
+        literal_value = cond.right.name
+        literal_kind = "ident"
+    else:
+        raise IRBuildError(
+            f"line {line}:{col}: IF/WHILE condition right-hand side must be "
+            "a string, number, or identifier literal"
+        )
+
+    return ConditionIR(
+        step_name=state_field,
+        field=sub_field,
+        op=cond.op,
+        literal_value=literal_value,
+        literal_kind=literal_kind,
+    )
 
 
 def _build_for_each(
@@ -458,6 +579,12 @@ def _validate_parallel_for_each(graph: FlowGraph) -> None:
                 step = steps_by_name.get(elem.step_name)
                 if step is not None and step.gives is not None:
                     populated.add(step.gives.name)
+                continue
+
+            if isinstance(elem, IfBlockIR):
+                # Descend into both branches; either may contain PARALLEL FOR EACH.
+                _walk(elem.then_body)
+                _walk(elem.else_body)
                 continue
 
             # ForEachIR

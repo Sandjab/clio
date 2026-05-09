@@ -29,6 +29,7 @@ from clio.emitters._python_helpers import (
     emit_contracts,
     emit_default_exact_step,
     _has_parallel,
+    _python_condition_expr,
     emit_parallel_for_each_python,
     emit_rest_step,
     emit_shell_step,
@@ -37,10 +38,12 @@ from clio.emitters.base import BaseEmitter
 from clio.ir.graph import (
     ApiInvokeIR,
     CallIR,
+    ConditionIR,
     ContractIR,
     FieldIR,
     FlowGraph,
     ForEachIR,
+    IfBlockIR,
     RestImplIR,
     ShellImplIR,
     StepIR,
@@ -456,6 +459,19 @@ class PythonEmitter(BaseEmitter):
                     _current.append(f"{inner_indent}pass")
                 for sub in item.body:
                     _emit_item(sub, inner_indent, inner_scope)
+                return
+            if isinstance(item, IfBlockIR):
+                cond_expr = _python_condition_expr(item.condition, scope_local)
+                _current.append(f"{indent}if {cond_expr}:")
+                inner_indent = indent + "    "
+                if not item.then_body:
+                    _current.append(f"{inner_indent}pass")
+                for sub in item.then_body:
+                    _emit_item(sub, inner_indent, scope_local)
+                if item.else_body:
+                    _current.append(f"{indent}else:")
+                    for sub in item.else_body:
+                        _emit_item(sub, inner_indent, scope_local)
                 return
             if isinstance(item, CallIR):
                 _emit_call(item, indent, scope_local)

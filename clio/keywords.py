@@ -70,3 +70,5 @@ class Keyword(str, Enum):
     IN = "IN"
     PARALLEL = "PARALLEL"
     AS = "AS"
+    IF = "IF"
+    ELSE = "ELSE"

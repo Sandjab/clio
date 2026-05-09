@@ -127,16 +127,38 @@ class ForEachIR:
     each item, and results are collected into `state[<collector>]` as a list."""
     loop_var: str
     collection: str
-    body: "tuple[CallIR | ForEachIR, ...]"
+    body: "tuple[CallIR | ForEachIR | IfBlockIR, ...]"
     line: int
     parallel: bool = False
     collector: str | None = None
 
 
 @dataclass(frozen=True)
+class ConditionIR:
+    """A single comparison `<step_name>.<field> <op> <literal_value>` used as
+    the condition of an IF / WHILE block. The literal_kind tags the runtime
+    type of `literal_value` so emitters can format it correctly."""
+    step_name: str
+    field: str
+    op: str                            # ==, !=, >, >=, <, <=
+    literal_value: object              # str | int | float | bool
+    literal_kind: str                  # "str" | "int" | "float" | "bool" | "ident"
+
+
+@dataclass(frozen=True)
+class IfBlockIR:
+    """IR mirror of IfBlock. `else_body` is `()` when no ELSE branch was
+    declared in the source."""
+    condition: ConditionIR
+    then_body: "tuple[CallIR | ForEachIR | IfBlockIR, ...]"
+    else_body: "tuple[CallIR | ForEachIR | IfBlockIR, ...]"
+    line: int
+
+
+@dataclass(frozen=True)
 class FlowIR:
     name: str
-    chain: "tuple[CallIR | ForEachIR, ...]"
+    chain: "tuple[CallIR | ForEachIR | IfBlockIR, ...]"
     line: int
 
 

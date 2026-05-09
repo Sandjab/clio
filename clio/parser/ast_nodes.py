@@ -91,7 +91,7 @@ class ForEachBlock:
     each item, and results are collected into `state[<collector>]` as a list."""
     loop_var: str
     collection: str
-    body: "tuple[StepCall | ForEachBlock, ...]"
+    body: "tuple[StepCall | ForEachBlock | IfBlock, ...]"
     line: int
     col: int
     parallel: bool = False
@@ -99,9 +99,27 @@ class ForEachBlock:
 
 
 @dataclass(frozen=True)
+class IfBlock:
+    """IF <condition>:
+           <then_body>
+       ELSE:
+           <else_body>      # optional
+
+    The condition is a single comparison `<step_name>.<field> <op> <literal>`
+    (no boolean conjunction in v0.7 — the chained-comparator desugaring of
+    ASSERT also stops at single comparisons here). `else_body` is `()` when
+    no ELSE branch is provided."""
+    condition: "CompareExpr"
+    then_body: "tuple[StepCall | ForEachBlock | IfBlock, ...]"
+    else_body: "tuple[StepCall | ForEachBlock | IfBlock, ...]"
+    line: int
+    col: int
+
+
+@dataclass(frozen=True)
 class FlowDecl:
     name: str
-    chain: "tuple[StepCall | ForEachBlock, ...]"   # sequential composition; ForEachBlock = nested loop
+    chain: "tuple[StepCall | ForEachBlock | IfBlock, ...]"   # sequential composition; ForEachBlock/IfBlock = nested
     line: int
     col: int
 
@@ -140,6 +158,15 @@ class StrExpr(ExprNode):
 class CallExpr(ExprNode):
     func: str                       # only "len" allowed in v0.1
     args: tuple["ExprNode", ...]
+
+
+@dataclass(frozen=True)
+class FieldRefExpr(ExprNode):
+    """`<step_name>.<field>` — used inside IF/MATCH/WHILE conditions to read
+    a step's GIVES field from runtime state. Bound to the step's gives type
+    by the IR builder."""
+    step_name: str
+    field: str
 
 
 @dataclass(frozen=True)

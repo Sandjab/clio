@@ -3,14 +3,20 @@ from clio.parser.ast_nodes import (
     CacheConfig,
     CliInvoke,
     CodeImpl,
+    CompareExpr,
     ConstrainedType,
     ContractDecl,
     ContractRef,
     EnumType,
     Field,
+    FieldRefExpr,
+    FloatExpr,
     FlowDecl,
     ForEachBlock,
+    IdentExpr,
+    IfBlock,
     ImplBlock,
+    IntExpr,
     InvokeBlock,
     ListType,
     OnFailChain,
@@ -22,6 +28,7 @@ from clio.parser.ast_nodes import (
     ShellImpl,
     StepCall,
     StepDecl,
+    StrExpr,
     TypeExpr,
 )
 from clio.parser.lexer import lex
@@ -979,7 +986,7 @@ class _Parser:
         self.expect(TokenType.NEWLINE)
         self.expect(TokenType.INDENT)
 
-        chain: list[StepCall | ForEachBlock] = [self.parse_flow_item()]
+        chain: list[StepCall | ForEachBlock | IfBlock] = [self.parse_flow_item()]
         # Skip newlines and indent/dedent changes between chain elements,
         # then look for ARROW. The -> may appear on a more-indented continuation line.
         while True:
@@ -997,11 +1004,14 @@ class _Parser:
 
         return FlowDecl(name=ident.value, chain=tuple(chain), line=kw.line, col=kw.col)
 
-    def parse_flow_item(self) -> "StepCall | ForEachBlock":
-        """A FLOW (or a FOR EACH body) item: either a step call or a nested FOR EACH."""
+    def parse_flow_item(self) -> "StepCall | ForEachBlock | IfBlock":
+        """A FLOW (or a FOR EACH / IF body) item: a step call, a nested FOR EACH,
+        or a nested IF/ELSE."""
         t = self.peek()
         if t.type == TokenType.KEYWORD and t.value == "FOR":
             return self.parse_for_each()
+        if t.type == TokenType.KEYWORD and t.value == "IF":
+            return self.parse_if_block()
         return self.parse_step_call()
 
     def parse_for_each(self) -> ForEachBlock:
@@ -1043,7 +1053,7 @@ class _Parser:
         self.expect(TokenType.NEWLINE)
         self.expect(TokenType.INDENT)
 
-        body: list[StepCall | ForEachBlock] = [self.parse_flow_item()]
+        body: list[StepCall | ForEachBlock | IfBlock] = [self.parse_flow_item()]
         while True:
             while self.peek().type in (TokenType.NEWLINE, TokenType.INDENT):
                 self.advance()
@@ -1069,6 +1079,106 @@ class _Parser:
             parallel=parallel,
             collector=collector,
         )
+
+    def parse_if_block(self) -> IfBlock:
+        """IF <condition>:
+            <flow_item> -> <flow_item> -> ...
+           ELSE:                                # optional, peer indent of IF
+            <flow_item> -> <flow_item> -> ...
+
+        Condition: `<step_name>.<field> <op> <literal>`. Single comparison
+        only in v0.7 — no `and`/`or`, no `.FAILS`. Validated by IR builder."""
+        kw = self.expect(TokenType.KEYWORD, "IF")
+        condition = self.parse_condition()
+        self.expect(TokenType.COLON)
+        self.expect(TokenType.NEWLINE)
+        self.expect(TokenType.INDENT)
+
+        then_body = self._parse_block_chain()
+
+        else_body: tuple = ()
+        # Inside the IF body's indent we've consumed up to the DEDENT below.
+        # Accept ELSE on the very next non-empty token (peer indent), parsed
+        # the same way as the THEN branch.
+        else_kw = self.peek()
+        if else_kw.type == TokenType.KEYWORD and else_kw.value == "ELSE":
+            self.advance()
+            self.expect(TokenType.COLON)
+            self.expect(TokenType.NEWLINE)
+            self.expect(TokenType.INDENT)
+            else_body = self._parse_block_chain()
+
+        return IfBlock(
+            condition=condition,
+            then_body=then_body,
+            else_body=else_body,
+            line=kw.line, col=kw.col,
+        )
+
+    def _parse_block_chain(self) -> tuple:
+        """Parse an indented chain `item -> item -> ...` and consume the
+        trailing DEDENT. Used by FOR EACH / IF / ELSE bodies."""
+        chain: list = [self.parse_flow_item()]
+        while True:
+            while self.peek().type in (TokenType.NEWLINE, TokenType.INDENT):
+                self.advance()
+            if self.peek().type == TokenType.ARROW:
+                self.advance()
+                chain.append(self.parse_flow_item())
+            else:
+                break
+        while self.peek().type in (TokenType.NEWLINE, TokenType.DEDENT):
+            if self.peek().type == TokenType.DEDENT:
+                self.advance()
+                break
+            self.advance()
+        return tuple(chain)
+
+    def parse_condition(self) -> CompareExpr:
+        """`<step_name>.<field> <op> <literal>`. <op> ∈ {==, !=, >, >=, <, <=}.
+        <literal> ∈ string | int | float | bare-ident (treated as enum value)."""
+        step_tok = self.expect(TokenType.IDENT)
+        self.expect(TokenType.DOT)
+        field_tok = self.expect(TokenType.IDENT)
+        left = FieldRefExpr(step_name=step_tok.value, field=field_tok.value)
+
+        op_tok = self.peek()
+        op_map = {
+            TokenType.OP_EQ: "==",
+            TokenType.OP_NE: "!=",
+            TokenType.OP_GE: ">=",
+            TokenType.OP_LE: "<=",
+            TokenType.LANGLE: "<",
+            TokenType.RANGLE: ">",
+        }
+        if op_tok.type not in op_map:
+            raise ParseError(
+                f"expected comparison operator after {step_tok.value}.{field_tok.value}, "
+                f"got {op_tok.type.value} {op_tok.value!r}",
+                op_tok.line, op_tok.col,
+            )
+        self.advance()
+        op = op_map[op_tok.type]
+
+        rhs_tok = self.peek()
+        if rhs_tok.type == TokenType.STRING:
+            self.advance()
+            right = StrExpr(value=rhs_tok.value)
+        elif rhs_tok.type == TokenType.NUMBER:
+            self.advance()
+            txt = rhs_tok.value
+            right = FloatExpr(value=float(txt)) if "." in txt else IntExpr(value=int(txt))
+        elif rhs_tok.type == TokenType.IDENT:
+            self.advance()
+            right = IdentExpr(name=rhs_tok.value)
+        else:
+            raise ParseError(
+                f"expected literal (string, number, or identifier) after {op!r}, "
+                f"got {rhs_tok.type.value} {rhs_tok.value!r}",
+                rhs_tok.line, rhs_tok.col,
+            )
+
+        return CompareExpr(left=left, op=op, right=right)
 
     def parse_step_call(self) -> StepCall:
         name_tok = self.expect(TokenType.IDENT)
