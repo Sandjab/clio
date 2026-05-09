@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.7.0 — 2026-05-10
+
 ### Language
 
 - **IF / ELSE conditional branching** (control flow). The condition is a
