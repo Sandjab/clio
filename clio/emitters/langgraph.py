@@ -39,6 +39,7 @@ from clio.ir.graph import (
     FlowGraph,
     ForEachIR,
     IfBlockIR,
+    MatchBlockIR,
     RestImplIR,
     ShellImplIR,
     StepIR,
@@ -133,6 +134,9 @@ class LangGraphEmitter(BaseEmitter):
                 if isinstance(elem, IfBlockIR):
                     _reject_foreach(elem.then_body)
                     _reject_foreach(elem.else_body)
+                if isinstance(elem, MatchBlockIR):
+                    for arm in elem.cases:
+                        _reject_foreach(arm.body)
 
         _reject_foreach(graph.flow.chain)
 

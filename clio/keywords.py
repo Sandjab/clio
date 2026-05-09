@@ -72,3 +72,6 @@ class Keyword(str, Enum):
     AS = "AS"
     IF = "IF"
     ELSE = "ELSE"
+    MATCH = "MATCH"
+    CASE = "CASE"
+    DEFAULT = "DEFAULT"

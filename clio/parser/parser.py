@@ -19,6 +19,8 @@ from clio.parser.ast_nodes import (
     IntExpr,
     InvokeBlock,
     ListType,
+    MatchBlock,
+    MatchCase,
     OnFailChain,
     OnFailStrategy,
     PrimitiveType,
@@ -986,7 +988,7 @@ class _Parser:
         self.expect(TokenType.NEWLINE)
         self.expect(TokenType.INDENT)
 
-        chain: list[StepCall | ForEachBlock | IfBlock] = [self.parse_flow_item()]
+        chain: list[StepCall | ForEachBlock | IfBlock | MatchBlock] = [self.parse_flow_item()]
         # Skip newlines and indent/dedent changes between chain elements,
         # then look for ARROW. The -> may appear on a more-indented continuation line.
         while True:
@@ -1004,14 +1006,15 @@ class _Parser:
 
         return FlowDecl(name=ident.value, chain=tuple(chain), line=kw.line, col=kw.col)
 
-    def parse_flow_item(self) -> "StepCall | ForEachBlock | IfBlock":
-        """A FLOW (or a FOR EACH / IF body) item: a step call, a nested FOR EACH,
-        or a nested IF/ELSE."""
+    def parse_flow_item(self) -> "StepCall | ForEachBlock | IfBlock | MatchBlock":
+        """A FLOW (or any nested body) item: step call, FOR EACH, IF/ELSE, or MATCH."""
         t = self.peek()
         if t.type == TokenType.KEYWORD and t.value == "FOR":
             return self.parse_for_each()
         if t.type == TokenType.KEYWORD and t.value == "IF":
             return self.parse_if_block()
+        if t.type == TokenType.KEYWORD and t.value == "MATCH":
+            return self.parse_match_block()
         return self.parse_step_call()
 
     def parse_for_each(self) -> ForEachBlock:
@@ -1053,7 +1056,7 @@ class _Parser:
         self.expect(TokenType.NEWLINE)
         self.expect(TokenType.INDENT)
 
-        body: list[StepCall | ForEachBlock | IfBlock] = [self.parse_flow_item()]
+        body: list[StepCall | ForEachBlock | IfBlock | MatchBlock] = [self.parse_flow_item()]
         while True:
             while self.peek().type in (TokenType.NEWLINE, TokenType.INDENT):
                 self.advance()
@@ -1133,6 +1136,94 @@ class _Parser:
                 break
             self.advance()
         return tuple(chain)
+
+    def parse_match_block(self) -> MatchBlock:
+        """MATCH <state_field>.<sub_field>:
+            CASE <value>: <flow_chain>
+            CASE <value>: <flow_chain>
+            DEFAULT:      <flow_chain>      # optional, must come last
+
+        Each CASE / DEFAULT body is a chain like a FLOW body. CASE values are
+        bare-idents (enum variants) or string literals; DEFAULT has no value."""
+        kw = self.expect(TokenType.KEYWORD, "MATCH")
+        scrutinee_step = self.expect(TokenType.IDENT)
+        self.expect(TokenType.DOT)
+        scrutinee_field = self.expect(TokenType.IDENT)
+        scrutinee = FieldRefExpr(
+            step_name=scrutinee_step.value, field=scrutinee_field.value,
+        )
+        self.expect(TokenType.COLON)
+        self.expect(TokenType.NEWLINE)
+        self.expect(TokenType.INDENT)
+
+        cases: list[MatchCase] = []
+        seen_default = False
+        while True:
+            t = self.peek()
+            if t.type == TokenType.KEYWORD and t.value == "CASE":
+                if seen_default:
+                    raise ParseError(
+                        "CASE arm must come before DEFAULT", t.line, t.col,
+                    )
+                self.advance()
+                value_tok = self.peek()
+                if value_tok.type == TokenType.STRING:
+                    self.advance()
+                    value = value_tok.value
+                elif value_tok.type == TokenType.IDENT:
+                    self.advance()
+                    value = value_tok.value
+                else:
+                    raise ParseError(
+                        f"expected CASE value (bare-ident or string), got "
+                        f"{value_tok.type.value} {value_tok.value!r}",
+                        value_tok.line, value_tok.col,
+                    )
+                self.expect(TokenType.COLON)
+                body = self._parse_match_arm_body()
+                cases.append(MatchCase(value=value, body=body, line=t.line, col=t.col))
+            elif t.type == TokenType.KEYWORD and t.value == "DEFAULT":
+                if seen_default:
+                    raise ParseError(
+                        "MATCH has duplicate DEFAULT arm", t.line, t.col,
+                    )
+                self.advance()
+                self.expect(TokenType.COLON)
+                body = self._parse_match_arm_body()
+                cases.append(MatchCase(value=None, body=body, line=t.line, col=t.col))
+                seen_default = True
+            else:
+                break
+
+        # Consume the trailing DEDENT closing the MATCH block.
+        while self.peek().type in (TokenType.NEWLINE, TokenType.DEDENT):
+            if self.peek().type == TokenType.DEDENT:
+                self.advance()
+                break
+            self.advance()
+
+        if not cases:
+            raise ParseError(
+                "MATCH must have at least one CASE arm", kw.line, kw.col,
+            )
+
+        return MatchBlock(
+            scrutinee=scrutinee, cases=tuple(cases), line=kw.line, col=kw.col,
+        )
+
+    def _parse_match_arm_body(self) -> tuple:
+        """A CASE / DEFAULT body: either a single inline step call (`CASE x: step()`)
+        on the same line, or an indented `step -> step -> ...` chain on the next
+        lines. Returns a tuple of FlowItems."""
+        # Inline form: same-line item until NEWLINE.
+        if self.peek().type != TokenType.NEWLINE:
+            item = self.parse_flow_item()
+            self.expect(TokenType.NEWLINE)
+            return (item,)
+        # Block form: NEWLINE INDENT chain DEDENT
+        self.expect(TokenType.NEWLINE)
+        self.expect(TokenType.INDENT)
+        return self._parse_block_chain()
 
     def parse_condition(self) -> CompareExpr:
         """`<step_name>.<field> <op> <literal>`. <op> ∈ {==, !=, >, >=, <, <=}.

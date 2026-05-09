@@ -44,6 +44,7 @@ from clio.ir.graph import (
     FlowGraph,
     ForEachIR,
     IfBlockIR,
+    MatchBlockIR,
     RestImplIR,
     ShellImplIR,
     StepIR,
@@ -472,6 +473,25 @@ class PythonEmitter(BaseEmitter):
                     _current.append(f"{indent}else:")
                     for sub in item.else_body:
                         _emit_item(sub, inner_indent, scope_local)
+                return
+            if isinstance(item, MatchBlockIR):
+                base = (
+                    item.state_field
+                    if item.state_field in scope_local
+                    else f"state[{item.state_field!r}]"
+                )
+                _current.append(f"{indent}match {base}.{item.sub_field}:")
+                inner_indent = indent + "    "
+                for arm in item.cases:
+                    if arm.value is None:
+                        _current.append(f"{inner_indent}case _:")
+                    else:
+                        _current.append(f"{inner_indent}case {arm.value!r}:")
+                    body_indent = inner_indent + "    "
+                    if not arm.body:
+                        _current.append(f"{body_indent}pass")
+                    for sub in arm.body:
+                        _emit_item(sub, body_indent, scope_local)
                 return
             if isinstance(item, CallIR):
                 _emit_call(item, indent, scope_local)

@@ -14,6 +14,8 @@ from clio.ir.graph import (
     IfBlockIR,
     ImplIR,
     InvokeIR,
+    MatchBlockIR,
+    MatchCaseIR,
     OnFailChainIR,
     OnFailStrategyIR,
     ResourcesIR,
@@ -41,6 +43,8 @@ from clio.parser.ast_nodes import (
     IntExpr,
     InvokeBlock,
     ListType,
+    MatchBlock,
+    MatchCase,
     PrimitiveType,
     Program,
     RecordType,
@@ -340,6 +344,9 @@ def _build_flow_items(
         if isinstance(item, IfBlock):
             out.append(_build_if_block(item, steps_by_name, contracts, available))
             continue
+        if isinstance(item, MatchBlock):
+            out.append(_build_match_block(item, steps_by_name, contracts, available))
+            continue
         # StepCall path
         out.append(_build_call(item, steps_by_name, contracts, available))
         step = steps_by_name[item.name]
@@ -498,6 +505,94 @@ def _build_condition(
     )
 
 
+def _build_match_block(
+    decl: MatchBlock,
+    steps_by_name: dict[str, StepIR],
+    contracts: dict[str, ContractIR],
+    outer_available: dict[str, TypeExpr],
+) -> MatchBlockIR:
+    """Validate and build a MATCH block IR node.
+
+    The scrutinee `<state_field>.<sub_field>` must point at an enum sub-field
+    of an upstream contract. CASE values are checked against the enum
+    variants — any unknown variant is an IR error. DEFAULT, if present, must
+    be the last arm. Each arm is built in its own scope copy."""
+    if not isinstance(decl.scrutinee, FieldRefExpr):
+        raise IRBuildError(
+            f"line {decl.line}:{decl.col}: MATCH scrutinee must be "
+            "<state_field>.<sub_field>"
+        )
+    state_field = decl.scrutinee.step_name
+    sub_field = decl.scrutinee.field
+    if state_field not in outer_available:
+        raise IRBuildError(
+            f"line {decl.line}:{decl.col}: MATCH scrutinee {state_field!r} is "
+            "not produced by any previous step"
+        )
+    state_type = outer_available[state_field]
+    if not isinstance(state_type, ContractRef):
+        raise IRBuildError(
+            f"line {decl.line}:{decl.col}: MATCH scrutinee {state_field}.{sub_field} "
+            f"requires {state_field!r} to be a CONTRACT (got "
+            f"{_render(state_type)})"
+        )
+    contract = contracts.get(state_type.name)
+    if contract is None:
+        raise IRBuildError(
+            f"line {decl.line}:{decl.col}: unknown contract {state_type.name!r}"
+        )
+    schema = contract.json_schema or {}
+    props = schema.get("properties", {}) if isinstance(schema, dict) else {}
+    if sub_field not in props:
+        known = sorted(props.keys())
+        raise IRBuildError(
+            f"line {decl.line}:{decl.col}: contract {state_type.name!r} has no "
+            f"field {sub_field!r} (known: {known})"
+        )
+    sub_schema = props[sub_field]
+    enum_values = sub_schema.get("enum") if isinstance(sub_schema, dict) else None
+    if enum_values is None:
+        raise IRBuildError(
+            f"line {decl.line}:{decl.col}: MATCH on {state_field}.{sub_field} "
+            "requires that field to be an enum (got non-enum type)"
+        )
+    enum_set = set(enum_values)
+
+    cases_ir: list[MatchCaseIR] = []
+    seen_values: set[str] = set()
+    for arm in decl.cases:
+        if arm.value is None:
+            # DEFAULT — already enforced last by the parser.
+            arm_body = _build_flow_items(
+                arm.body, steps_by_name, contracts, dict(outer_available),
+            )
+            cases_ir.append(MatchCaseIR(value=None, body=tuple(arm_body), line=arm.line))
+            continue
+        if arm.value in seen_values:
+            raise IRBuildError(
+                f"line {arm.line}:{arm.col}: MATCH has duplicate CASE "
+                f"{arm.value!r}"
+            )
+        if arm.value not in enum_set:
+            raise IRBuildError(
+                f"line {arm.line}:{arm.col}: CASE {arm.value!r} is not one of "
+                f"the enum variants of {state_field}.{sub_field} "
+                f"(allowed: {sorted(enum_set)})"
+            )
+        seen_values.add(arm.value)
+        arm_body = _build_flow_items(
+            arm.body, steps_by_name, contracts, dict(outer_available),
+        )
+        cases_ir.append(MatchCaseIR(value=arm.value, body=tuple(arm_body), line=arm.line))
+
+    return MatchBlockIR(
+        state_field=state_field,
+        sub_field=sub_field,
+        cases=tuple(cases_ir),
+        line=decl.line,
+    )
+
+
 def _build_for_each(
     decl: ForEachBlock,
     steps_by_name: dict[str, StepIR],
@@ -585,6 +680,11 @@ def _validate_parallel_for_each(graph: FlowGraph) -> None:
                 # Descend into both branches; either may contain PARALLEL FOR EACH.
                 _walk(elem.then_body)
                 _walk(elem.else_body)
+                continue
+
+            if isinstance(elem, MatchBlockIR):
+                for arm in elem.cases:
+                    _walk(arm.body)
                 continue
 
             # ForEachIR

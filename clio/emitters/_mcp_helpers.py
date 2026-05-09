@@ -6,7 +6,14 @@ import json as _json
 
 from clio.emitters._python_helpers import _has_parallel, _python_condition_expr
 from clio.ir.contracts import type_to_json_schema
-from clio.ir.graph import CallIR, FlowGraph, ForEachIR, IfBlockIR, StepIR
+from clio.ir.graph import (
+    CallIR,
+    FlowGraph,
+    ForEachIR,
+    IfBlockIR,
+    MatchBlockIR,
+    StepIR,
+)
 from clio.parser.ast_nodes import ContractRef, ListType
 
 
@@ -337,6 +344,25 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
                 chain_lines.append(f"{indent}else:")
                 for sub in item.else_body:
                     _emit_item(sub, inner_indent, scope_local)
+            return
+        if isinstance(item, MatchBlockIR):
+            base = (
+                item.state_field
+                if item.state_field in scope_local
+                else f"state[{item.state_field!r}]"
+            )
+            chain_lines.append(f"{indent}match {base}.{item.sub_field}:")
+            inner_indent = indent + "    "
+            for arm in item.cases:
+                if arm.value is None:
+                    chain_lines.append(f"{inner_indent}case _:")
+                else:
+                    chain_lines.append(f"{inner_indent}case {arm.value!r}:")
+                body_indent = inner_indent + "    "
+                if not arm.body:
+                    chain_lines.append(f"{body_indent}pass")
+                for sub in arm.body:
+                    _emit_item(sub, body_indent, scope_local)
             return
         if isinstance(item, CallIR):
             _emit_call(item, indent, scope_local)

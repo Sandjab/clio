@@ -772,7 +772,11 @@ def _has_parallel(chain) -> bool:
     """Return True if any ForEachIR in the chain (or nested) has parallel=True.
     Used by emitters to decide whether to emit `import concurrent.futures` /
     `import asyncio` at module top of the emitted flow.py."""
-    from clio.ir.graph import ForEachIR, IfBlockIR  # avoid top-level circular import
+    from clio.ir.graph import (  # avoid top-level circular import
+        ForEachIR,
+        IfBlockIR,
+        MatchBlockIR,
+    )
     for elem in chain:
         if isinstance(elem, ForEachIR):
             if elem.parallel:
@@ -782,6 +786,10 @@ def _has_parallel(chain) -> bool:
         elif isinstance(elem, IfBlockIR):
             if _has_parallel(elem.then_body) or _has_parallel(elem.else_body):
                 return True
+        elif isinstance(elem, MatchBlockIR):
+            for arm in elem.cases:
+                if _has_parallel(arm.body):
+                    return True
     return False
 
 

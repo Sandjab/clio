@@ -21,13 +21,15 @@ from clio.ir.graph import (
     ContractIR,
     FlowGraph,
     IfBlockIR,
+    MatchBlockIR,
     StepIR,
 )
 
 
 def _collect_all_calls(chain) -> list[CallIR]:
     """Flatten a FlowIR chain to every CallIR it contains, including those
-    nested inside IfBlockIR branches. Used to enumerate add_node calls."""
+    nested inside IfBlockIR / MatchBlockIR branches. Used to enumerate
+    add_node calls."""
     out: list[CallIR] = []
     for item in chain:
         if isinstance(item, CallIR):
@@ -35,6 +37,9 @@ def _collect_all_calls(chain) -> list[CallIR]:
         elif isinstance(item, IfBlockIR):
             out.extend(_collect_all_calls(item.then_body))
             out.extend(_collect_all_calls(item.else_body))
+        elif isinstance(item, MatchBlockIR):
+            for arm in item.cases:
+                out.extend(_collect_all_calls(arm.body))
     return out
 
 
@@ -275,6 +280,53 @@ def emit_flow_module(
                     src, router_name, {then_step: then_step, else_step: else_step},
                 )
             terminals = [then_step, else_step]
+            continue
+
+        if isinstance(item, MatchBlockIR):
+            # v0.7 langgraph constraints: each arm must be exactly one CallIR
+            # and the MATCH must include a DEFAULT (otherwise an unmapped
+            # enum value would crash the router with no fallback edge).
+            arms_with_step: list[tuple[str | None, str]] = []
+            has_default = False
+            for arm in item.cases:
+                if (
+                    len(arm.body) != 1
+                    or not isinstance(arm.body[0], CallIR)
+                ):
+                    raise ValueError(
+                        f"langgraph target requires each MATCH arm to contain "
+                        f"exactly one step call in v0.7 (line {arm.line}); "
+                        "use --target python for multi-step arms"
+                    )
+                step_name = arm.body[0].step_name
+                arms_with_step.append((arm.value, step_name))
+                if arm.value is None:
+                    has_default = True
+            if not has_default:
+                raise ValueError(
+                    f"langgraph target requires MATCH to include a DEFAULT arm in "
+                    f"v0.7 (line {item.line}); use --target python for non-exhaustive "
+                    "MATCH"
+                )
+
+            # Router function — string compare against state_field.sub_field.
+            base = f"state[{item.state_field!r}]"
+            scrutinee = f"{base}.{item.sub_field}"
+            non_default = [(v, s) for v, s in arms_with_step if v is not None]
+            default_step = next(s for v, s in arms_with_step if v is None)
+            router_name = f"_match_{item.state_field}_{item.sub_field}"
+            body_lines = [f"def {router_name}(state: State) -> str:"]
+            body_lines.append(f"    _scrutinee = {scrutinee}")
+            for value, step_name in non_default:
+                body_lines.append(f"    if _scrutinee == {value!r}:")
+                body_lines.append(f"        return {step_name!r}")
+            body_lines.append(f"    return {default_step!r}")
+            router_funcs.append("\n".join(body_lines))
+
+            mapping = {step_name: step_name for _, step_name in arms_with_step}
+            for src in terminals:
+                _emit_conditional(src, router_name, mapping)
+            terminals = [step_name for _, step_name in arms_with_step]
             continue
 
         # ForEach / unknown — should have been rejected by validate.

@@ -127,7 +127,7 @@ class ForEachIR:
     each item, and results are collected into `state[<collector>]` as a list."""
     loop_var: str
     collection: str
-    body: "tuple[CallIR | ForEachIR | IfBlockIR, ...]"
+    body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR, ...]"
     line: int
     parallel: bool = False
     collector: str | None = None
@@ -150,15 +150,36 @@ class IfBlockIR:
     """IR mirror of IfBlock. `else_body` is `()` when no ELSE branch was
     declared in the source."""
     condition: ConditionIR
-    then_body: "tuple[CallIR | ForEachIR | IfBlockIR, ...]"
-    else_body: "tuple[CallIR | ForEachIR | IfBlockIR, ...]"
+    then_body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR, ...]"
+    else_body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR, ...]"
+    line: int
+
+
+@dataclass(frozen=True)
+class MatchCaseIR:
+    """One CASE / DEFAULT arm of a MATCH block. `value` is None for DEFAULT,
+    otherwise the literal string the runtime compares the scrutinee against."""
+    value: str | None
+    body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR, ...]"
+    line: int
+
+
+@dataclass(frozen=True)
+class MatchBlockIR:
+    """IR mirror of MatchBlock. The scrutinee is split into `state_field` /
+    `sub_field` (as in ConditionIR) so emitters can render `state[X].Y`
+    without re-walking the AST. `cases` is the tuple of arms in source order;
+    a DEFAULT arm, if present, is always last."""
+    state_field: str
+    sub_field: str
+    cases: "tuple[MatchCaseIR, ...]"
     line: int
 
 
 @dataclass(frozen=True)
 class FlowIR:
     name: str
-    chain: "tuple[CallIR | ForEachIR | IfBlockIR, ...]"
+    chain: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR, ...]"
     line: int
 
 

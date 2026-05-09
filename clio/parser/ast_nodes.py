@@ -91,7 +91,7 @@ class ForEachBlock:
     each item, and results are collected into `state[<collector>]` as a list."""
     loop_var: str
     collection: str
-    body: "tuple[StepCall | ForEachBlock | IfBlock, ...]"
+    body: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock, ...]"
     line: int
     col: int
     parallel: bool = False
@@ -110,8 +110,34 @@ class IfBlock:
     ASSERT also stops at single comparisons here). `else_body` is `()` when
     no ELSE branch is provided."""
     condition: "CompareExpr"
-    then_body: "tuple[StepCall | ForEachBlock | IfBlock, ...]"
-    else_body: "tuple[StepCall | ForEachBlock | IfBlock, ...]"
+    then_body: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock, ...]"
+    else_body: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock, ...]"
+    line: int
+    col: int
+
+
+@dataclass(frozen=True)
+class MatchCase:
+    """One CASE <value>: <body> arm of a MATCH block. `value` is None for the
+    DEFAULT arm; otherwise it's the bare-ident or string literal to match."""
+    value: str | None
+    body: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock, ...]"
+    line: int
+    col: int
+
+
+@dataclass(frozen=True)
+class MatchBlock:
+    """MATCH <state_field>.<sub_field>:
+           CASE <value>: <body>
+           CASE <value>: <body>
+           DEFAULT:      <body>      # optional, must come last
+
+    The scrutinee is a FieldRefExpr referencing an enum sub-field of an
+    upstream contract. CASE values match the enum variants. The DEFAULT arm
+    is optional but strongly recommended (langgraph target requires it)."""
+    scrutinee: "FieldRefExpr"
+    cases: "tuple[MatchCase, ...]"
     line: int
     col: int
 
@@ -119,7 +145,7 @@ class IfBlock:
 @dataclass(frozen=True)
 class FlowDecl:
     name: str
-    chain: "tuple[StepCall | ForEachBlock | IfBlock, ...]"   # sequential composition; ForEachBlock/IfBlock = nested
+    chain: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock, ...]"
     line: int
     col: int
 
