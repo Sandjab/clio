@@ -206,3 +206,10 @@ $RECYCLE.BIN/
 # clio resume state file (written by emitted python projects when run from cwd)
 state.json
 state.json.tmp
+
+# session-local viewer dev artifacts (playgrounds, screenshots, browser MCP cache)
+tmp/
+.playwright-mcp/
+graph-ticket-*.png
+playground-*.png
+vfix_*.png

@@ -469,15 +469,21 @@ def _render_node_card_html(step: StepIR) -> str:
     return "".join(parts)
 
 
-def _to_mermaid_rich_labels(graph: FlowGraph) -> str:
+def _to_mermaid_rich_labels(graph: FlowGraph) -> tuple[str, dict[str, dict]]:
     """Mermaid source where each node label is the rich Tabloid-style HTML
     card. The viewer's CSS hides the underlying SVG rect so only the HTML
-    label shows. classDefs are kept for the rare case Mermaid still needs
-    to size something based on class — but they don't affect rendering."""
+    label shows.
+
+    Returns (mermaid_source, foreach_meta) where foreach_meta maps each
+    subgraph id (foreach_N) to its loop_var/collection/parallel metadata.
+    The viewer's JS uses that metadata to inject a chip-pill banner inside
+    each cluster-label foreignObject after Mermaid renders.
+    """
     steps_by_name = {s.name: s for s in graph.steps}
     lines: list[str] = ["flowchart TD"]
     declared: set[str] = set()
     state = {"foreach_idx": 0}
+    foreach_meta: dict[str, dict] = {}
 
     def declare(step_name: str, indent: str) -> None:
         if step_name in declared:
@@ -504,6 +510,11 @@ def _to_mermaid_rich_labels(graph: FlowGraph) -> str:
                     label = f"FOR EACH {elem.loop_var} IN {elem.collection} [parallel]"
                 else:
                     label = f"FOR EACH {elem.loop_var} IN {elem.collection}"
+                foreach_meta[sg_id] = {
+                    "loop_var": elem.loop_var,
+                    "collection": elem.collection,
+                    "parallel": elem.parallel,
+                }
                 lines.append(f'{indent}subgraph {sg_id}["{label}"]')
                 walk(elem.body, indent + "    ", None)
                 lines.append(f"{indent}end")
@@ -520,7 +531,7 @@ def _to_mermaid_rich_labels(graph: FlowGraph) -> str:
     else:
         walk(graph.flow.chain, "    ", None)
 
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines) + "\n", foreach_meta
 
 
 def _step_to_dict(step: StepIR) -> dict:
@@ -610,6 +621,10 @@ body {
   --cod-strong: oklch(40% 0.025 240);
   --cod-tint:   oklch(92% 0.012 240);
   --cod-icon:   oklch(38% 0.025 240);
+  /* PARALLEL/FOR EACH cluster — amber/rust accent (distinct from mode hues) */
+  --par-strong: oklch(48% 0.155 60);
+  --par-tint:   oklch(93% 0.045 60);
+  --par-icon:   oklch(45% 0.14 60);
   --shadow-card:  0 1px 2px rgba(82, 38, 19, 0.06), 0 4px 12px rgba(82, 38, 19, 0.04);
   --shadow-hover: 0 2px 6px rgba(82, 38, 19, 0.10), 0 12px 28px rgba(82, 38, 19, 0.08);
   font-size: 13.5px;
@@ -751,6 +766,68 @@ g.node:focus-visible .node-card {
 .node-card.exact-shell { --accent-strong: var(--shl-strong); --accent-tint: var(--shl-tint); --accent-icon: var(--shl-icon); }
 .node-card.exact-rest  { --accent-strong: var(--rst-strong); --accent-tint: var(--rst-tint); --accent-icon: var(--rst-icon); }
 .node-card.exact-code  { --accent-strong: var(--cod-strong); --accent-tint: var(--cod-tint); --accent-icon: var(--cod-icon); }
+
+/* ============== FOR EACH PARALLEL cluster (variant C: soft fill + chip pill) ============ */
+.viewer .mermaid svg .cluster rect {
+  fill: oklch(94% 0.025 60) !important;
+  stroke: var(--rule) !important;
+  stroke-width: 1px !important;
+  rx: 8 !important; ry: 8 !important;
+}
+.viewer .mermaid svg .cluster-label foreignObject { overflow: visible !important; }
+.viewer .mermaid svg .cluster-label foreignObject > * { padding: 0 !important; margin: 0 !important; }
+
+/* Override Mermaid's transparent `color` cascade so banner text stays visible */
+.viewer .mermaid svg .par-banner,
+.viewer .mermaid svg .par-banner * { color: inherit !important; }
+.viewer .mermaid svg .par-banner .par-icon svg,
+.viewer .mermaid svg .par-banner .par-icon svg * {
+  stroke: currentColor !important;
+  fill: none !important;
+}
+
+.par-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: 'Geist', sans-serif;
+  background: white;
+  padding: 4px 10px 4px 8px;
+  border: 1px solid var(--par-strong);
+  border-radius: 999px;
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgba(82, 38, 19, 0.08);
+}
+.par-banner .par-icon {
+  width: 16px; height: 16px;
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--par-icon);
+}
+.par-banner .par-icon svg {
+  width: 100%; height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.par-banner .par-text {
+  font-family: 'Geist Mono', monospace;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+}
+.par-banner .par-kicker {
+  font-family: 'Geist Mono', monospace;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--par-strong);
+  margin-left: 4px;
+}
 
 /* ============== Detail panel (editorial, not card-replay) ============== */
 .viewer .v-panel {
@@ -916,6 +993,13 @@ g.node:focus-visible .node-card {
   </main>
   <div class="v-credit">Compiled with <em>CLIO</em></div>
 </div>
+<template id="banner-foreach">
+  <div class="par-banner">
+    <span class="par-icon"><svg viewBox="0 0 24 24"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg></span>
+    <span class="par-text"></span>
+    <span class="par-kicker"></span>
+  </div>
+</template>
 <script type="module">
   import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
   mermaid.initialize({
@@ -961,6 +1045,7 @@ const SUBTITLE = __SUBTITLE_JSON__;
 const TARGET = __TARGET_JSON__;
 const COUNTS = __COUNTS_JSON__;
 const MERMAID_SRC = __MERMAID_JSON__;
+const FOREACH_META = __FOREACH_META_JSON__;
 
 document.title = 'CLIO graph — ' + TITLE;
 document.getElementById('flow-title').textContent = TITLE;
@@ -1115,6 +1200,66 @@ document.addEventListener('keydown', (e) => {
   e.preventDefault();
   activateNode(node);
 });
+
+/* ============== FOR EACH PARALLEL banner injection ============== */
+/* Mermaid renders cluster labels as foreignObjects sized for the source
+ * label string. We pass a placeholder text label and inject a rich chip-pill
+ * banner per cluster id, then resize the foreignObject + recenter its
+ * parent .cluster-label group so the chip floats at the cluster's top. */
+function injectForeachBanners() {
+  const meta = FOREACH_META || {};
+  if (!Object.keys(meta).length) return;
+  const tpl = document.getElementById('banner-foreach');
+  if (!tpl) return;
+  document.querySelectorAll('g.cluster').forEach(cluster => {
+    const id = cluster.id;
+    const data = meta[id];
+    if (!data) return;
+    const fo = cluster.querySelector('.cluster-label foreignObject');
+    if (!fo) return;
+    const host = fo.querySelector('div, span') || fo;
+
+    const node = tpl.content.cloneNode(true);
+    const text = node.querySelector('.par-text');
+    const kicker = node.querySelector('.par-kicker');
+    if (text) text.textContent = 'FOR EACH ' + data.loop_var + ' IN ' + data.collection;
+    if (kicker) {
+      if (data.parallel) kicker.textContent = 'parallel';
+      else kicker.remove();
+    }
+    while (host.firstChild) host.removeChild(host.firstChild);
+    host.appendChild(node);
+
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const banner = host.querySelector('.par-banner');
+      if (!banner) return;
+      const rect = banner.getBoundingClientRect();
+      const newW = Math.ceil(rect.width) + 6;
+      const newH = Math.ceil(rect.height) + 6;
+      const oldW = parseFloat(fo.getAttribute('width')) || 0;
+      fo.setAttribute('width', newW);
+      fo.setAttribute('height', newH);
+      /* Position the banner astride the cluster's top border (fieldset
+       * legend style) so it doesn't overlap inner cards. The label-group's
+       * x is recentered on its original midpoint; y is fixed at -newH/2
+       * so half the chip sits above the rect, half below. */
+      const parentG = fo.parentElement;
+      const tform = parentG && parentG.getAttribute('transform');
+      if (tform) {
+        const m = tform.match(/translate\\(([^,]+),\\s*([^)]+)\\)/);
+        if (m) {
+          const tx = parseFloat(m[1]) - (newW - oldW) / 2;
+          const ty = -newH / 2;
+          parentG.setAttribute('transform', 'translate(' + tx + ', ' + ty + ')');
+        }
+      }
+    }));
+  });
+}
+
+window.addEventListener('load', () => {
+  setTimeout(injectForeachBanners, 300);
+});
 </script>
 </body>
 </html>
@@ -1132,7 +1277,8 @@ def to_html(graph: FlowGraph) -> str:
     the HTML in any browser with internet access (mermaid.js + Geist fonts
     are loaded from CDN).
     """
-    mermaid_source = _to_mermaid_rich_labels(graph).rstrip("\n")
+    mermaid_source, foreach_meta = _to_mermaid_rich_labels(graph)
+    mermaid_source = mermaid_source.rstrip("\n")
     steps_data = {s.name: _step_to_dict(s) for s in graph.steps}
     contracts_data = {c.name: _contract_to_dict(c) for c in graph.contracts}
 
@@ -1163,4 +1309,5 @@ def to_html(graph: FlowGraph) -> str:
         .replace("__TARGET_JSON__", json.dumps(target, ensure_ascii=False))
         .replace("__COUNTS_JSON__", json.dumps(counts, ensure_ascii=False))
         .replace("__MERMAID_JSON__", json.dumps(mermaid_source, ensure_ascii=False))
+        .replace("__FOREACH_META_JSON__", json.dumps(foreach_meta, ensure_ascii=False))
     )

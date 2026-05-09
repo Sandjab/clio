@@ -84,6 +84,17 @@
   `!important` to defeat Mermaid's label-colour cascade. Vanilla
   `to_mermaid()` (used for `--format mermaid`) is unchanged so GitHub
   rendering is unaffected.
+- `clio graph --format html` viewer — `FOR EACH … PARALLEL` cluster
+  styling: soft cream-tinted wrapper with rounded corners, plus a chip
+  pill flottante astride the top border (fieldset-legend style) showing
+  a `git-branch` icon, the loop signature `FOR EACH t IN tickets`, and a
+  `PARALLEL` kicker. Implemented as a post-render JS injection that
+  swaps the placeholder cluster label for a `<template>`-cloned banner
+  and resizes the `foreignObject` to fit. Amber/rust accent
+  (`oklch(48% 0.155 60)`) — distinct from the four mode hues
+  (judgment/shell/rest/code). The Mermaid source label is unchanged
+  (`subgraph foreach_N["FOR EACH … [parallel]"]`), so vanilla
+  `--format mermaid` output and existing tests stay valid.
 
 ### Examples
 

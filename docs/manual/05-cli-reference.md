@@ -50,7 +50,7 @@ clio graph <source.clio> [--format mermaid|dot|html] [--output <file>]
 
 **`dot`** — Graphviz DOT source. Pipe to `dot -Tpng > graph.png`.
 
-**`html`** — single self-contained HTML viewer with click-to-inspect cards (since v0.5.0; Tabloid-style polish since v0.6.0). Open in any browser with internet access (loads `mermaid@10` + Geist fonts from CDN).
+**`html`** — single self-contained HTML viewer with click-to-inspect cards (since v0.5.0; Tabloid-style polish since v0.6.0). `FOR EACH … PARALLEL` blocks render as a soft-tinted wrapper with a chip-pill banner astride the top border (`git-branch` icon + loop signature + `PARALLEL` kicker). Open in any browser with internet access (loads `mermaid@10` + Geist fonts from CDN).
 
 **Examples:**
 
