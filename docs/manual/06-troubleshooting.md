@@ -42,6 +42,36 @@ The `claude-cli` emitter explicitly rejects `FOR EACH ... PARALLEL AS` because b
 
 **Fix:** compile to `--target python` or `--target mcp-server` instead. Or rewrite the loop as a sequential `FOR EACH` if the parallelism isn't critical.
 
+### `IRBuildError: IF/WHILE condition reads X.Y but X is not a CONTRACT`
+
+You wrote `IF moderation.safe == true:` but `moderation` is a primitive (e.g. `bool`) — it has no nested fields to drill into. CLIO's IF/WHILE/MATCH conditions always read a contract sub-field, never a bare primitive.
+
+**Fix:** wrap the value in a CONTRACT (`CONTRACT moderation_check SHAPE: {safe: bool, ...}`) and reference it as `state_field.sub_field`.
+
+### `IRBuildError: CASE 'spam' is not one of the enum variants of report.category`
+
+A MATCH CASE value doesn't match any variant declared in the contract field's enum.
+
+**Fix:** check the contract — `enum(spam|support|sales)` for example. CASE values are bare-idents (or strings); typos and missing variants are caught at IR build time.
+
+### `ValueError: langgraph target requires IF to have an ELSE branch in v0.7`
+
+LangGraph's `add_conditional_edges` needs a destination for both truth values; an IF without ELSE leaves the false branch unwired.
+
+**Fix:** add an ELSE branch (it can be a single passthrough step), or compile to `--target python` / `--target mcp-server` which support optional ELSE natively.
+
+### `ValueError: langgraph target requires each IF branch to contain exactly one step call in v0.7`
+
+You nested another control-flow block (`MATCH`, another `IF`, a chain `step1 -> step2`) inside an IF branch when targeting langgraph.
+
+**Fix:** flatten the branches to single calls, **or** use `--target python` / `--target mcp-server` which support arbitrarily deep nesting. Multi-step branches in langgraph need conditional joins (planned for v0.8).
+
+### `ValueError: WHILE is not supported by the langgraph target in v0.7`
+
+WHILE requires cyclic edges plus state-counter accumulators in LangGraph, which the v0.7 emitter doesn't lower yet.
+
+**Fix:** use `--target python` or `--target mcp-server` for refine-loop / improve-until-acceptable patterns. The bounded `for _i in range(MAX): if not cond: break; body` pattern they emit is the canonical CLIO WHILE today.
+
 ### `ValueError: invoke.protocol 'bedrock' is not yet supported`
 
 Bedrock and Vertex are specced but not implemented in any emitter yet.

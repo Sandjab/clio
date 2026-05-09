@@ -492,9 +492,17 @@ def _build_condition(
         literal_value = cond.right.value
         literal_kind = "float"
     elif isinstance(cond.right, IdentExpr):
-        # Bare-ident: treated as an enum-value ident in v0 (str at runtime).
-        literal_value = cond.right.name
-        literal_kind = "ident"
+        # Recognize `true` / `false` as bool literals; everything else stays
+        # an enum-value ident (str at runtime).
+        if cond.right.name == "true":
+            literal_value = True
+            literal_kind = "bool"
+        elif cond.right.name == "false":
+            literal_value = False
+            literal_kind = "bool"
+        else:
+            literal_value = cond.right.name
+            literal_kind = "ident"
     else:
         raise IRBuildError(
             f"line {line}:{col}: IF/WHILE condition right-hand side must be "

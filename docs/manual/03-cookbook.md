@@ -160,12 +160,48 @@ Key idea: chained comparators desugar to a left-associative `(a<=b) and (b<=c)`.
 
 Single-field constraint only — for cross-field invariants like `created_at < updated_at`, see *future plans* in the spec.
 
+## 8. Conditional routing with IF / MATCH
+
+**Pattern:** moderate input, then either escalate (unsafe) or classify and dispatch by category to one of N specialised steps.
+
+**Reference:** [`examples/feedback_routing.clio`](../../examples/feedback_routing.clio)
+
+```
+FLOW feedback_routing
+    load_feedback(file="feedback.json")
+    -> moderate_text(feedback=feedback)
+    -> IF moderation.safe == true:
+        classify_safe_text(feedback=feedback)
+        -> MATCH classification.category:
+            CASE bug:     route_bug(classification=classification)
+            CASE feature: route_feature(classification=classification)
+            CASE praise:  route_praise(classification=classification)
+            DEFAULT:      route_general(classification=classification)
+    ELSE:
+        escalate_unsafe(feedback=feedback)
+```
+
+Key idea: `IF <state_field>.<sub_field> <op> <literal>` reads a contract sub-field; the state_field must be a CONTRACT (so it has nested fields). `MATCH` does multi-way dispatch on an enum sub-field; CASE values must match enum variants exactly. ELSE is optional in python/mcp-server, **required** in langgraph; same for DEFAULT.
+
+`true` / `false` are recognised as bool literals on the right-hand side of a comparison.
+
+## 9. Bounded refine loop with WHILE MAX
+
+**Pattern:** generate a draft, iteratively refine it until a quality threshold is reached or a max iteration count is hit.
+
+```
+WHILE draft.score < 0.85 MAX 3:
+    refine_draft(draft=draft)
+```
+
+Key idea: `MAX <int>` is **mandatory** — bounds the loop to keep LLM-driven flows terminating. The body must update the state field referenced by the condition (typically by writing back the same `gives.name`) so the loop can make progress. Compiles to python and mcp-server only — langgraph rejects `WHILE` in v0.7 (cyclic edges + state reducers planned for v0.8).
+
 ## What's not in the cookbook (yet)
 
-- **WHILE / IF / MATCH** — control flow specced but not implemented.
 - **Multi-field ASSERT** — accept `a > b` between two fields. Specced, planned.
-- **Boolean `and`/`or` keywords in ASSERT** — natural extension of the chained-comparator desugaring.
+- **Boolean `and`/`or` keywords in ASSERT and conditions** — natural extension of the chained-comparator desugaring.
 - **`auto` MODE routing** — parsed, runtime decision not yet implemented.
+- **`.FAILS` postfix in IF conditions** — specced for failure-aware branching, not yet implemented.
 
 When these land, this page gets new recipes. (See [the changelog](../../CHANGELOG.md) for what's recently moved out of "not yet".)
 

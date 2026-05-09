@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+### Language
+
+- **IF / ELSE conditional branching** (control flow). The condition is a
+  single comparison `<state_field>.<sub_field> <op> <literal>` where `<op>`
+  is one of `== != < <= > >=` and `<literal>` is a string, number,
+  bare-ident (enum value), or the bool literals `true` / `false`. The
+  state_field must be a CONTRACT so it has nested sub-fields exposed to
+  the comparator. ELSE is optional. No boolean conjunction (`and`/`or`)
+  and no `.FAILS` shorthand in v0.7 — those are deferred. Compiles to
+  python (native `if/else`), mcp-server (same, async), and langgraph
+  (`add_conditional_edges` + router function). LangGraph requires both
+  ELSE and exactly one step call per branch in v0.7 (multi-step branches
+  + optional ELSE are planned for v0.8).
+- **MATCH / CASE / DEFAULT multi-way dispatch** on an enum sub-field of
+  a CONTRACT. CASE values must match enum variants exactly; duplicate
+  CASE values are rejected at IR build time. DEFAULT must come last and
+  is optional in python/mcp-server, required in langgraph. Compiles to
+  python/mcp-server via Python 3.10+ `match: case` and to langgraph
+  via a `_match_<state_field>_<sub_field>` router function returning
+  the next node name; `add_conditional_edges` wires the prev node to
+  every arm's first step.
+- **WHILE … MAX bounded loop** on python and mcp-server (langgraph
+  rejects in v0.7). The body re-evaluates the condition each iteration;
+  the loop exits when the condition turns false **or** after MAX
+  iterations (whichever comes first). MAX is a mandatory positive
+  integer — unbounded loops are forbidden at parse time. Emitted as
+  `for _i in range(MAX): if not cond: break; body`. Body must update
+  the state field referenced by the condition for progress (caller-side
+  invariant).
+- New tokens: `DOT` (`.` for `state_field.sub_field`).
+- New keywords: `IF`, `ELSE`, `MATCH`, `CASE`, `DEFAULT`, `WHILE`, `MAX`.
+- New IR nodes: `ConditionIR`, `IfBlockIR`, `MatchBlockIR`, `MatchCaseIR`,
+  `WhileBlockIR`. The IR's FlowIR.chain union now includes all four
+  control-flow primitives (`CallIR | ForEachIR | IfBlockIR | MatchBlockIR
+  | WhileBlockIR`).
+
+### Examples
+
+- New `examples/feedback_routing.clio` — content-moderation + categorical
+  routing pipeline that demonstrates IF/ELSE branching + MATCH/CASE
+  dispatch in a realistic triage workflow. Compiles to python and
+  mcp-server (langgraph rejects: nested MATCH inside the IF then-branch
+  is a multi-step branch). Companion fixture at `examples/feedback.json`.
+
+### Viewer
+
+- HTML viewer renders IF as a Mermaid decision diamond (`if_N{"IF cond"}`)
+  with `yes` / `no` labelled edges, MATCH as a diamond with one labelled
+  edge per arm (`-- "spam" -->`, `-- "default" -->`), and WHILE as a
+  cluster (subgraph) with the body inside and a `WHILE cond MAX N` label.
+  `if_meta`, `match_meta`, `while_meta` are exposed as JS constants for
+  future viewer enrichments (chip-pill banners, iteration counter, etc.).
+  Vanilla `--format mermaid` and `--format dot` silently skip the new
+  control-flow nodes (rich HTML viewer is the canonical visualisation).
+
 ### Emitters
 
 - New `--target langgraph` emitter compiles a `.clio` source to a Python

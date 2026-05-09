@@ -26,6 +26,9 @@ Also lifts `FOR EACH <var> IN <collection>:` from spec-only to implemented contr
 | `FOR EACH ... IN ...:` | ✅ | ✅ | ✅ `for x in state[...]:` | ✅ `mapfile` + bash `for` loop | ✅ `for x in state[...]:` |
 | Judgment step inside FOR EACH | parses fine | builds fine | works | rejected at emit | works |
 | `FOR EACH ... PARALLEL AS <name>` | ✅ | ✅ | ✅ `ThreadPoolExecutor` | ❌ rejected | ✅ `asyncio.gather` |
+| `IF <cond>: ... ELSE: ...` (v0.7) | ✅ | ✅ | ✅ `if/else` | ❌ rejected | ✅ `if/else` |
+| `MATCH x: CASE ...` (v0.7) | ✅ | ✅ | ✅ `match/case` | ❌ rejected | ✅ `match/case` |
+| `WHILE <cond> MAX N:` (v0.7) | ✅ | ✅ | ✅ bounded `for/break` | ❌ rejected | ✅ bounded `for/break` |
 
 Where the table says *rejected at compile time*, the emitter raises a clear `ValueError` / `NotImplementedError` rather than producing silent or broken code.
 
@@ -435,44 +438,70 @@ FOR EACH <loop_var> IN <collection> PARALLEL AS <collector>:
 - python target → `concurrent.futures.ThreadPoolExecutor(max_workers=10)` + `as_completed` (preserves order via indexed write).
 - mcp-server target → `asyncio.gather` + `asyncio.Semaphore(10)`. Judgment-mode body steps thread `_session=_session` per task.
 
-### WHILE
+### IF / ELSE (v0.7)
 
-Conditional loop. Compiles to an agent pattern (iterative LLM calls with state).
-
-```
-WHILE <condition>:
-  <step_call>
-    -> <step_call>
-```
-
-### IF / ELSE
-
-Conditional branching.
+Conditional branching. The condition is a single comparison
+`<state_field>.<sub_field> <op> <literal>` where `<op>` is one of
+`== != < <= > >=`, and `<literal>` is a string, number, bare-ident
+(enum value), or the bool literals `true` / `false`. The state_field must be
+a CONTRACT (so it has nested sub-fields exposed to the comparator). ELSE
+is optional. No boolean conjunction (`and`/`or`) and no `.FAILS` shorthand
+in v0.7 — those are deferred.
 
 ```
-IF <condition>:
-  -> <step_call>
+IF report.confidence < 0.7:
+    human_review(report)
 ELSE:
-  -> <step_call>
+    auto_route(report)
 ```
 
-A step's failure can be tested:
+Both branches see the same outer state; fields produced inside a branch
+do not "narrow" the type for downstream chain items (no implicit type
+narrowing in v0.7).
+
+Targets: python, mcp-server, langgraph (langgraph requires ELSE and
+exactly one step call per branch in v0.7).
+
+### MATCH / CASE / DEFAULT (v0.7)
+
+Multi-way branching on an enum sub-field of a CONTRACT.
 
 ```
-IF <step_name>.FAILS:
-  -> <fallback_step>
+MATCH classification.category:
+    CASE bug:     route_bug(classification)
+    CASE feature: route_feature(classification)
+    CASE praise:  route_praise(classification)
+    DEFAULT:      route_general(classification)
 ```
 
-### MATCH / CASE / DEFAULT
+CASE values are bare-idents (enum variants) or string literals; each value
+must match an enum variant of the scrutinee's contract field. DEFAULT is
+optional but strongly recommended (langgraph requires it). DEFAULT must
+come last; duplicate CASE values are rejected at IR build time.
 
-Multi-way branching.
+Targets: python (Python 3.10+ `match: case` natively), mcp-server (same,
+async), langgraph (each arm = exactly one step call; DEFAULT mandatory).
+
+### WHILE (v0.7)
+
+Bounded conditional loop. The body re-evaluates the condition before each
+iteration; the loop exits when the condition turns false **or** after MAX
+iterations (whichever comes first). MAX is mandatory — unbounded loops
+are forbidden at parse time.
 
 ```
-MATCH <expression>:
-  CASE <value>: <step_call>
-  CASE <value>: <step_call>
-  DEFAULT:      <step_call>
+WHILE draft.score < 0.85 MAX 3:
+    refine_draft(draft=draft)
 ```
+
+Body steps are expected to update the state field referenced by the
+condition for the loop to make progress (caller-side invariant; not
+validated in v0.7).
+
+Targets: python (`for _i in range(MAX): if not cond: break; body`),
+mcp-server (same, async). LangGraph **rejects WHILE** at compile time in
+v0.7 — bounded loops require cyclic edges plus state reducers, planned
+for v0.8. Use python or mcp-server for refine-loop patterns today.
 
 ## Failure strategies (ON_FAIL)
 

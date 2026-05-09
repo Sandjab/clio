@@ -813,6 +813,8 @@ def _python_condition_expr(condition, scope_local: set[str]) -> str:
         lit = str(condition.literal_value)
     elif condition.literal_kind == "float":
         lit = repr(condition.literal_value)
+    elif condition.literal_kind == "bool":
+        lit = "True" if condition.literal_value else "False"
     else:
         # str | ident — both rendered as Python string literals
         lit = repr(condition.literal_value)

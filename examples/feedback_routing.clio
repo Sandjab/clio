@@ -1,0 +1,90 @@
+# feedback_routing.clio — content-moderation + categorical routing
+#
+# A typical "triage + dispatch" pipeline that combines the two new control-flow
+# primitives in v0.7:
+#
+# 1. IF / ELSE — branch on `moderation.safe` (boolean field).
+# 2. MATCH / CASE / DEFAULT — dispatch on `classification.category` enum.
+#
+# Compiles to `--target python` and `--target mcp-server`. Rejected by
+# `--target langgraph` because v0.7 langgraph requires each IF / MATCH branch
+# to contain exactly one step call (this example nests MATCH inside the IF
+# `then` branch — two steps in a row). Multi-step branches in langgraph
+# require cyclic edge accumulators and are planned for v0.8.
+
+CONTRACT customer_feedback
+  SHAPE:  {id: int, body: str(max=2000), source: str(max=40)}
+  ASSERT: id >= 1
+
+CONTRACT moderation_check
+  SHAPE:  {id: int, safe: bool, severity: int, reason: str(max=200)}
+  ASSERT: severity >= 0
+
+CONTRACT classified_feedback
+  SHAPE:  {id: int, category: enum(bug|feature|praise|complaint|other), confidence: float}
+  ASSERT: 0.0 <= confidence <= 1.0
+
+CONTRACT routed_action
+  SHAPE:  {id: int, channel: str(max=40), payload: str(max=500)}
+
+RESOURCES
+  target: python
+
+STEP load_feedback
+  TAKES: file:     str
+  GIVES: feedback: customer_feedback
+  MODE:  exact
+  impl:
+    mode:  shell
+    cmd:   "cat ${file}"
+    parse: json
+
+STEP moderate_text
+  TAKES: feedback:   customer_feedback
+  GIVES: moderation: moderation_check
+  MODE:  judgment
+  CACHE: ttl(1h)
+
+STEP classify_safe_text
+  TAKES: feedback:       customer_feedback
+  GIVES: classification: classified_feedback
+  MODE:  judgment
+  CACHE: ttl(1h)
+
+STEP escalate_unsafe
+  TAKES: feedback: customer_feedback
+  GIVES: routed:   routed_action
+  MODE:  judgment
+
+STEP route_bug
+  TAKES: classification: classified_feedback
+  GIVES: routed:         routed_action
+  MODE:  judgment
+
+STEP route_feature
+  TAKES: classification: classified_feedback
+  GIVES: routed:         routed_action
+  MODE:  judgment
+
+STEP route_praise
+  TAKES: classification: classified_feedback
+  GIVES: routed:         routed_action
+  MODE:  judgment
+
+STEP route_general
+  TAKES: classification: classified_feedback
+  GIVES: routed:         routed_action
+  MODE:  judgment
+
+FLOW feedback_routing
+    load_feedback(file="feedback.json")
+    -> moderate_text(feedback=feedback)
+    -> IF moderation.safe == true:
+        classify_safe_text(feedback=feedback)
+        -> MATCH classification.category:
+            CASE bug:     route_bug(classification=classification)
+            CASE feature: route_feature(classification=classification)
+            CASE praise:  route_praise(classification=classification)
+            DEFAULT:      route_general(classification=classification)
+    ELSE:
+        escalate_unsafe(feedback=feedback)
