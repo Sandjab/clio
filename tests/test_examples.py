@@ -51,3 +51,32 @@ def test_compile_rag_selfcontained_example(tmp_path):
     load_corpus_body = (step_dir / "load_corpus.py").read_text()
     assert "import json" in load_corpus_body
     assert "json.loads(result.stdout)" in load_corpus_body
+
+
+def test_compile_ticket_routing_example(tmp_path):
+    """ticket_routing.clio compiles cleanly: shell parse:json loader, a PARALLEL
+    FOR EACH classifying multi-field structured tickets, then a JUDGMENT summary."""
+    out = _compile_to_tree(REPO_ROOT / "examples/ticket_routing.clio", tmp_path)
+    step_dir = out / "ticket_routing" / "steps"
+    step_files = {p.stem for p in step_dir.glob("*.py") if p.stem != "__init__"}
+    assert step_files == {"load_tickets", "classify_ticket", "summarize_routing"}
+
+    # load_tickets is impl.shell + parse:json — no manual edit.
+    load_body = (step_dir / "load_tickets.py").read_text()
+    assert "subprocess.run" in load_body
+    assert "json.loads(result.stdout)" in load_body
+    assert "NotImplementedError" not in load_body
+
+    # The flow uses PARALLEL FOR EACH (ThreadPoolExecutor) and accumulates
+    # into state['classifications'] for downstream summarize_routing.
+    flow_body = (out / "ticket_routing" / "flow.py").read_text()
+    assert "concurrent.futures.ThreadPoolExecutor" in flow_body
+    assert "state['classifications']" in flow_body
+
+    # The 3 contracts compile to Pydantic models with Literal enums.
+    contracts_body = (out / "ticket_routing" / "contracts.py").read_text()
+    assert "class SupportTicket(BaseModel)" in contracts_body
+    assert "class ClassifiedTicket(BaseModel)" in contracts_body
+    assert "class RoutingSummary(BaseModel)" in contracts_body
+    assert "Literal['bug', 'billing', 'feature', 'account', 'other']" in contracts_body
+    assert "Literal['low', 'medium', 'high', 'urgent']" in contracts_body

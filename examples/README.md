@@ -183,3 +183,40 @@ with custom splitting rules).
 extension: when the file already matches the `GIVES` shape (here a JSON array
 of `{id, text}` pairs), the loader becomes a one-line `cat`, parsed
 declaratively. No Python required.
+
+## 5. `ticket_routing.clio` — multi-field classification + parallel routing
+
+Pipeline: load support tickets from JSON → classify each ticket in parallel into
+a structured record (category, priority, team, urgency_score) → produce a
+narrative routing summary.
+
+What this example exercises that the others do not:
+
+- **Multi-field structured judgment output** — `classify_ticket` returns a
+  4-field `classified_ticket` (`category`, `priority`, `team`, `urgency_score`)
+  in a single LLM call. Two of those fields are bounded `enum(...)`s compiled
+  to `Literal[...]` in Pydantic; the float carries a numeric `ASSERT`.
+- **`FOR EACH ... PARALLEL AS classifications`** — fans the classification step
+  across the loaded tickets list. The collector binds the typed result list
+  (`List<classified_ticket>`) into state, ready for the next step. PARALLEL
+  here is the critical primitive: a sequential `FOR EACH` would not accumulate
+  the per-iteration results (current v0 limitation).
+- **Two-stage judgment** — a per-item judgment (`classify_ticket`) followed by
+  a list-input judgment (`summarize_routing`). The summary is itself a CONTRACT
+  with a `total > 0` ASSERT and a narrative field, so the LLM produces both
+  counts and a short prose digest in one shot.
+- **Zero manual edit** — like `rag_selfcontained.clio`, the loader uses
+  `impl.shell` + `parse: json` against `tickets.json`, so the emitted package
+  is runnable as-is once `tickets.json` is in cwd.
+
+```bash
+uv run python -m clio compile examples/ticket_routing.clio --target python --output ./out
+cp examples/tickets.json ./out/
+uv pip install ./out
+cd ./out && ANTHROPIC_API_KEY=... ticket_routing
+cat state.json
+```
+
+Compiles to `--target python` and `--target mcp-server`. The `claude-cli`
+target rejects this file at compile time because it does not implement
+`FOR EACH PARALLEL` (use one of the other two targets).

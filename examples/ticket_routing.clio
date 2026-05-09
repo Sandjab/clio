@@ -1,0 +1,38 @@
+CONTRACT support_ticket
+  SHAPE:  {id: int, title: str(max=200), body: str(max=2000)}
+  ASSERT: id >= 1
+
+CONTRACT classified_ticket
+  SHAPE:  {id: int, category: enum(bug|billing|feature|account|other), priority: enum(low|medium|high|urgent), team: enum(engineering|finance|product|support), urgency_score: float}
+  ASSERT: urgency_score >= 0.0
+
+CONTRACT routing_summary
+  SHAPE:  {total: int, urgent_count: int, top_category: str, top_team: str, narrative: str(max=500)}
+  ASSERT: total > 0
+
+STEP load_tickets
+  TAKES: file:    str
+  GIVES: tickets: List<support_ticket>
+  MODE:  exact
+  impl:
+    mode:  shell
+    cmd:   "cat ${file}"
+    parse: json
+
+STEP classify_ticket
+  TAKES:   ticket: support_ticket
+  GIVES:   result: classified_ticket
+  MODE:    judgment
+  CACHE:   ttl(24h)
+  ON_FAIL: retry(2) then escalate then abort("classification failed")
+
+STEP summarize_routing
+  TAKES: classifications: List<classified_ticket>
+  GIVES: summary:         routing_summary
+  MODE:  judgment
+
+FLOW ticket_routing
+  load_tickets(file="tickets.json")
+    -> FOR EACH t IN tickets PARALLEL AS classifications:
+         classify_ticket(ticket=t)
+    -> summarize_routing(classifications)

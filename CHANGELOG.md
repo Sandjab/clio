@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Examples
+
+- `examples/ticket_routing.clio` — support-ticket routing pipeline. Three
+  CONTRACTs (`support_ticket`, `classified_ticket`, `routing_summary`),
+  multi-field structured judgment output (two bounded `enum(...)` fields plus
+  a float with a numeric ASSERT), `FOR EACH ... PARALLEL AS classifications`
+  to scale per-ticket classification, and a JUDGMENT summary step that turns
+  the typed list into a narrative digest. Zero manual edit (loader uses
+  `impl.shell` + `parse: json` on `examples/tickets.json`). Compiles to
+  `--target python` and `--target mcp-server`; rejected by `--target
+  claude-cli` (no PARALLEL support).
+- `examples/tickets.json` — 6 French support tickets fixture
+  (`{id, title, body}`), used by `ticket_routing.clio`.
+
 ## v0.5.0 — 2026-05-08
 
 ### Language
