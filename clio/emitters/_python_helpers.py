@@ -80,6 +80,28 @@ def _to_field_name(name: str) -> str:
     return name
 
 
+def _uses_contract_refs(step: StepIR) -> bool:
+    """True iff the step's TAKES or GIVES type tree references any ContractRef.
+    Determines whether the emitted step module needs `from .. import contracts`
+    — otherwise the `contracts.Foo` qualifier in the type annotation is an
+    unresolved name (harmless under `from __future__ import annotations` but
+    ugly and breaks `typing.get_type_hints`)."""
+    def walk(t: TypeExpr) -> bool:
+        if isinstance(t, ContractRef):
+            return True
+        if isinstance(t, ListType):
+            return walk(t.inner)
+        if isinstance(t, RecordType):
+            return any(walk(ty) for _, ty in t.fields)
+        if isinstance(t, ConstrainedType):
+            return walk(t.base)
+        return False
+
+    if step.gives is not None and walk(step.gives.type):
+        return True
+    return any(walk(f.type) for f in step.takes)
+
+
 def _type_to_python(t: TypeExpr, contracts: dict[str, "ContractIR"]) -> str:
     if isinstance(t, PrimitiveType):
         return _PYTHON_PRIMITIVES[t.name]
@@ -200,6 +222,9 @@ def emit_default_exact_step(step: "StepIR", contracts_by_name: dict[str, "Contra
         f"{step.gives.name}: {_render_type_short(step.gives.type)}"
         if step.gives is not None else "(no GIVES)"
     )
+    contracts_import = (
+        "from .. import contracts\n" if _uses_contract_refs(step) else ""
+    )
     return (
         f'"""STEP {step.name} (exact)\n'
         f'TAKES:\n'
@@ -215,7 +240,9 @@ def emit_default_exact_step(step: "StepIR", contracts_by_name: dict[str, "Contra
         f'"""\n'
         f'from __future__ import annotations\n\n'
         f'import time\n\n'
-        f'from ..clio_runtime import logging as _log\n\n\n'
+        f'from ..clio_runtime import logging as _log\n'
+        f'{contracts_import}'
+        f'\n\n'
         f'def {step.name}({params}) -> {ret_type}:\n'
         f'    _t0 = time.monotonic()\n'
         f'    _log.emit("step_start", step={step.name!r}, mode="exact")\n'
@@ -564,6 +591,9 @@ def emit_rest_step(
         f'    _t0 = time.monotonic()\n'
         f'    _log.emit("step_start", step={step.name!r}, mode="exact")\n'
     )
+    contracts_import = (
+        "from .. import contracts\n" if _uses_contract_refs(step) else ""
+    )
     return (
         f'"""STEP {step.name} (exact, impl: rest)\n'
         f'TAKES:\n'
@@ -578,7 +608,9 @@ def emit_rest_step(
         f'import time\n'
         f'import requests\n'
         f'{extra_imports}\n'
-        f'from ..clio_runtime import logging as _log\n\n\n'
+        f'from ..clio_runtime import logging as _log\n'
+        f'{contracts_import}'
+        f'\n\n'
         f'{retries_note}'
         f'def {step.name}({params}) -> {ret_type}:\n'
         f'{step_start_block}'
@@ -633,6 +665,10 @@ def emit_shell_step(
         json_import = ""
         return_line = "    return result.stdout\n"
 
+    contracts_import = (
+        "from .. import contracts\n" if _uses_contract_refs(step) else ""
+    )
+
     return (
         f'"""STEP {step.name} (exact, impl: shell)\n'
         f'TAKES:\n'
@@ -647,7 +683,9 @@ def emit_shell_step(
         f'import subprocess\n'
         f'{json_import}'
         f'import time\n\n'
-        f'from ..clio_runtime import logging as _log\n\n\n'
+        f'from ..clio_runtime import logging as _log\n'
+        f'{contracts_import}'
+        f'\n\n'
         f'def {step.name}({params}) -> {ret_type}:\n'
         f'    _t0 = time.monotonic()\n'
         f'    _log.emit("step_start", step={step.name!r}, mode="exact")\n'

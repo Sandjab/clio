@@ -235,6 +235,34 @@ def test_parse_resources_unsupported_field_raises():
     assert "v0.1" in str(exc.value)
 
 
+def test_parse_resources_target_python():
+    """RESOURCES target: python is now accepted (was rejected pre-v0.6)."""
+    src = "STEP foo\n  MODE: exact\nRESOURCES\n  target: python\n"
+    program = parse(src)
+    res = [d for d in program.decls if d.__class__.__name__ == "ResourcesDecl"]
+    assert len(res) == 1
+    assert res[0].target == "python"
+
+
+def test_parse_resources_target_mcp_server():
+    """RESOURCES target: mcp-server is now accepted (was rejected pre-v0.6)."""
+    src = "STEP foo\n  MODE: exact\nRESOURCES\n  target: mcp-server\n"
+    program = parse(src)
+    res = [d for d in program.decls if d.__class__.__name__ == "ResourcesDecl"]
+    assert len(res) == 1
+    assert res[0].target == "mcp-server"
+
+
+def test_parse_resources_unknown_target_rejected():
+    """Unknown targets get a clear, enumerated error."""
+    src = "STEP foo\n  MODE: exact\nRESOURCES\n  target: rust\n"
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    msg = str(exc.value)
+    assert "rust" in msg
+    assert "claude-cli" in msg and "python" in msg and "mcp-server" in msg
+
+
 def test_parse_step_with_cache_off():
     src = "STEP s\n  GIVES: r: str\n  MODE: judgment\n  CACHE: off\n"
     program = parse(src)

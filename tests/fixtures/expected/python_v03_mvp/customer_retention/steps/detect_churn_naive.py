@@ -16,6 +16,7 @@ from __future__ import annotations
 import time
 
 from ..clio_runtime import logging as _log
+from .. import contracts
 
 
 def detect_churn_naive(*, customers: list[dict]) -> list[contracts.CustomerRisk]:

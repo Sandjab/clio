@@ -24,6 +24,7 @@ class Keyword(str, Enum):
     TARGET = "target"
     MODELS = "models"
     CLAUDE_CLI = "claude-cli"
+    MCP_SERVER = "mcp-server"
     HAIKU = "haiku"
     SONNET = "sonnet"
     OPUS = "opus"

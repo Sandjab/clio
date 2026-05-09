@@ -80,3 +80,11 @@ def test_compile_ticket_routing_example(tmp_path):
     assert "class RoutingSummary(BaseModel)" in contracts_body
     assert "Literal['bug', 'billing', 'feature', 'account', 'other']" in contracts_body
     assert "Literal['low', 'medium', 'high', 'urgent']" in contracts_body
+
+    # Regression guard for the contracts-import bug: load_tickets is impl.shell
+    # + parse:json with `gives: List<support_ticket>`. The annotation
+    # `list[contracts.SupportTicket]` requires `from .. import contracts` —
+    # without it the qualifier is unresolved (harmless under
+    # `from __future__ import annotations` but ugly and breaks `get_type_hints`).
+    assert "from .. import contracts" in load_body
+    assert "list[contracts.SupportTicket]" in load_body

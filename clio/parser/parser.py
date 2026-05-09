@@ -104,9 +104,10 @@ class _Parser:
                 self.advance()
                 self.expect(TokenType.COLON)
                 value_tok = self.expect(TokenType.KEYWORD)
-                if value_tok.value != "claude-cli":
+                if value_tok.value not in {"claude-cli", "python", "mcp-server"}:
                     raise ParseError(
-                        f"target {value_tok.value!r} is not supported in v0.1 (only claude-cli)",
+                        f"target {value_tok.value!r} is not supported "
+                        "(valid targets: claude-cli, python, mcp-server)",
                         value_tok.line, value_tok.col,
                     )
                 target = value_tok.value
@@ -138,8 +139,15 @@ class _Parser:
 
         if target is None:
             raise ParseError("RESOURCES is missing required `target` field", kw.line, kw.col)
-        if not models:
-            raise ParseError("RESOURCES is missing required `models` field", kw.line, kw.col)
+        # `models:` is only meaningful for the claude-cli target (it drives the
+        # haiku→sonnet→opus escalation chain). Python and mcp-server targets
+        # take per-step model overrides via invoke.api.model, so `models:` is
+        # optional for them.
+        if target == "claude-cli" and not models:
+            raise ParseError(
+                "RESOURCES with target: claude-cli requires a `models` field",
+                kw.line, kw.col,
+            )
 
         return ResourcesDecl(target=target, models=models, line=kw.line, col=kw.col)
 

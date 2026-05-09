@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Language
+
+- `RESOURCES target:` now accepts `python` and `mcp-server` in addition
+  to `claude-cli` (previously only `claude-cli` was allowed at parse
+  time, forcing examples that compile to other targets to omit
+  `RESOURCES` entirely). The `target:` field is informational — the
+  `--target` CLI flag still drives the actual emitter selection.
+- `RESOURCES.models:` is now optional when `target` is `python` or
+  `mcp-server` (those targets take per-step model overrides via
+  `invoke.api.model:`, so a flow-wide model chain is moot). Still
+  required for `target: claude-cli` since the haiku→sonnet→opus
+  escalation chain depends on it.
+
+### Emitters
+
+- Python emitter: emit `from .. import contracts` in step modules whose
+  TAKES or GIVES reference any `CONTRACT` (impl.code stub, impl.shell,
+  impl.rest). Without this, the qualified `list[contracts.Foo]` return
+  annotation was an unresolved name — harmless under
+  `from __future__ import annotations` but caught by
+  `typing.get_type_hints`. Visible in the RAG self-contained example
+  and in `ticket_routing` (impl.shell + parse:json).
+
 ### CLI
 
 - `clio graph <file.clio> --format html` emits a single self-contained HTML
