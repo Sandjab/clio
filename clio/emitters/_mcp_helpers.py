@@ -281,6 +281,11 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
     chain_lines: list[str] = []
     imported_steps: list[str] = []
     steps_by_name = {s.name: s for s in graph.steps}
+    # RESCUE bookkeeping: names of steps protected by a RESCUE block (used to
+    # wrap their call site in try/except) and the blocks themselves (used to
+    # emit the async _rescue_<name> helper functions). Mirror of the python
+    # target's pattern in clio/emitters/python.py:413.
+    rescue_target_names = {rb.step_name for rb in graph.flow.rescues}
 
     def _emit_call(call: CallIR, indent: str, scope_local: set[str]) -> None:
         step = next(s for s in graph.steps if s.name == call.step_name)
@@ -308,11 +313,43 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
         else:
             call_expr = f"{step.name}_mod.{step.name}({kwargs_str})"
         if scope_local:
-            chain_lines.append(f"{indent}{call_expr}")
+            call_line = call_expr
         else:
-            chain_lines.append(f"{indent}state[{out_name!r}] = {call_expr}")
+            call_line = f"state[{out_name!r}] = {call_expr}"
+        # RESCUE: wrap the protected step's call site in try/except. Any
+        # uncaught Exception triggers `await _rescue_<name>(state,
+        # _session=_session)`; FlowAborted (raised by the rescue body's
+        # terminal abort) propagates verbatim. The IR builder restricts
+        # RESCUE targets to the top-level FLOW chain in v0.8, so this branch
+        # is only reached when scope_local is empty — i.e. never inside a
+        # FOR EACH / IF / MATCH / WHILE body. We still gate on
+        # `not scope_local` for defence in depth (matches python.py:450).
+        if step.name in rescue_target_names and not scope_local:
+            chain_lines.append(f"{indent}try:")
+            chain_lines.append(f"{indent}    {call_line}")
+            chain_lines.append(f"{indent}except FlowAborted:")
+            chain_lines.append(f"{indent}    raise")
+            chain_lines.append(f"{indent}except Exception:")
+            chain_lines.append(
+                f"{indent}    await _rescue_{step.name}(state, _session=_session)"
+            )
+            chain_lines.append(f"{indent}    raise")
+        else:
+            chain_lines.append(f"{indent}{call_line}")
 
     def _emit_item(item, indent: str, scope_local: set[str]) -> None:
+        # `abort("msg")` is a synthetic CallIR injected by the IR builder
+        # only inside RESCUE bodies. It compiles to `raise FlowAborted(msg)`
+        # regardless of context (rescue body root, or nested IF/MATCH/
+        # WHILE/FOR EACH inside the rescue body). Placed at the top of
+        # _emit_item so every recursive call site picks it up. Mirror of
+        # python.py:467.
+        if isinstance(item, CallIR) and item.step_name == "abort":
+            msg = next(
+                (v for k, v in item.kwargs if k == "message"), ""
+            )
+            chain_lines.append(f"{indent}raise FlowAborted({msg!r})")
+            return
         if isinstance(item, ForEachIR):
             if item.parallel:
                 chain_lines.append(emit_parallel_for_each_mcp(item, steps_by_name, indent))
@@ -384,15 +421,60 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
     for item in graph.flow.chain:
         _emit_item(item, "    ", set())
 
+    # Snapshot the main chain lines before re-using the walker for rescue
+    # bodies (the closure mutates the shared `chain_lines` list).
+    main_chain_lines = list(chain_lines)
+
+    # Emit one async _rescue_<step_name>(state, _session=None) helper per
+    # RESCUE block. Each helper body is rendered with the same _emit_item
+    # walker; the body's terminal abort(...) is rewritten to `raise
+    # FlowAborted(msg)`, so the helper never returns normally. The helpers
+    # live at module level (after `run`) and are called from the wrapped
+    # try/except in the main chain. _session is threaded through so
+    # judgment-mode steps inside the rescue body inherit it (mirrors the
+    # FOR EACH PARALLEL pattern at emit_parallel_for_each_mcp).
+    rescue_helpers: list[str] = []
+    for rb in graph.flow.rescues:
+        chain_lines.clear()
+        for sub in rb.body:
+            _emit_item(sub, "    ", set())
+        rescue_body = "\n".join(
+            "\n".join(line for line in cl.split("\n"))
+            for cl in chain_lines
+        )
+        rescue_helpers.append(
+            f"async def _rescue_{rb.step_name}(state: dict, _session=None) -> None:\n"
+            + rescue_body
+            + "\n"
+        )
+
     imports = "\n".join(f"from .steps import {n} as {n}_mod" for n in imported_steps)
     asyncio_import = "import asyncio\n\n" if _has_parallel(graph.flow.chain) else ""
 
-    # chain_lines start with "    " (4 spaces) for top-level items; some
+    # main_chain_lines start with "    " (4 spaces) for top-level items; some
     # entries are multi-line strings (parallel FOR EACH). We re-indent every
     # line of every entry by 4 more spaces so the chain runs inside `try:`.
     chain_body = "\n".join(
         "\n".join("    " + line for line in cl.split("\n"))
-        for cl in chain_lines
+        for cl in main_chain_lines
+    )
+    # FlowAborted is defined locally in the emitted flow module when at least
+    # one RESCUE block is present. Keeping the class here (rather than in
+    # clio_runtime) means flow.py is self-contained for rescue semantics and
+    # existing snapshot fixtures stay byte-identical when no RESCUE is
+    # declared. Mirror of python.py:590.
+    flow_aborted_block = (
+        "class FlowAborted(Exception):\n"
+        "    \"\"\"Raised by RESCUE bodies' terminal abort(...) call. Propagates out\n"
+        "    of `run()` and is re-raised verbatim by any try/except wrapper around\n"
+        "    a protected step's call site.\"\"\"\n"
+        "    pass\n"
+        "\n"
+        "\n"
+        if graph.flow.rescues else ""
+    )
+    rescue_helpers_block = (
+        "\n\n" + "\n\n".join(rescue_helpers) if rescue_helpers else ""
     )
     flow_name_lit = _json.dumps(graph.flow.name)
     return (
@@ -406,6 +488,7 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
         "from .clio_runtime import logging as _log\n"
         "\n"
         "\n"
+        f"{flow_aborted_block}"
         "async def run(*, _session=None, **initial: object) -> dict:\n"
         "    state: dict = dict(initial)\n"
         f"    _log.set_flow({flow_name_lit})\n"
@@ -421,6 +504,7 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
         "duration_ms=int((time.monotonic() - _t0) * 1000), "
         "success=_success)\n"
         "        _log.set_flow(None)\n"
+        f"{rescue_helpers_block}"
     )
 
 
