@@ -72,6 +72,51 @@ WHILE requires cyclic edges plus state-counter accumulators in LangGraph, which 
 
 **Fix:** use `--target python` or `--target mcp-server` for refine-loop / improve-until-acceptable patterns. The bounded `for _i in range(MAX): if not cond: break; body` pattern they emit is the canonical CLIO WHILE today.
 
+### `IRBuildError: line N: RESCUE body for 'X' must end with abort(...) at the top level of the body chain`
+
+The last item of the top-level chain in your `RESCUE X:` block must be
+`abort("message")`. Putting `abort` only inside an IF/MATCH/WHILE branch
+is not enough — the validator looks at the body's top level, not nested
+data flow:
+
+```
+RESCUE detect:
+  -> IF detect.ok == true:
+       -> abort("ok-branch")
+     ELSE:
+       -> abort("ko-branch")
+```
+
+→ rejected. Hoist the `abort` to the body's top level:
+
+```
+RESCUE detect:
+  -> IF detect.ok == true:
+       -> log_ok()
+     ELSE:
+       -> log_ko()
+  -> abort("done")
+```
+
+**Fix:** Move the terminal `abort(...)` to the top level of the rescue body chain. Use `IF`/`MATCH`/`WHILE` only for intermediate side effects; the final item must be `abort(...)` directly.
+
+### `IRBuildError: line N: 'abort(...)' final clause in ON_FAIL is redundant when RESCUE 'X' is declared`
+
+You declared both `ON_FAIL: ... then abort(...)` on STEP X and a
+`RESCUE X:` at the FLOW level. That's ambiguous (double abort). Choose
+one:
+
+- Remove `abort(...)` from the `ON_FAIL` chain (leave only
+  `retry/escalate/fallback`); the RESCUE body will handle the final
+  abort.
+- OR remove the `RESCUE X:` block; the `ON_FAIL: abort(...)` will
+  handle the final abort instead.
+
+The most common shape is the first: `ON_FAIL: retry(3) then escalate`
++ `RESCUE X: ... -> abort(...)`.
+
+**Fix:** Either drop `abort(...)` from the `ON_FAIL` chain (keeping only `retry`/`escalate`/`fallback`) and let `RESCUE` produce the final abort, or remove the `RESCUE X:` block entirely and let `ON_FAIL: ... then abort(...)` produce it.
+
 ### `ValueError: invoke.protocol 'bedrock' is not yet supported`
 
 Bedrock and Vertex are specced but not implemented in any emitter yet.

@@ -1,6 +1,57 @@
 # Changelog
 
-## Unreleased
+## v0.8.0 — RESCUE handler (unreleased)
+
+### Language
+
+- **RESCUE handler** (`docs/LANGUAGE_SPEC.md` §RESCUE handler): top-level
+  block attached to a STEP that runs if the STEP raises after its
+  `ON_FAIL` chain exhausts. Body is a chain of step calls ending in
+  mandatory `abort("message")`, so you can notify/log/cleanup before
+  aborting. Targets: python, mcp-server. langgraph and claude-cli reject
+  at compile time.
+- New keyword `RESCUE`.
+- New IR validations: unknown step / nested step / duplicate rescue /
+  abort clash with `ON_FAIL` / non-terminal abort / abort outside
+  rescue body. All errors include the source line.
+- `abort("...")` is now a recognised synthetic step call inside rescue
+  bodies (still rejected outside).
+
+### Emitters
+
+- `python` and `mcp-server` emit a `try/except FlowAborted: raise; except
+  Exception: <handler>; raise` wrap around protected STEPs and a
+  `def _rescue_<step>(state)` (sync) / `async def _rescue_<step>(state,
+  _session=None)` (async) helper containing the rescue body. `abort` is
+  rendered as `raise FlowAborted("msg")`. `class FlowAborted(Exception)`
+  is defined locally in the emitted `flow.py` (importable as
+  `from <pkg>.flow import FlowAborted` for downstream catchers), gated
+  on rescues being non-empty so flows without RESCUE produce
+  byte-identical output to v0.7.
+
+### Viewer
+
+- `clio graph --format mermaid|html` now renders RESCUE blocks as a
+  red-tinted `rescue_<step>` node connected by a dotted "fails" edge,
+  with the body sub-flow ending in an `abort_<step>` circle. New
+  `rescue_meta` is exposed to the JS via `__RESCUE_META_JSON__` for
+  future side-panel enrichment.
+
+### Documentation
+
+- New §RESCUE handler in `docs/LANGUAGE_SPEC.md` with grammar,
+  composition table (ON_FAIL × RESCUE), targets, v0.8 limitations, and
+  a worked example.
+- Manual updates: `02-language-tour.md` (RESCUE section), `03-cookbook.md`
+  (critical LLM pipeline recipe), `06-troubleshooting.md` (2 new entries
+  for the terminal-abort and ON_FAIL-clash errors).
+- Narrative example at `docs/LANGUAGE_SPEC.md` lines ~649-657 migrated
+  from the deferred `IF X.FAILS:` form to the actual `RESCUE` form.
+
+### Tests
+
+- ~22 new tests covering parser, IR, emitters, and viewer for RESCUE.
+- Suite total: ~479 (up from 457 at v0.7).
 
 ## v0.7.0 — 2026-05-10
 

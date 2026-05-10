@@ -445,8 +445,9 @@ Conditional branching. The condition is a single comparison
 `== != < <= > >=`, and `<literal>` is a string, number, bare-ident
 (enum value), or the bool literals `true` / `false`. The state_field must be
 a CONTRACT (so it has nested sub-fields exposed to the comparator). ELSE
-is optional. No boolean conjunction (`and`/`or`) and no `.FAILS` shorthand
-in v0.7 — those are deferred.
+is optional. No boolean conjunction (`and`/`or`) in v0.7. For
+failure-aware branching (`.FAILS` shorthand), see RESCUE handlers (v0.8)
+below.
 
 ```
 IF report.confidence < 0.7:
@@ -518,6 +519,114 @@ ON_FAIL: abort("reason")
 - `fallback(step)` — switch to an alternative step
 - `escalate` — switch to a more capable LLM model
 - `abort(message)` — stop the flow with an error
+
+## RESCUE handler (v0.8)
+
+`RESCUE` declares a top-level handler attached to a STEP that runs only
+if the STEP raises **after** its `ON_FAIL` chain (if any) exhausts
+itself. Unlike `ON_FAIL: abort(...)`, which is a single declarative
+clause, the `RESCUE` body is a **chain of step calls** — so you can
+notify, log, persist, or otherwise side-effect before aborting. The
+body always ends in `abort("message")`, which raises
+`FlowAborted("message")`. The chain after the protected step is then
+skipped.
+
+### Grammar
+
+```
+flow_decl    := "FLOW" ident NEWLINE INDENT
+                  flow_chain
+                  rescue_block*
+                DEDENT
+
+rescue_block := "RESCUE" step_name ":" NEWLINE INDENT
+                  rescue_chain
+                DEDENT
+
+rescue_chain := "->"? flow_item ("->" flow_item)*  // last top-level item MUST be abort("...")
+```
+
+`RESCUE` blocks appear **after** the FLOW chain and **before** the
+optional `RESOURCES` block. One block per protected STEP.
+
+### Composition with ON_FAIL
+
+`ON_FAIL` strategies (`retry`, `escalate`, `fallback`) run first; the
+`RESCUE` body runs only if they exhaust. Declaring **both** an `ON_FAIL`
+chain that already ends in `abort(...)` **and** a `RESCUE` block on the
+same STEP is a compile error (redundant double-abort).
+
+| ON_FAIL last clause | RESCUE present | Behaviour |
+| --- | --- | --- |
+| _(no ON_FAIL)_ | no | Exception propagates. |
+| retry/escalate/fallback (no abort) | no | Exception propagates after exhaustion. |
+| `... then abort("msg")` | no | `FlowAborted("msg")` after exhaustion. |
+| _(no ON_FAIL)_ | yes | Exception caught, handler runs, ends with abort. |
+| retry/escalate/fallback | yes | Exhaustion → handler runs → abort. |
+| `... then abort("msg")` | yes | **Compile error**: redundant `abort` final. |
+
+### Targets
+
+- **python** ✓ — emits a `try/except FlowAborted: raise; except
+  Exception: <handler>; raise` wrap around the protected STEP and a
+  `def _rescue_<step>(state)` helper containing the body. `abort` is
+  rendered as `raise FlowAborted("msg")`.
+- **mcp-server** ✓ — async mirror with `_session=_session` threading.
+- **langgraph** ✗ — rejects at compile time. Cyclic edges, state
+  reducers, and multi-step branches all need to land together; planned
+  for the multi-step branches sprint.
+- **claude-cli** ✗ — rejects at compile time.
+
+### Cross-target invariant
+
+`class FlowAborted(Exception)` is defined locally in the emitted
+`flow.py`, gated on `rescues` being non-empty so flows without RESCUE
+produce **byte-identical** output to v0.7. The class is module-local —
+not exposed as a runtime package symbol — but importable as
+`from <pkg>.flow import FlowAborted` if a downstream user wraps the
+flow.
+
+### v0.8 limitations
+
+- One `RESCUE` per STEP (compile error for duplicates).
+- The protected STEP must appear in the **top-level** FLOW chain — not
+  nested inside a `FOR EACH`, `IF`, `MATCH`, or `WHILE` body.
+- The body must end with `abort(...)` **directly at the top level**
+  of the body chain (not just inside an `IF`/`MATCH`/`WHILE` branch).
+- The handler body cannot inspect the captured error message
+  (`step_name.error` is reserved for v0.9+).
+- No `RESUME` keyword for fall-through; `abort` is the only legal
+  terminator.
+
+### Worked example
+
+```
+STEP detect_churn
+  TAKES:    rows: List<int>
+  GIVES:    risks: List<{client: str, score: float}>
+  MODE:     judgment
+  ON_FAIL:  retry(3) then escalate
+
+FLOW pipeline
+  load_csv(path="data.csv")
+    -> detect_churn(rows=load_csv)
+    -> route_alerts(risks=detect_churn)
+
+  RESCUE detect_churn:
+    -> notify_slack(channel="#alerts", reason="churn detection failed")
+    -> abort("churn detection failed — see #alerts")
+```
+
+Runtime sequence on failure:
+
+1. `load_csv` runs.
+2. `detect_churn` runs. If it raises:
+   - `retry(3)` retries up to 3 times.
+   - `escalate` switches to a more capable model.
+   - If both exhaust, the `RESCUE` body runs: `notify_slack` then
+     `abort`.
+3. `abort` raises `FlowAborted("churn detection failed — see #alerts")`.
+4. `route_alerts` is **skipped**.
 
 ## Observability (v0.4+)
 
@@ -653,7 +762,7 @@ FLOW rétention_clients
          vérifier_ticket_zendesk(risque.client)
            -> rédiger_mail_rétention(risque, dernier_ticket)
 
-  IF détecter_churn.FAILS:
+  RESCUE détecter_churn:
     -> abort("Impossible de détecter le churn — vérifier le format du CSV")
 
 RESOURCES
