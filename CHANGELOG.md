@@ -1,6 +1,8 @@
 # Changelog
 
-## v0.8.0 — RESCUE handler (unreleased)
+## Unreleased
+
+## v0.8.0 — 2026-05-10
 
 ### Language
 
