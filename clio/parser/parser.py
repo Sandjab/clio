@@ -993,8 +993,15 @@ class _Parser:
         chain: list[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock] = [self.parse_flow_item()]
         # Skip newlines and indent/dedent changes between chain elements,
         # then look for ARROW. The -> may appear on a more-indented continuation line.
+        # Track the net INDENT count consumed here so we can pair each one
+        # with a matching DEDENT BEFORE the rescue-collection loop runs;
+        # otherwise the rescue loop would conflate chain-continuation
+        # DEDENTs with the FLOW's own closing DEDENT.
+        chain_indent_depth = 0
         while True:
             while self.peek().type in (TokenType.NEWLINE, TokenType.INDENT):
+                if self.peek().type == TokenType.INDENT:
+                    chain_indent_depth += 1
                 self.advance()
             if self.peek().type == TokenType.ARROW:
                 self.advance()
@@ -1002,22 +1009,39 @@ class _Parser:
             else:
                 break
 
-        # Collect RESCUE blocks after the chain (peer-indent inside FLOW).
-        # Greedily consume trailing trivia (NEWLINE/DEDENT) — when the next
-        # non-trivia token is RESCUE, parse it; otherwise we have run past
-        # the FLOW's closing DEDENT and the next decl (RESOURCES, STEP,
-        # CONTRACT, EOF) sits at the position parse_program expects.
+        # Pair the chain-continuation INDENTs with their closing DEDENTs
+        # so the rescue-collection loop sees only the chain-item indent
+        # (the FLOW body's INDENT level) and the FLOW's own closing DEDENT.
+        while chain_indent_depth > 0:
+            while self.peek().type == TokenType.NEWLINE:
+                self.advance()
+            if self.peek().type != TokenType.DEDENT:
+                break
+            self.advance()
+            chain_indent_depth -= 1
+
+        # Collect RESCUE blocks after the chain at the chain-item indent
+        # level INSIDE the FLOW block (per LANGUAGE_SPEC § flow_decl). Only
+        # NEWLINE trivia is consumed between the chain and the rescues; a
+        # DEDENT here closes the FLOW block and stops rescue collection so
+        # the next top-level decl (RESOURCES / STEP / CONTRACT / EOF) is
+        # parsed by parse_program.
         rescues: list[RescueBlock] = []
         while True:
-            while self.peek().type in (TokenType.NEWLINE, TokenType.DEDENT):
+            while self.peek().type == TokenType.NEWLINE:
                 self.advance()
-                if self.peek().type == TokenType.KEYWORD and self.peek().value == "RESCUE":
-                    break
             tok = self.peek()
             if tok.type == TokenType.KEYWORD and tok.value == "RESCUE":
                 rescues.append(self.parse_rescue_block())
                 continue
             break
+
+        # Close the FLOW's INDENT block: consume any DEDENTs (and
+        # interleaved NEWLINEs) that the lexer emitted to close out
+        # nested bodies and the FLOW itself, leaving the next top-level
+        # decl token in place for parse_program.
+        while self.peek().type in (TokenType.NEWLINE, TokenType.DEDENT):
+            self.advance()
 
         return FlowDecl(
             name=ident.value,

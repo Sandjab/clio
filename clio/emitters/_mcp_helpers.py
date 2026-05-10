@@ -438,10 +438,7 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
         chain_lines.clear()
         for sub in rb.body:
             _emit_item(sub, "    ", set())
-        rescue_body = "\n".join(
-            "\n".join(line for line in cl.split("\n"))
-            for cl in chain_lines
-        )
+        rescue_body = "\n".join(chain_lines)
         rescue_helpers.append(
             f"async def _rescue_{rb.step_name}(state: dict, _session=None) -> None:\n"
             + rescue_body

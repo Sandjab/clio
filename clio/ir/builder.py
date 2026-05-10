@@ -327,9 +327,18 @@ def _build_flow(
         item.step_name for item in items if isinstance(item, CallIR)
     }
     seen_rescue_steps: set[str] = set()
+    # Scope each RESCUE body to the state fields available BEFORE the
+    # protected step runs. If we passed the post-chain `available` dict,
+    # rescue bodies could reference fields produced by steps that come
+    # AFTER the protected step in source order — but at runtime those
+    # later steps never ran (the protected step raised), so state[...]
+    # would KeyError. Replay the top-level chain up to (but excluding)
+    # the protected step's CallIR; only top-level CallIRs and PARALLEL
+    # FOR EACH collectors expose fields to the outer scope.
     rescues_ir = tuple(
         _build_rescue(
-            rb, steps_by_name, contracts, available,
+            rb, steps_by_name, contracts,
+            _scope_before_step(items, rb.step_name, steps_by_name),
             top_level_step_names, seen_rescue_steps,
         )
         for rb in decl.rescues
@@ -340,6 +349,36 @@ def _build_flow(
         rescues=rescues_ir,
         line=decl.line,
     )
+
+
+def _scope_before_step(
+    chain_items: list,
+    protected_step_name: str,
+    steps_by_name: dict[str, StepIR],
+) -> dict[str, TypeExpr]:
+    """Return the state-field type map visible just BEFORE `protected_step_name`
+    runs in the top-level chain. Mirrors the field-publishing logic of
+    `_build_flow_items`: top-level CallIRs publish their `step.gives`, and
+    PARALLEL FOR EACH with a collector publishes `List<body.gives.type>`.
+    Stops as soon as the protected step's CallIR is encountered; nested
+    inner blocks (IF/MATCH/WHILE/sequential FOR EACH) do not expose fields
+    to the outer scope (no narrowing in v0)."""
+    scope: dict[str, TypeExpr] = {}
+    for item in chain_items:
+        if isinstance(item, CallIR):
+            if item.step_name == protected_step_name:
+                break
+            step = steps_by_name.get(item.step_name)
+            if step is not None and step.gives is not None:
+                scope[step.gives.name] = step.gives.type
+            continue
+        if isinstance(item, ForEachIR) and item.parallel and item.collector and len(item.body) == 1:
+            body_call = item.body[0]
+            if hasattr(body_call, "step_name"):
+                body_step = steps_by_name.get(body_call.step_name)
+                if body_step is not None and body_step.gives is not None:
+                    scope[item.collector] = ListType(inner=body_step.gives.type)
+    return scope
 
 
 def _build_rescue(

@@ -226,10 +226,14 @@ FLOW p
 
 # (5) Rescue body without terminal abort
 def test_rescue_body_must_end_with_abort():
-    """Rescue body's last top-level item must be a call to abort."""
+    """Rescue body's last top-level item must be a call to abort.
+
+    Rescue is on `b` (so `a.gives = y` is in scope before `b` runs);
+    the body calls `b(y=y)` which is well-typed but lacks a terminal
+    abort — the IR builder must reject it on that ground."""
     src = _src(
-        "  a(x=1)\n\n"
-        "  RESCUE a:\n"
+        "  a(x=1) -> b(y=y)\n\n"
+        "  RESCUE b:\n"
         "    -> b(y=y)\n"  # body ends with `b`, not `abort`
     )
     with pytest.raises(IRBuildError, match="must end with abort"):
@@ -240,18 +244,27 @@ def test_rescue_body_must_end_with_abort():
 def test_rescue_abort_in_branch_not_enough():
     """An IF/ELSE block at the rescue body's tail counts as a non-abort
     top-level item even if every branch terminates with abort.
+
+    `setup` runs BEFORE `a`, so `result` is in scope when the rescue on
+    `a` fires; the body's IF reads `result.ok` legitimately. The error
+    we expect is solely about the missing top-level terminal abort.
     """
     src = """
 CONTRACT report
   SHAPE: { ok: bool }
 
-STEP a
+STEP setup
   TAKES: x: int
   GIVES: result: report
   MODE:  exact
 
+STEP a
+  TAKES: r: report
+  GIVES: y: int
+  MODE:  exact
+
 FLOW p
-  a(x=1)
+  setup(x=1) -> a(r=result)
 
   RESCUE a:
     IF result.ok == true:
@@ -285,11 +298,19 @@ FLOW p
 def test_walker_descends_into_rescue_body():
     """_validate_parallel_for_each must descend into rescue.body. A nested
     FOR EACH PARALLEL inside a rescue body must be rejected with the same
-    nesting-parallel error as anywhere else in the FLOW."""
+    nesting-parallel error as anywhere else in the FLOW.
+
+    `seed` runs BEFORE `process` in the top-level chain, so `items` is in
+    scope when the rescue on `process` fires."""
     src = """
-STEP load
+STEP seed
   TAKES: x: int
   GIVES: items: List<int>
+  MODE:  exact
+
+STEP process
+  TAKES: items: List<int>
+  GIVES: out: int
   MODE:  exact
 
 STEP work
@@ -298,9 +319,9 @@ STEP work
   MODE:  exact
 
 FLOW p
-  load(x=1)
+  seed(x=1) -> process(items=items)
 
-  RESCUE load:
+  RESCUE process:
     -> FOR EACH a IN items PARALLEL AS A:
          FOR EACH b IN items PARALLEL AS B:
            work(i=b)
@@ -308,3 +329,72 @@ FLOW p
 """
     with pytest.raises(IRBuildError, match="nested inside another"):
         build_ir(_parse(src))
+
+
+def test_rescue_cannot_reference_field_from_later_step():
+    """A RESCUE for step_a must not validate against fields produced
+    by steps that come after step_a in the top-level chain — those
+    steps haven't run when the rescue fires.
+
+    Without proper scoping, this would pass IR validation and produce
+    a runtime KeyError on state['yb']."""
+    src = """
+STEP a
+  TAKES: x: int
+  GIVES: ya: int
+  MODE:  exact
+
+STEP b
+  TAKES: ya: int
+  GIVES: yb: int
+  MODE:  exact
+
+STEP cleanup
+  TAKES: yb: int
+  GIVES: ok: bool
+  MODE:  exact
+
+FLOW p
+  a(x=1) -> b(ya=ya)
+
+  RESCUE a:
+    -> cleanup(yb=yb)
+    -> abort("see cleanup")
+"""
+    # `yb` is produced by `b`, which runs AFTER `a`. If `a` raises,
+    # `b` never runs, so the rescue body cannot legitimately reference
+    # `yb`. The IR builder must reject this at compile time.
+    with pytest.raises(IRBuildError, match="not produced|unknown"):
+        build_ir(_parse(src))
+
+
+def test_rescue_can_reference_earlier_field():
+    """Sanity check the inverse: a RESCUE for step_b CAN reference
+    `ya` (produced by step_a, which runs BEFORE step_b)."""
+    src = """
+STEP a
+  TAKES: x: int
+  GIVES: ya: int
+  MODE:  exact
+
+STEP b
+  TAKES: ya: int
+  GIVES: yb: int
+  MODE:  exact
+
+STEP cleanup
+  TAKES: ya: int
+  GIVES: ok: bool
+  MODE:  exact
+
+FLOW p
+  a(x=1) -> b(ya=ya)
+
+  RESCUE b:
+    -> cleanup(ya=ya)
+    -> abort("see cleanup")
+"""
+    graph = build_ir(_parse(src))
+    rescues = graph.flow.rescues
+    assert len(rescues) == 1
+    assert rescues[0].step_name == "b"
