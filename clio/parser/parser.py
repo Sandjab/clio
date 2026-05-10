@@ -1,3 +1,5 @@
+from urllib.parse import urlparse
+
 from clio.parser.ast_nodes import (
     ApiInvoke,
     CacheConfig,
@@ -1082,8 +1084,13 @@ class _Parser:
                 f"RESOURCES.mcp_servers.{name}.url must be a non-empty string",
                 line, col,
             )
-        if not (url.startswith("https://") or url.startswith("http://localhost")
-                or url.startswith("http://127.0.0.1")):
+        # Use urlparse + hostname check (not startswith) — `http://localhost.x.com`
+        # would otherwise pass the prefix check and open SSRF surface.
+        parsed = urlparse(url)
+        if not (
+            parsed.scheme == "https"
+            or (parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1"))
+        ):
             raise ParseError(
                 f"RESOURCES.mcp_servers.{name}.url must be https:// "
                 f"(or http:// for localhost / 127.0.0.1), got {url!r}",

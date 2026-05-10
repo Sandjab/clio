@@ -110,7 +110,20 @@ class _Client:
 
 
 _clients: dict[str, _Client] = {}
-_clients_lock = asyncio.Lock()
+# Lock is created lazily inside the background loop via `_get_clients_lock()`.
+# Initialising at module level would bind it to whatever loop happens to be
+# current at import time (often none — RuntimeError on Python <3.10), which
+# differs from the daemon-thread loop where `_ensure_client` actually runs.
+_clients_lock: asyncio.Lock | None = None
+
+
+def _get_clients_lock() -> asyncio.Lock:
+    """Return the singleton lock, creating it on first call inside the
+    running event loop. Must be invoked from the loop's own thread."""
+    global _clients_lock
+    if _clients_lock is None:
+        _clients_lock = asyncio.Lock()
+    return _clients_lock
 
 
 def _import_mcp() -> tuple[Any, Any, Any, Any, Any]:
@@ -141,7 +154,7 @@ async def _ensure_client(server_spec: dict[str, Any]) -> _Client:
     """Look up or start the client for `server_spec['name']`. Returns
     the cached _Client on subsequent calls."""
     name = server_spec["name"]
-    async with _clients_lock:
+    async with _get_clients_lock():
         if name in _clients:
             return _clients[name]
 

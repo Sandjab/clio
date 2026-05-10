@@ -1,3 +1,5 @@
+import sys
+
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
     ApiInvokeIR,
@@ -1084,14 +1086,12 @@ def _validate_mcp_tool_servers(graph: FlowGraph) -> None:
                 )
 
     unused = sorted(set(declared) - referenced)
-    if unused:
-        import sys
-        for name in unused:
-            print(
-                f"warning: RESOURCES.mcp_servers.{name} is declared but never "
-                f"referenced by any impl.mcp_tool step (dead spec)",
-                file=sys.stderr,
-            )
+    for name in unused:
+        print(
+            f"warning: RESOURCES.mcp_servers.{name} is declared but never "
+            f"referenced by any impl.mcp_tool step (dead spec)",
+            file=sys.stderr,
+        )
 
 
 def _render(t: TypeExpr) -> str:

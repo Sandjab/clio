@@ -1508,6 +1508,38 @@ def test_parse_mcp_servers_url_must_be_https_or_localhost():
         parse(src)
 
 
+def test_parse_mcp_servers_url_rejects_localhost_lookalike_ssrf():
+    # `startswith("http://localhost")` would let through `localhost.attacker.com`.
+    # urlparse + hostname check correctly rejects it.
+    src = (
+        _MCP_FLOW_PROLOG
+        + "RESOURCES\n"
+        + "  target: python\n"
+        + "  mcp_servers:\n"
+        + "    docs:\n"
+        + "      transport: sse\n"
+        + '      url:       "http://localhost.attacker.com/mcp"\n'
+    )
+    with pytest.raises(ParseError, match="url must be https"):
+        parse(src)
+
+
+def test_parse_mcp_servers_url_rejects_127_lookalike_ssrf():
+    # Same family — `127.0.0.1.nip.io` resolves elsewhere but startswith would
+    # have accepted it.
+    src = (
+        _MCP_FLOW_PROLOG
+        + "RESOURCES\n"
+        + "  target: python\n"
+        + "  mcp_servers:\n"
+        + "    docs:\n"
+        + "      transport: sse\n"
+        + '      url:       "http://127.0.0.1.nip.io/mcp"\n'
+    )
+    with pytest.raises(ParseError, match="url must be https"):
+        parse(src)
+
+
 def test_parse_mcp_tool_args_with_nested_dict_and_list():
     src = (
         "STEP query\n"
