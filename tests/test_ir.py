@@ -281,7 +281,7 @@ def test_build_ir_propagates_impl_rest():
         '    url: "https://api.example.com/v1/items"\n'
         '    response_path: "items[0]"\n'
         "    timeout: 30s\n"
-        "    retries: 3\n"
+        "    retry: {attempts: 3}\n"
     )
     step = build_ir(parse(src)).steps[0]
     assert step.impl is not None
@@ -290,7 +290,9 @@ def test_build_ir_propagates_impl_rest():
     assert step.impl.url == "https://api.example.com/v1/items"
     assert step.impl.response_path == "items[0]"
     assert step.impl.timeout_seconds == 30
-    assert step.impl.retries == 3
+    assert step.impl.retry is not None
+    assert step.impl.retry.attempts == 3
+    assert step.impl.retry.backoff == "exponential"
 
 
 def test_build_ir_propagates_impl_shell_shlex_split():

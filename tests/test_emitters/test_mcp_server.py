@@ -255,7 +255,9 @@ def test_emit_rest_step_body_uses_requests_request(tmp_path):
     MCPServerEmitter().emit(build_ir(parse(src)), tmp_path)
     body = (tmp_path / "f" / "steps" / "fetch.py").read_text()
     assert "requests.request" in body
-    assert "_url.replace('${url}', str(url))" in body
+    # URL templating now goes through the runtime helper.
+    assert "_rest.subst('${url}', _takes)" in body
+    assert "'url': url" in body
 
 
 def test_emit_shell_step_body_uses_subprocess_run(tmp_path):

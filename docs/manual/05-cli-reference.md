@@ -52,12 +52,26 @@ clio graph <source.clio> [--format mermaid|dot|html] [--output <file>]
 
 **`html`** — single self-contained HTML viewer with click-to-inspect cards (since v0.5.0; Tabloid-style polish since v0.6.0). `FOR EACH … PARALLEL` blocks render as a soft-tinted wrapper with a chip-pill banner astride the top border (`git-branch` icon + loop signature + `PARALLEL` kicker). Open in any browser with internet access (loads `mermaid@10` + Geist fonts from CDN).
 
+**Replay an `events.jsonl` trace inside the viewer (since v0.9):** the toolbar exposes a "Drop events.jsonl" target. Drag-drop a trace produced by a compiled flow run (set `CLIO_LOG=1` and `CLIO_LOG_FILE=events.jsonl` to emit one — see [Environment variables](#environment-variables)) and a control bar appears with:
+
+- **Play / pause / step-prev / step-next / restart** — walk the trace event by event.
+- **Speed slider** (`0.1×` → `10×`, default `2×`) — scales the inter-event delay against the real `ts` timestamps in the file. A 30 s LLM call replays in 15 s at default speed; bump to `10×` for a sparse trace.
+- **Progress strip** — `N / total` events, percentage fill, and the current event line.
+- **Follow checkbox** (default on) — auto-shows the side panel of the step the trace is currently inside (driven by `step_start` events). Click any node manually to take over: auto-follow disables itself until you restart.
+- **Stats** — running totals: `done`, `fail` (if any), `total` walltime in seconds derived from `step_end.duration_ms`.
+
+Active steps pulse with a colored stroke; completed steps dim slightly; failed steps (`step_end` with `success: false`) get a red stroke. `FOR EACH PARALLEL` blocks light up multiple inner steps simultaneously, matching what `parallel_block_start` / `parallel_block_end` events bracket.
+
 **Examples:**
 
 ```bash
 clio graph flow.clio                            # mermaid to stdout
 clio graph flow.clio --format dot               # dot to stdout
 clio graph flow.clio --format html -o flow.html # rich viewer to file
+
+# Generate a replay-ready trace:
+CLIO_LOG=1 CLIO_LOG_FILE=events.jsonl python -m my_flow_pkg
+# Then drag events.jsonl into the toolbar drop target of flow.html.
 ```
 
 ## `gen` — generate a `.clio` from a natural language description

@@ -61,6 +61,8 @@ class MCPServerEmitter(BaseEmitter):
         )
         if cache_active:
             (runtime_dir / "cache.py").write_text((src_dir / "cache.py").read_text())
+        if needs_requests:
+            (runtime_dir / "rest.py").write_text((src_dir / "rest.py").read_text())
 
         contracts_by_name = {c.name: c for c in graph.contracts}
         for step in graph.steps:

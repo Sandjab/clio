@@ -13,8 +13,13 @@ from clio.ir.graph import (
     CallIR,
     CliInvokeIR,
     ContractIR,
+    FileBodyIR,
     ForEachIR,
+    FormBodyIR,
     InvokeIR,
+    JsonBodyIR,
+    MultipartBodyIR,
+    RawBodyIR,
     RestImplIR,
     ShellImplIR,
     StepIR,
@@ -537,95 +542,176 @@ def emit_rest_step(
         if step.gives is not None else "(no GIVES)"
     )
 
-    templating_active = "${" in impl.url
-    if templating_active:
-        url_lines = [f"    _url = {impl.url!r}"]
-        for t in step.takes:
-            fname = _to_field_name(t.name)
-            url_lines.append(
-                f"    _url = _url.replace('${{{t.name}}}', str({fname}))"
-            )
-        url_block = "\n".join(url_lines) + "\n"
-        url_arg = "url=_url"
-        unused_takes_block = ""
-    else:
-        url_block = ""
-        url_arg = f"url={impl.url!r}"
-        unused_takes_block = (
-            "\n".join(f"    _ = {_to_field_name(t.name)}" for t in step.takes)
-            + "\n"
-            if step.takes else ""
+    takes_dict_lines = (
+        ["    _takes = {"]
+        + [f"        {t.name!r}: {_to_field_name(t.name)}," for t in step.takes]
+        + ["    }"]
+        if step.takes else ["    _takes: dict = {}"]
+    )
+
+    url_line = f"    _url = _rest.subst({impl.url!r}, _takes)"
+
+    kwargs_lines: list[str] = ["    _kwargs: dict = {}"]
+    if impl.query is not None:
+        kwargs_lines.append(
+            f"    _kwargs['params'] = _rest.render_dict({tuple(impl.query)!r}, _takes)"
         )
 
-    timeout_arg = (
-        f"timeout={impl.timeout_seconds}"
-        if impl.timeout_seconds is not None else "timeout=None"
-    )
+    headers_initialized = False
+    if impl.headers is not None:
+        kwargs_lines.append(
+            f"    _kwargs['headers'] = _rest.render_dict({tuple(impl.headers)!r}, _takes)"
+        )
+        headers_initialized = True
+
+    def _ensure_headers() -> str:
+        nonlocal headers_initialized
+        if headers_initialized:
+            return ""
+        headers_initialized = True
+        return "    _kwargs.setdefault('headers', {})\n"
+
+    if impl.body is not None:
+        if isinstance(impl.body, JsonBodyIR):
+            kwargs_lines.append(
+                f"    _kwargs['json'] = _rest.render_dict({tuple(impl.body.fields)!r}, _takes)"
+            )
+        elif isinstance(impl.body, RawBodyIR):
+            kwargs_lines.append(
+                f"    _kwargs['data'] = _rest.subst({impl.body.template!r}, _takes)"
+            )
+            kwargs_lines.append(_ensure_headers().rstrip("\n") or "")
+            kwargs_lines.append(
+                "    _kwargs['headers'].setdefault('Content-Type', 'text/plain')"
+            )
+        elif isinstance(impl.body, FileBodyIR):
+            kwargs_lines.append(
+                f"    _data, _ct = _rest.read_file_body({impl.body.path!r}, _takes)"
+            )
+            kwargs_lines.append("    _kwargs['data'] = _data")
+            kwargs_lines.append(_ensure_headers().rstrip("\n") or "")
+            kwargs_lines.append("    _kwargs['headers'].setdefault('Content-Type', _ct)")
+        elif isinstance(impl.body, FormBodyIR):
+            kwargs_lines.append(
+                f"    _kwargs['data'] = _rest.render_dict({tuple(impl.body.fields)!r}, _takes)"
+            )
+        elif isinstance(impl.body, MultipartBodyIR):
+            kwargs_lines.append("    _form: dict = {}")
+            kwargs_lines.append("    _files: dict = {}")
+            kwargs_lines.append(
+                f"    for _k, _v in {tuple(impl.body.fields)!r}:"
+            )
+            kwargs_lines.append("        if isinstance(_v, str) and _v.startswith('@'):")
+            kwargs_lines.append("            _path = _v[1:]")
+            kwargs_lines.append(
+                "            _files[_k] = ("
+                "_path.rsplit('/', 1)[-1], "
+                "open(_path, 'rb'), "
+                "_rest.content_type_for_path(_path))"
+            )
+            kwargs_lines.append("        else:")
+            kwargs_lines.append(
+                "            _form[_k] = _rest.subst(_v, _takes) if isinstance(_v, str) else _v"
+            )
+            kwargs_lines.append("    if _form:")
+            kwargs_lines.append("        _kwargs['data'] = _form")
+            kwargs_lines.append("    if _files:")
+            kwargs_lines.append("        _kwargs['files'] = _files")
+
+    if impl.timeout_seconds is not None:
+        kwargs_lines.append(f"    _kwargs['timeout'] = {impl.timeout_seconds}")
+    else:
+        kwargs_lines.append("    _kwargs['timeout'] = None")
+
+    # Retry block (or single-shot)
+    if impl.retry is not None:
+        request_block_lines = [
+            f"    _attempts = {impl.retry.attempts}",
+            f"    _retry_on = {tuple(impl.retry.on)!r}",
+            f"    _backoff = {impl.retry.backoff!r}",
+            f"    _base = {impl.retry.base}",
+            f"    _cap = {impl.retry.cap}",
+            "    response = None",
+            "    for _i in range(_attempts):",
+            "        try:",
+            f"            response = requests.request(method={impl.method!r}, url=_url, **_kwargs)",
+            "        except Exception as _e:",
+            "            if _rest.is_retryable_exception(_e, _retry_on) and _i + 1 < _attempts:",
+            "                time.sleep(_rest.compute_delay(_i + 1, _base, _cap, _backoff))",
+            "                continue",
+            "            raise",
+            "        if (_rest.is_retryable_response(response.status_code, _retry_on)",
+            "                and _i + 1 < _attempts):",
+            "            _ra = _rest.parse_retry_after(response.headers.get('Retry-After'))",
+            "            time.sleep(_ra if _ra is not None else _rest.compute_delay(_i + 1, _base, _cap, _backoff))",
+            "            continue",
+            "        break",
+            "    assert response is not None",
+        ]
+    else:
+        request_block_lines = [
+            f"    response = requests.request(method={impl.method!r}, url=_url, **_kwargs)",
+        ]
 
     if impl.response_path is not None:
-        traversal_block = (
-            f"    _path = {impl.response_path!r}\n"
-            f"    _data = response.json()\n"
-            f"    for _part in _re.findall(r'[^.\\[\\]]+|\\[\\d+\\]', _path):\n"
-            f"        if _part.startswith('['):\n"
-            f"            _data = _data[int(_part[1:-1])]\n"
-            f"        else:\n"
-            f"            _data = _data[_part]\n"
-            f'    _log.emit("step_end", step={step.name!r}, mode="exact",\n'
-            f'              duration_ms=int((time.monotonic() - _t0) * 1000), success=True)\n'
-            f"    return _data\n"
-        )
+        traversal_block_lines = [
+            f"    _path = {impl.response_path!r}",
+            "    _data = response.json()",
+            "    for _part in _re.findall(r'[^.\\[\\]]+|\\[\\d+\\]', _path):",
+            "        if _part.startswith('['):",
+            "            _data = _data[int(_part[1:-1])]",
+            "        else:",
+            "            _data = _data[_part]",
+            f'    _log.emit("step_end", step={step.name!r}, mode="exact",',
+            "              duration_ms=int((time.monotonic() - _t0) * 1000), success=True)",
+            "    return _data",
+        ]
         extra_imports = "import re as _re\n"
     else:
-        traversal_block = (
-            f'    _log.emit("step_end", step={step.name!r}, mode="exact",\n'
-            f'              duration_ms=int((time.monotonic() - _t0) * 1000), success=True)\n'
-            f"    return response.json()\n"
-        )
+        traversal_block_lines = [
+            f'    _log.emit("step_end", step={step.name!r}, mode="exact",',
+            "              duration_ms=int((time.monotonic() - _t0) * 1000), success=True)",
+            "    return response.json()",
+        ]
         extra_imports = ""
 
-    retries_note = (
-        f"# retries={impl.retries} requested but not implemented in v0.2; "
-        "wire ON_FAIL on rest steps in a future slice.\n"
-        if impl.retries is not None else ""
-    )
-
-    step_start_block = (
-        f'    _t0 = time.monotonic()\n'
-        f'    _log.emit("step_start", step={step.name!r}, mode="exact")\n'
-    )
     contracts_import = (
         "from .. import contracts\n" if _uses_contract_refs(step) else ""
     )
+
+    body_lines = (
+        [
+            f'def {step.name}({params}) -> {ret_type}:',
+            '    _t0 = time.monotonic()',
+            f'    _log.emit("step_start", step={step.name!r}, mode="exact")',
+        ]
+        + takes_dict_lines
+        + [url_line]
+        + [ln for ln in kwargs_lines if ln]
+        + request_block_lines
+        + ["    response.raise_for_status()"]
+        + traversal_block_lines
+    )
+
     return (
         f'"""STEP {step.name} (exact, impl: rest)\n'
         f'TAKES:\n'
         f'    {takes_doc}\n'
         f'GIVES:\n'
         f'    {gives_doc}\n\n'
-        f'Auto-generated from `impl: mode: rest`. TAKES are substituted into\n'
-        f'the URL via ${{var}} placeholders; templating of headers/body and\n'
-        f'parsing of query/headers/body fields is not yet supported.\n'
+        f'Auto-generated from `impl: mode: rest`. URL, query, headers, and body\n'
+        f'string values support ${{var}} substitution from TAKES and full-value\n'
+        f'env:NAME resolution from os.environ. See LANGUAGE_SPEC.md §impl.mode: rest.\n'
         f'"""\n'
         f'from __future__ import annotations\n\n'
         f'import time\n'
         f'import requests\n'
         f'{extra_imports}\n'
         f'from ..clio_runtime import logging as _log\n'
+        f'from ..clio_runtime import rest as _rest\n'
         f'{contracts_import}'
         f'\n\n'
-        f'{retries_note}'
-        f'def {step.name}({params}) -> {ret_type}:\n'
-        f'{step_start_block}'
-        f'{unused_takes_block}'
-        f'{url_block}'
-        f'    response = requests.request(\n'
-        f'        method={impl.method!r},\n'
-        f'        {url_arg},\n'
-        f'        {timeout_arg},\n'
-        f'    )\n'
-        f'    response.raise_for_status()\n'
-        f'{traversal_block}'
+        + "\n".join(body_lines) + "\n"
     )
 
 

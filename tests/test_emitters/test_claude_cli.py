@@ -235,8 +235,9 @@ def test_claude_cli_emit_rest_step_calls_requests(tmp_path):
     assert "import requests" in body
     assert "requests.request(" in body
     assert "method='GET'" in body
-    assert "url='https://api.example.com/geocode'" in body
-    assert "timeout=30" in body
+    # URL is now templated via the bundled clio_runtime.rest helper.
+    assert "_rest.subst('https://api.example.com/geocode', _takes)" in body
+    assert "_kwargs['timeout'] = 30" in body
 
 
 def test_claude_cli_emit_rest_step_traverses_response_path(tmp_path):
@@ -279,17 +280,67 @@ _REST_TEMPLATED_SRC_CLI = (
 def test_claude_cli_emit_rest_step_templates_takes_into_url(tmp_path):
     ClaudeCLIEmitter().emit(build_ir(parse(_REST_TEMPLATED_SRC_CLI)), tmp_path)
     body = (tmp_path / "steps" / "01_geocode.py").read_text()
-    assert "url = 'https://api.example.com/geo/${country}?q=${address}'" in body
-    assert "url = url.replace('${address}', str(args.address))" in body
-    assert "url = url.replace('${country}', str(args.country))" in body
-    assert "url=url," in body
-    assert "_ = args.address" not in body
-    assert "_ = args.country" not in body
+    # URL templating is now delegated to _rest.subst (URL-only ${var} via TAKES).
+    assert (
+        "_rest.subst('https://api.example.com/geo/${country}?q=${address}', _takes)"
+    ) in body
+    assert "'address': args.address" in body
+    assert "'country': args.country" in body
+    assert "url=_url" in body
 
 
 def test_claude_cli_emit_rest_step_templated_parses_as_python(tmp_path):
     import ast
     ClaudeCLIEmitter().emit(build_ir(parse(_REST_TEMPLATED_SRC_CLI)), tmp_path)
+    body = (tmp_path / "steps" / "01_geocode.py").read_text()
+    ast.parse(body)
+
+
+# --- impl.rest extended emission for claude-cli (query/headers/body/retry) ---
+
+_CLI_REST_FULL_SRC = (
+    "STEP geocode\n"
+    "  TAKES: address: str\n"
+    "  GIVES: location: str\n"
+    "  MODE:  exact\n"
+    "  impl:\n"
+    "    mode: rest\n"
+    "    method: GET\n"
+    '    url: "https://api.example.com/geo"\n'
+    '    query: {address: "${address}", key: "env:API_KEY"}\n'
+    '    headers: {Accept: "application/json"}\n'
+    '    response_path: "x"\n'
+    "    retry: {attempts: 3, on: [\"5xx\", \"timeout\"]}\n"
+    "FLOW geo\n"
+    '  geocode(address="123 Main St")\n'
+)
+
+
+def test_claude_cli_emit_rest_step_emits_query_and_headers(tmp_path):
+    ClaudeCLIEmitter().emit(build_ir(parse(_CLI_REST_FULL_SRC)), tmp_path)
+    body = (tmp_path / "steps" / "01_geocode.py").read_text()
+    assert "_kwargs['params'] = _rest.render_dict(" in body
+    assert "_kwargs['headers'] = _rest.render_dict(" in body
+
+
+def test_claude_cli_emit_rest_step_emits_retry_loop(tmp_path):
+    ClaudeCLIEmitter().emit(build_ir(parse(_CLI_REST_FULL_SRC)), tmp_path)
+    body = (tmp_path / "steps" / "01_geocode.py").read_text()
+    assert "_attempts = 3" in body
+    assert "for _i in range(_attempts):" in body
+    assert "_rest.compute_delay(" in body
+
+
+def test_claude_cli_emit_copies_rest_runtime_when_rest_step(tmp_path):
+    ClaudeCLIEmitter().emit(build_ir(parse(_CLI_REST_FULL_SRC)), tmp_path)
+    rest_module = (tmp_path / "clio_runtime" / "rest.py")
+    assert rest_module.exists()
+    assert "def subst(" in rest_module.read_text()
+
+
+def test_claude_cli_emit_rest_step_full_parses_as_python(tmp_path):
+    import ast
+    ClaudeCLIEmitter().emit(build_ir(parse(_CLI_REST_FULL_SRC)), tmp_path)
     body = (tmp_path / "steps" / "01_geocode.py").read_text()
     ast.parse(body)
 

@@ -100,6 +100,8 @@ class PythonEmitter(BaseEmitter):
         src_dir = Path(src_pkg.__file__).parent
         (runtime_dir / "cache.py").write_text((src_dir / "cache.py").read_text())
         (runtime_dir / "logging.py").write_text((src_dir / "logging.py").read_text())
+        if needs_requests:
+            (runtime_dir / "rest.py").write_text((src_dir / "rest.py").read_text())
 
     def _emit_contracts(self, graph: FlowGraph) -> str:
         return emit_contracts(graph)

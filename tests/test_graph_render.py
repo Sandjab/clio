@@ -416,3 +416,87 @@ def test_html_exposes_rescue_meta():
     body = entry["body"]
     assert any(item.get("step_name") == "abort" and item.get("message") == "boom"
                for item in body)
+
+
+# --------------------------------------------------------------------------
+# Replay UI (drag-drop events.jsonl)
+# --------------------------------------------------------------------------
+
+
+def test_html_emits_replay_dropzone_in_toolbar():
+    """The toolbar must contain a labelled drop target with a hidden file
+    input so users can pick or drop an events.jsonl trace."""
+    out = _html(_FLOW_SRC)
+    assert 'id="replay-drop"' in out
+    assert 'id="replay-file"' in out
+    assert 'accept=".jsonl' in out
+    assert 'Drop events.jsonl' in out
+
+
+def test_html_emits_replay_control_bar_hidden_by_default():
+    """The control bar starts hidden (display: none in CSS) and exposes
+    play/prev/next/restart, a speed slider (0.1x .. 10x, default 2x), a
+    progress strip, a follow checkbox, and a stats area."""
+    out = _html(_FLOW_SRC)
+    assert 'id="replay-bar"' in out
+    assert 'class="replay-bar"' in out
+    # Controls
+    for elem_id in (
+        "replay-play", "replay-prev", "replay-next", "replay-restart",
+        "replay-speed", "replay-speed-value", "replay-follow",
+        "replay-progress-text", "replay-fill", "replay-current-step",
+        "replay-stats",
+    ):
+        assert f'id="{elem_id}"' in out, f"missing replay element id={elem_id!r}"
+    # Speed slider attributes (range, default, step)
+    assert 'min="0.1"' in out
+    assert 'max="10"' in out
+    assert 'value="2"' in out
+
+
+def test_html_replay_css_classes_present():
+    """CSS rules for active/done/fail node states must be present so the
+    JS can drive node decoration via classList."""
+    out = _html(_FLOW_SRC)
+    assert "g.node.replay-active" in out
+    assert "g.node.replay-done" in out
+    assert "g.node.replay-fail" in out
+    assert "@keyframes clio-replay-pulse" in out
+
+
+def test_html_replay_js_engine_is_embedded():
+    """The Replay JS module is embedded with all the expected entry points
+    (load, render, step, play, restart, setSpeed, setFollow,
+    noteManualSelection)."""
+    out = _html(_FLOW_SRC)
+    assert "const Replay =" in out
+    for entry in (
+        "load(text)",
+        "render()",
+        "step(delta)",
+        "play()",
+        "pause()",
+        "restart()",
+        "setSpeed(v)",
+        "setFollow(on)",
+        "noteManualSelection()",
+    ):
+        assert entry in out, f"missing Replay entry point: {entry!r}"
+
+
+def test_html_replay_handles_step_start_step_end_events():
+    """The render() loop classifies node states from `step_start` /
+    `step_end` events with the `success` field."""
+    out = _html(_FLOW_SRC)
+    assert "'step_start'" in out
+    assert "'step_end'" in out
+    assert "success === false" in out
+
+
+def test_html_replay_disables_autofollow_on_manual_click():
+    """When the user clicks a node directly during a replay, the engine
+    must stop fighting them by disabling auto-follow until restart.
+    This is implemented by wrapping `activateNode`."""
+    out = _html(_FLOW_SRC)
+    assert "Replay.noteManualSelection()" in out
+    assert "_origActivateNode" in out

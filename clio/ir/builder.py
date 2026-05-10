@@ -8,19 +8,26 @@ from clio.ir.graph import (
     ConditionIR,
     ContractIR,
     FieldIR,
+    FileBodyIR,
     FlowGraph,
     FlowIR,
     ForEachIR,
+    FormBodyIR,
     IfBlockIR,
     ImplIR,
     InvokeIR,
+    JsonBodyIR,
     MatchBlockIR,
     MatchCaseIR,
+    MultipartBodyIR,
     OnFailChainIR,
     OnFailStrategyIR,
+    RawBodyIR,
     RescueBlockIR,
     ResourcesIR,
+    RestBodyIR,
     RestImplIR,
+    RetryPolicyIR,
     ShellImplIR,
     StepIR,
     WhileBlockIR,
@@ -36,22 +43,29 @@ from clio.parser.ast_nodes import (
     ContractRef,
     EnumType,
     FieldRefExpr,
+    FileBody,
     FloatExpr,
     FlowDecl,
     ForEachBlock,
+    FormBody,
     IdentExpr,
     IfBlock,
     ImplBlock,
     IntExpr,
     InvokeBlock,
+    JsonBody,
     ListType,
     MatchBlock,
+    MultipartBody,
     PrimitiveType,
     Program,
+    RawBody,
     RecordType,
     RescueBlock,
     ResourcesDecl,
+    RestBody,
     RestImpl,
+    RetryPolicy,
     ShellImpl,
     StepCall,
     StepDecl,
@@ -257,9 +271,12 @@ def _build_impl(decl: ImplBlock) -> ImplIR:
         return RestImplIR(
             method=decl.method,
             url=decl.url,
+            query=decl.query,
+            headers=decl.headers,
+            body=_build_rest_body(decl.body) if decl.body is not None else None,
             response_path=decl.response_path,
             timeout_seconds=decl.timeout_seconds,
-            retries=decl.retries,
+            retry=_build_retry_policy(decl.retry) if decl.retry is not None else None,
         )
     if isinstance(decl, ShellImpl):
         import shlex
@@ -276,6 +293,30 @@ def _build_impl(decl: ImplBlock) -> ImplIR:
             )
         return ShellImplIR(argv=argv, timeout_seconds=decl.timeout_seconds, parse=decl.parse)
     raise IRBuildError(f"unknown ImplBlock subtype: {type(decl).__name__}")
+
+
+def _build_rest_body(decl: RestBody) -> RestBodyIR:
+    if isinstance(decl, JsonBody):
+        return JsonBodyIR(fields=decl.fields)
+    if isinstance(decl, RawBody):
+        return RawBodyIR(template=decl.template)
+    if isinstance(decl, FileBody):
+        return FileBodyIR(path=decl.path)
+    if isinstance(decl, FormBody):
+        return FormBodyIR(fields=decl.fields)
+    if isinstance(decl, MultipartBody):
+        return MultipartBodyIR(fields=decl.fields)
+    raise IRBuildError(f"unknown RestBody subtype: {type(decl).__name__}")
+
+
+def _build_retry_policy(decl: RetryPolicy) -> RetryPolicyIR:
+    return RetryPolicyIR(
+        attempts=decl.attempts,
+        backoff=decl.backoff,
+        base=decl.base,
+        cap=decl.cap,
+        on=decl.on,
+    )
 
 
 def _build_invoke(decl: InvokeBlock) -> InvokeIR:

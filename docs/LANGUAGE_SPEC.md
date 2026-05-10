@@ -14,7 +14,10 @@ Also lifts `FOR EACH <var> IN <collection>:` from spec-only to implemented contr
 |---|---|---|---|---|---|
 | `LANG:` per step | ✅ | ✅ | ignored (still emits Python on every EXACT) | ignored | ignored |
 | `impl.mode: code` | ✅ | ✅ | (default behavior — Python stub) | (default behavior — Python stub) | (default behavior — Python stub) |
-| `impl.mode: rest` | ✅ | ✅ | ✅ `requests.request(...)` | ✅ standalone Python step with `requests` | ✅ `requests.request(...)` |
+| `impl.mode: rest` (`method`/`url`/`response_path`/`timeout`) | ✅ | ✅ | ✅ `requests.request(...)` | ✅ standalone Python step with `requests` | ✅ `requests.request(...)` |
+| `impl.rest.query` / `impl.rest.headers` (templated dicts) | ✅ | ✅ | ✅ `params=` / `headers=` with `${var}` + `env:NAME` | ✅ same | ✅ same |
+| `impl.rest.body` (json / raw / @file / form / multipart) | ✅ | ✅ | ✅ routed by form, content-type set automatically | ✅ same | ✅ same |
+| `impl.rest.retry: {...}` (exponential/constant backoff) | ✅ | ✅ | ✅ honored at runtime, respects `Retry-After` | ✅ same | ✅ same |
 | `impl.mode: shell` | ✅ | ✅ | ✅ `subprocess.run([...], shell=False)` | ✅ standalone Python step with `subprocess` | ✅ `subprocess.run([...], shell=False)` |
 | `impl.shell.parse: json` | ✅ | ✅ | ✅ standalone Python step with `subprocess` + `json.loads` | ignored — stdout stored as raw `str` (since v0.5) | ✅ `subprocess.run([...]) + json.loads(stdout)` |
 | `impl.mode: sql` / `mcp_tool` / `binary` | ❌ | ❌ | ❌ | ❌ | ❌ |
@@ -34,9 +37,6 @@ Where the table says *rejected at compile time*, the emitter raises a clear `Val
 
 v0 limitations carried forward, to be lifted in v0.3+:
 
-- `impl.rest` templates TAKES into the `url` via `${var}` substitution (since v0.4); headers/body templating is not yet supported.
-- `impl.rest` does not yet parse `query`/`headers`/`body` fields.
-- `impl.rest` `retries` is parsed but not honored at runtime.
 - `impl.shell` invokes argv-style (no shell pipes/redirections); the `cmd` string is `shlex.split` at compile time. Stdout is returned as a `str` unless `parse: json` is set (since v0.5). To use a pipeline (`cmd1 | cmd2`), wrap in a script and call that script.
 - `ASSERT` expressions support a single comparator clause or a **chained comparator** (`0.0 <= score <= 1.0`), which desugars to a left-associative `(a <= b) and (b <= c) and ...` per Python semantics. Boolean conjunction with explicit `and`/`or` keywords is not yet parsed (planned for v0.7). All chained sub-expressions must reference the same single field — multi-field asserts (e.g. `a > b`) remain rejected at emit time.
 - `FOR EACH` body call results are not accumulated into state — the step is invoked for side effects only.
@@ -146,16 +146,83 @@ STEP geocode
   impl:
     mode:           rest
     method:         GET                       # GET | POST | PUT | PATCH | DELETE
-    url:            https://maps.googleapis.com/maps/api/geocode/json
-    query:          {address: ${address}, key: env:GOOGLE_MAPS_KEY}
-    headers:        {Accept: application/json}
-    body:           <expr>                    # POST/PUT only
-    response_path:  results[0].geometry.location
-    timeout:        30s                       # optional
-    retries:        3                         # optional
+    url:            "https://maps.googleapis.com/maps/api/geocode/json"
+    query:          {address: "${address}", key: "env:GOOGLE_MAPS_KEY"}
+    headers:        {Accept: "application/json"}
+    response_path:  "results[0].geometry.location"
+    timeout:        30s
+    retry:          {attempts: 3}
 ```
 
-Templating uses `${var}` for input fields and `env:NAME` for environment variables. The compiler validates the response against the step's `GIVES` schema after applying `response_path`.
+##### Templating
+
+All string values may use:
+
+- `${var}` — substituted at runtime from the step's `TAKES` (compile-time error if `var` is not a TAKES name).
+- `env:NAME` — the **whole** value must equal `env:NAME`; substituted at runtime from `os.environ[NAME]` (raises `KeyError` if unset). Inline `env:` inside a longer string is treated as plain text.
+
+Templating applies to: `url`, every value of `query`, every value of `headers`, every string in any form of `body`, and the **content** of `@./file` bodies (after the file is read).
+
+##### `query` and `headers`
+
+Inline dicts. Values must be quoted strings or numbers — bare identifiers are accepted only when they form a valid `IDENT` token (so `Accept: "application/json"` requires quoting because `/` is not part of an identifier).
+
+```
+query:   {limit: 10, address: "${address}"}
+headers: {Authorization: "Bearer env:API_TOKEN", Accept: "application/json"}
+```
+
+Note on `Authorization`: when the value contains `env:NAME` as a substring (not the whole value), it is **not** treated as a substitution — write the bearer prefix as part of the templated identity:
+
+```
+headers: {Authorization: "${auth_header}"}     # TAKES auth_header: str holds the full "Bearer ..." string
+# or
+headers: {Authorization: "env:AUTH_HEADER"}    # AUTH_HEADER env var holds the full "Bearer ..." string
+```
+
+##### `body` (POST / PUT / PATCH / DELETE)
+
+Five forms, hybrid syntax:
+
+| Form | Syntax | Content-Type | Notes |
+|---|---|---|---|
+| **JSON** | `body: {field: "${var}", ...}` (inline dict) | `application/json` | Values templated; numbers and bools allowed. |
+| **Raw** | `body: "raw text ${var}"` (quoted string) | `text/plain` (overridable via `headers`) | The whole string is templated. |
+| **File** | `body: "@./payload.json"` (string starting with `@`) | Inferred from extension (`.json` → application/json, `.xml` → application/xml, `.txt` → text/plain, else `application/octet-stream`) | File read at **runtime** relative to the cwd of the step process. The file content is templated (`${var}` and full-value `env:NAME` not honored inside file content — only `${var}`). Override content-type via `headers`. |
+| **Form** | `body: {form: {field: "${var}", ...}}` | `application/x-www-form-urlencoded` | Values templated. |
+| **Multipart** | `body: {multipart: {field: "${var}", file: "@./upload.pdf", ...}}` | `multipart/form-data` | Values starting with `@` are sent as binary file parts (read at runtime); other values are sent as text fields, templated. |
+
+It is a parse error to combine forms (e.g. `body: {form: ..., multipart: ...}`).
+
+##### `retry`
+
+Optional. Mandatory object form — the bare scalar `retries: N` is rejected at parse time (use `retry: {attempts: N}` for the same intent with the documented defaults).
+
+```
+retry:
+  attempts: 3                          # required if `retry:` is present
+  backoff:  exponential                # exponential | constant   (default: exponential)
+  base:     0.1                        # seconds, base delay      (default: 0.1)
+  cap:      30                         # seconds, max single delay (default: 30)
+  on:       [5xx, 429, timeout]        # default: [5xx, 429, timeout]
+```
+
+Behavior:
+
+- **`exponential`**: delay before attempt `i` (1-indexed retry, after the initial attempt fails) is `min(base × 2^(i-1), cap)`.
+- **`constant`**: delay is `base` seconds, regardless of `i`.
+- The `Retry-After` HTTP header (when present) **always overrides** the computed delay.
+- Retries trigger when the response matches `on` — accepted tokens are `5xx` (any 500–599), `429`, `timeout` (network/read timeout), `network` (any `requests.exceptions.RequestException` other than HTTP status). 4xx errors other than 429 are **not** retried.
+- After `attempts` total tries (initial + retries-1), the last error is raised and the step's `ON_FAIL` chain (if any) takes over.
+
+##### Response handling
+
+The compiler validates the response against the step's `GIVES` schema after applying `response_path`.
+
+Forbidden combinations:
+
+- `body` on `GET` (parse error — use `query` instead).
+- `retry: {...}` and ON_FAIL `retry(N)` on the same step — they would compose unpredictably (parse error).
 
 #### `impl.mode: shell`
 

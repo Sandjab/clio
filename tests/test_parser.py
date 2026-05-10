@@ -455,7 +455,10 @@ def test_parse_impl_rest_minimal():
     assert step.impl.url == "https://api.example.com/v1/items"
     assert step.impl.response_path is None
     assert step.impl.timeout_seconds is None
-    assert step.impl.retries is None
+    assert step.impl.retry is None
+    assert step.impl.query is None
+    assert step.impl.headers is None
+    assert step.impl.body is None
 
 
 def test_parse_impl_rest_full():
@@ -468,13 +471,18 @@ def test_parse_impl_rest_full():
         '    url: "https://api.example.com/v1/items"\n'
         '    response_path: "items[0].id"\n'
         "    timeout: 30s\n"
-        "    retries: 3\n"
+        "    retry: {attempts: 3}\n"
     )
     step = parse(src).decls[0]
     assert step.impl.method == "POST"
     assert step.impl.response_path == "items[0].id"
     assert step.impl.timeout_seconds == 30
-    assert step.impl.retries == 3
+    assert step.impl.retry is not None
+    assert step.impl.retry.attempts == 3
+    assert step.impl.retry.backoff == "exponential"
+    assert step.impl.retry.base == 0.1
+    assert step.impl.retry.cap == 30.0
+    assert step.impl.retry.on == ("5xx", "429", "timeout")
 
 
 def test_parse_impl_shell_minimal():
@@ -657,6 +665,257 @@ def test_parse_impl_rest_unknown_method_raises():
     )
     with pytest.raises(ParseError):
         parse(src)
+
+
+# --- impl.rest extended fields (query/headers/body/retry) ---
+
+
+def test_parse_impl_rest_query():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  TAKES: address: str\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: GET\n"
+        '    url: "https://example.com/geocode"\n'
+        '    query: {address: "${address}", limit: 10, key: "env:API_KEY"}\n'
+    )
+    step = parse(src).decls[0]
+    assert step.impl.query == (
+        ("address", "${address}"),
+        ("limit", 10),
+        ("key", "env:API_KEY"),
+    )
+
+
+def test_parse_impl_rest_headers():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: GET\n"
+        '    url: "https://example.com/x"\n'
+        '    headers: {Authorization: "env:AUTH_HEADER", Accept: "application/json"}\n'
+    )
+    step = parse(src).decls[0]
+    assert step.impl.headers == (
+        ("Authorization", "env:AUTH_HEADER"),
+        ("Accept", "application/json"),
+    )
+
+
+def test_parse_impl_rest_body_json_dict():
+    from clio.parser.ast_nodes import JsonBody
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  TAKES: id: str\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: POST\n"
+        '    url: "https://example.com/items"\n'
+        '    body: {user_id: "${id}", limit: 100, active: true}\n'
+    )
+    step = parse(src).decls[0]
+    assert isinstance(step.impl.body, JsonBody)
+    assert step.impl.body.fields == (
+        ("user_id", "${id}"),
+        ("limit", 100),
+        ("active", True),
+    )
+
+
+def test_parse_impl_rest_body_raw_string():
+    from clio.parser.ast_nodes import RawBody
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  TAKES: msg: str\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: POST\n"
+        '    url: "https://example.com/echo"\n'
+        '    body: "raw text ${msg}"\n'
+    )
+    step = parse(src).decls[0]
+    assert isinstance(step.impl.body, RawBody)
+    assert step.impl.body.template == "raw text ${msg}"
+
+
+def test_parse_impl_rest_body_file():
+    from clio.parser.ast_nodes import FileBody
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: POST\n"
+        '    url: "https://example.com/upload"\n'
+        '    body: "@./payload.json"\n'
+    )
+    step = parse(src).decls[0]
+    assert isinstance(step.impl.body, FileBody)
+    assert step.impl.body.path == "./payload.json"
+
+
+def test_parse_impl_rest_body_form():
+    from clio.parser.ast_nodes import FormBody
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  TAKES: name: str\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: POST\n"
+        '    url: "https://example.com/login"\n'
+        '    body: {form: {user: "${name}", remember: "true"}}\n'
+    )
+    step = parse(src).decls[0]
+    assert isinstance(step.impl.body, FormBody)
+    assert step.impl.body.fields == (("user", "${name}"), ("remember", "true"))
+
+
+def test_parse_impl_rest_body_multipart():
+    from clio.parser.ast_nodes import MultipartBody
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: POST\n"
+        '    url: "https://example.com/upload"\n'
+        '    body: {multipart: {label: "doc", file: "@./upload.pdf"}}\n'
+    )
+    step = parse(src).decls[0]
+    assert isinstance(step.impl.body, MultipartBody)
+    assert step.impl.body.fields == (("label", "doc"), ("file", "@./upload.pdf"))
+
+
+def test_parse_impl_rest_body_form_with_at_prefix_rejected():
+    # @./file is only allowed inside multipart bodies, not form-urlencoded.
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: POST\n"
+        '    url: "https://example.com/x"\n'
+        '    body: {form: {file: "@./pdf"}}\n'
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "multipart" in str(exc.value)
+
+
+def test_parse_impl_rest_body_on_get_rejected():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: GET\n"
+        '    url: "https://example.com/x"\n'
+        '    body: "data"\n'
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "GET" in str(exc.value)
+
+
+def test_parse_impl_rest_retries_scalar_rejected():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: GET\n"
+        '    url: "https://example.com/x"\n'
+        "    retries: 3\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "retry: {attempts" in str(exc.value)
+
+
+def test_parse_impl_rest_retry_full():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: GET\n"
+        '    url: "https://example.com/x"\n'
+        "    retry: {attempts: 5, backoff: constant, base: 0.5, cap: 10, on: [\"5xx\", \"timeout\"]}\n"
+    )
+    step = parse(src).decls[0]
+    r = step.impl.retry
+    assert r.attempts == 5
+    assert r.backoff == "constant"
+    assert r.base == 0.5
+    assert r.cap == 10.0
+    assert r.on == ("5xx", "timeout")
+
+
+def test_parse_impl_rest_retry_attempts_zero_rejected():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: GET\n"
+        '    url: "https://example.com/x"\n'
+        "    retry: {attempts: 0}\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "positive" in str(exc.value)
+
+
+def test_parse_impl_rest_retry_unknown_backoff_rejected():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: GET\n"
+        '    url: "https://example.com/x"\n'
+        "    retry: {attempts: 3, backoff: linear}\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "exponential" in str(exc.value)
+
+
+def test_parse_impl_rest_retry_on_unknown_token_rejected():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: GET\n"
+        '    url: "https://example.com/x"\n'
+        "    retry: {attempts: 3, on: [\"4xx\"]}\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "4xx" in str(exc.value) or "unknown" in str(exc.value).lower()
+
+
+def test_parse_impl_rest_body_form_and_multipart_combined_rejected():
+    src = (
+        "STEP foo\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: POST\n"
+        '    url: "https://example.com/x"\n'
+        "    body: {form: {a: \"1\"}, multipart: {b: \"2\"}}\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "form" in str(exc.value).lower() and "multipart" in str(exc.value).lower()
 
 
 def test_parse_impl_unknown_field_for_code_mode_raises():
