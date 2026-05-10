@@ -54,8 +54,20 @@ class ClaudeCLIEmitter(BaseEmitter):
         if graph.flow is not None:
             _walk(graph.flow.chain)
 
+    def _reject_rescue(self, graph: FlowGraph) -> None:
+        """RESCUE handlers are not supported by the claude-cli target.
+        Pointer to --target python / mcp-server."""
+        if graph.flow and graph.flow.rescues:
+            rb = graph.flow.rescues[0]
+            raise ValueError(
+                f"RESCUE handlers are not supported by the claude-cli target. "
+                f"Use --target python or --target mcp-server. "
+                f"Rescue at line {rb.line}."
+            )
+
     def emit(self, graph: FlowGraph, output_dir: Path) -> None:
         self._reject_parallel(graph)
+        self._reject_rescue(graph)
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "CLAUDE.md").write_text(_CLAUDE_MD)
 

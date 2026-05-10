@@ -148,6 +148,15 @@ class LangGraphEmitter(BaseEmitter):
 
         _reject_unsupported(graph.flow.chain)
 
+        if graph.flow.rescues:
+            rb = graph.flow.rescues[0]
+            raise ValueError(
+                f"RESCUE handlers are not supported by the langgraph target in v0.8 "
+                f"(needs cyclic edges + state reducer; planned for the multi-step "
+                f"branches sprint). Use --target python or --target mcp-server. "
+                f"Rescue at line {rb.line}."
+            )
+
         for step in graph.steps:
             if isinstance(step.invoke, CliInvokeIR):
                 raise ValueError(
