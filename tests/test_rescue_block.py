@@ -1,7 +1,9 @@
 """Tests for the RESCUE primitive (top-level handler attached to a STEP).
 See docs/superpowers/specs/2026-05-10-rescue-handler-design.md."""
 
-from clio.ir.builder import build_ir
+import pytest
+
+from clio.ir.builder import IRBuildError, build_ir
 from clio.ir.graph import RescueBlockIR
 from clio.keywords import Keyword
 from clio.parser.ast_nodes import FlowDecl, RescueBlock, StepCall
@@ -138,3 +140,143 @@ def test_build_ir_single_rescue():
     call = rb.body[0]
     assert call.step_name == "abort"
     assert call.kwargs == (("message", "detection failed"),)
+
+
+# ---------------------------------------------------------------------------
+# IR validation rules on RescueBlockIR (Task 4)
+# ---------------------------------------------------------------------------
+
+_BASE_STEPS = """
+STEP a
+  TAKES: x: int
+  GIVES: y: int
+  MODE:  exact
+
+STEP b
+  TAKES: y: int
+  GIVES: z: int
+  MODE:  exact
+"""
+
+
+def _src(flow_body: str) -> str:
+    return _BASE_STEPS + "\nFLOW p\n" + flow_body
+
+
+# (1) RESCUE for unknown step
+def test_rescue_unknown_step():
+    src = _src("  a(x=1)\n\n  RESCUE inexistant:\n    -> abort(\"x\")\n")
+    with pytest.raises(IRBuildError, match="unknown step 'inexistant'"):
+        build_ir(_parse(src))
+
+
+# (2) RESCUE for nested step (top-level only)
+def test_rescue_nested_step_rejected():
+    """Step 'a' lives inside FOR EACH; RESCUE must reject this in v0.8.
+
+    The FOR EACH iterates over `values: List<int>` produced by a
+    preceding `source` step so the chain is otherwise valid — the only
+    expected failure is the rescue top-level-only rule.
+    """
+    src = (
+        _BASE_STEPS
+        + "\nSTEP source\n"
+        + "  TAKES: x: int\n"
+        + "  GIVES: values: List<int>\n"
+        + "  MODE:  exact\n"
+        + "\nFLOW p\n"
+        + "  source(x=1)\n"
+        + "    -> FOR EACH item IN values:\n"
+        + "      a(x=item)\n"
+        + "\n  RESCUE a:\n    -> abort(\"x\")\n"
+    )
+    with pytest.raises(IRBuildError, match="must appear in the top-level FLOW chain"):
+        build_ir(_parse(src))
+
+
+# (3) Duplicate RESCUE
+def test_duplicate_rescue_rejected():
+    src = _src(
+        "  a(x=1) -> b(y=y)\n\n"
+        "  RESCUE a:\n    -> abort(\"x\")\n\n"
+        "  RESCUE a:\n    -> abort(\"y\")\n"
+    )
+    with pytest.raises(IRBuildError, match="already has a RESCUE handler"):
+        build_ir(_parse(src))
+
+
+# (4) ON_FAIL.abort + RESCUE conflict
+def test_rescue_with_on_fail_abort_rejected():
+    src = """
+STEP a
+  TAKES: x: int
+  GIVES: y: int
+  MODE:  judgment
+  ON_FAIL: abort("aborted in on_fail")
+
+FLOW p
+  a(x=1)
+
+  RESCUE a:
+    -> abort("from rescue")
+"""
+    with pytest.raises(IRBuildError, match="redundant when RESCUE"):
+        build_ir(_parse(src))
+
+
+# (5) Rescue body without terminal abort
+def test_rescue_body_must_end_with_abort():
+    """Rescue body's last top-level item must be a call to abort."""
+    src = _src(
+        "  a(x=1)\n\n"
+        "  RESCUE a:\n"
+        "    -> b(y=y)\n"  # body ends with `b`, not `abort`
+    )
+    with pytest.raises(IRBuildError, match="must end with abort"):
+        build_ir(_parse(src))
+
+
+# (5b) Rescue body with abort only in branches (not at top level)
+def test_rescue_abort_in_branch_not_enough():
+    """An IF/ELSE block at the rescue body's tail counts as a non-abort
+    top-level item even if every branch terminates with abort.
+    """
+    src = """
+CONTRACT report
+  SHAPE: { ok: bool }
+
+STEP a
+  TAKES: x: int
+  GIVES: result: report
+  MODE:  exact
+
+FLOW p
+  a(x=1)
+
+  RESCUE a:
+    IF result.ok == true:
+      abort("ok-branch")
+    ELSE:
+      abort("ko-branch")
+"""
+    with pytest.raises(IRBuildError, match="must end with abort"):
+        build_ir(_parse(src))
+
+
+# (6) abort outside a rescue body must be rejected (closes Task 3 deferred passthrough)
+def test_abort_outside_rescue_rejected():
+    """abort(...) is only valid inside a rescue body. Using it in the
+    main FLOW chain (or in any FOR EACH/IF/MATCH/WHILE body OUTSIDE a
+    rescue) must be rejected by the IR builder."""
+    src = """
+STEP a
+  TAKES: x: int
+  GIVES: y: int
+  MODE:  exact
+
+FLOW p
+  a(x=1)
+    -> abort("from main chain")
+"""
+    with pytest.raises(IRBuildError, match="abort.* only valid inside a RESCUE"):
+        build_ir(_parse(src))
