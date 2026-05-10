@@ -1,0 +1,51 @@
+# critical_pipeline.clio — ON_FAIL x RESCUE composition (v0.8)
+#
+# Highlights the v0.8 RESCUE handler composing with ON_FAIL on a critical
+# judgment STEP. The runtime sequence on failure of `detect_churn`:
+#
+#   1. ON_FAIL: retry(3) then escalate
+#      The framework retries up to 3 times, then escalates to a more
+#      capable model. ON_FAIL declares **what to try**.
+#
+#   2. RESCUE detect_churn:
+#      If the ON_FAIL chain is exhausted, the rescue body runs
+#      procedurally: notify Slack, then abort with a contextual message.
+#      RESCUE declares **what to do once the tries are spent**.
+#
+# Compiles to `--target python` and `--target mcp-server`. langgraph and
+# claude-cli reject RESCUE at compile time in v0.8 (see manual S06).
+#
+# The body of `load_clients` and `notify_slack` is a generated stub
+# (NotImplementedError); fill them in manually after compilation. The
+# focus of this example is the FLOW shape, not the side effects.
+
+CONTRACT churn_report
+  SHAPE: {risks: List<{client: str, score: float}>}
+
+STEP load_clients
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE:  exact
+
+STEP detect_churn
+  TAKES:   rows:   List<int>
+  GIVES:   report: churn_report
+  MODE:    judgment
+  ON_FAIL: retry(3) then escalate
+
+STEP notify_slack
+  TAKES: channel: str, reason: str
+  GIVES: sent:    bool
+  MODE:  exact
+
+FLOW pipeline
+  load_clients(path="clients.csv")
+    -> detect_churn(rows=rows)
+
+  RESCUE detect_churn:
+    -> notify_slack(channel="#alerts", reason="churn detection failed")
+    -> abort("churn detection failed - see #alerts")
+
+RESOURCES
+  target:   python
+  models:   [haiku, sonnet]

@@ -88,3 +88,43 @@ def test_compile_ticket_routing_example(tmp_path):
     # `from __future__ import annotations` but ugly and breaks `get_type_hints`).
     assert "from .. import contracts" in load_body
     assert "list[contracts.SupportTicket]" in load_body
+
+
+def test_compile_critical_pipeline_python(tmp_path):
+    """critical_pipeline.clio compiles cleanly to python target with
+    ON_FAIL: retry(3) then escalate on detect_churn AND a RESCUE block
+    that notifies + aborts. Verifies the emitted flow.py wraps the
+    protected call in try/except and defines _rescue_detect_churn."""
+    out = _compile_to_tree(REPO_ROOT / "examples/critical_pipeline.clio", tmp_path)
+    step_dir = out / "pipeline" / "steps"
+    step_files = {p.stem for p in step_dir.glob("*.py") if p.stem != "__init__"}
+    assert step_files == {"load_clients", "detect_churn", "notify_slack"}
+
+    flow_body = (out / "pipeline" / "flow.py").read_text()
+    # Try/except wrap around detect_churn
+    assert "try:" in flow_body
+    assert "_rescue_detect_churn(state" in flow_body
+    # FlowAborted defined locally
+    assert "class FlowAborted(Exception)" in flow_body
+    # Rescue helper present
+    assert "def _rescue_detect_churn(state" in flow_body
+    # Abort renders correctly
+    assert "raise FlowAborted" in flow_body
+    assert "see #alerts" in flow_body
+
+
+def test_compile_critical_pipeline_mcp_server(tmp_path):
+    """critical_pipeline.clio also compiles to mcp-server target with
+    async equivalents (async _rescue_detect_churn, await wrapping)."""
+    from clio.emitters.mcp_server import MCPServerEmitter
+
+    src = (REPO_ROOT / "examples/critical_pipeline.clio").read_text()
+    # Override target to mcp-server for this test only.
+    src_mcp = src.replace("target:   python", "target:   mcp-server")
+    program = parse(src_mcp)
+    ir = build_ir(program)
+    MCPServerEmitter().emit(ir, tmp_path)
+    flow_body = (tmp_path / "pipeline" / "flow.py").read_text()
+    assert "async def _rescue_detect_churn(state" in flow_body
+    assert "await _rescue_detect_churn(state" in flow_body
+    assert "class FlowAborted(Exception)" in flow_body
