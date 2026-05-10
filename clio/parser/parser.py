@@ -1005,7 +1005,7 @@ class _Parser:
         while self.peek().type in (TokenType.NEWLINE, TokenType.DEDENT):
             self.advance()
 
-        return FlowDecl(name=ident.value, chain=tuple(chain), line=kw.line, col=kw.col)
+        return FlowDecl(name=ident.value, chain=tuple(chain), rescues=(), line=kw.line, col=kw.col)
 
     def parse_flow_item(self) -> "StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock":
         """A FLOW (or any nested body) item: step call, FOR EACH, IF/ELSE, MATCH, or WHILE."""
