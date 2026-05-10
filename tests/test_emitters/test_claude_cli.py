@@ -565,3 +565,29 @@ def test_claude_cli_emit_mcp_tool_bundles_runtime(tmp_path):
     assert (rt / "mcp_client.py").exists()
     # mcp_client depends on rest.subst — rest must also be bundled.
     assert (rt / "rest.py").exists()
+
+
+def test_claude_cli_rejects_sql(tmp_path):
+    """claude-cli rejects impl.mode: sql — pointer to --target python / mcp-server."""
+    import pytest as _pytest
+    src = (
+        "STEP get\n"
+        "  TAKES: email: str\n"
+        "  GIVES: orders: List<{id: int}>\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:  sql\n"
+        "    db:    crm\n"
+        '    query: "SELECT id FROM orders WHERE email = :email"\n'
+        "FLOW f\n"
+        '  get(email="x")\n'
+        "RESOURCES\n"
+        "  target: claude-cli\n"
+        "  models: [haiku]\n"
+        "  databases:\n"
+        "    crm:\n"
+        "      driver: sqlite\n"
+        '      url:    ":memory:"\n'
+    )
+    with _pytest.raises(ValueError, match="impl.mode: sql is not supported by the claude-cli target"):
+        ClaudeCLIEmitter().emit(build_ir(parse(src)), tmp_path)

@@ -415,6 +415,68 @@ client cache + sync↔async bridge) and `clio_runtime/rest.py` (templating
 helper). Install the SDK with `pip install mcp` (or `pip install -e
 ./out[mcp]` once the bundled extras lands in v0.11).
 
+## 13. Reading from a database (`impl.mode: sql`)
+
+Calls a SQL database declared once in `RESOURCES.databases`. Three drivers
+are supported in v0.11: `sqlite` (stdlib, zero-deps), `postgres` (via
+`psycopg`), `mysql` (via `pymysql`). The runtime auto-maps `cursor.description`
+column names onto the `GIVES` shape — no `columns:` field to maintain.
+
+```clio
+CONTRACT OrderRow
+  SHAPE: {id: int, status: str, total_cents: int}
+
+STEP get_customer_orders
+  TAKES: email: str
+  GIVES: orders: List<OrderRow>
+  MODE:  exact
+  impl:
+    mode:  sql
+    db:    crm
+    query: |
+      SELECT id, status, total_cents
+      FROM orders
+      WHERE customer_email = :email
+      ORDER BY id
+
+FLOW customer_summary
+  get_customer_orders(email="alice@example.com")
+
+RESOURCES
+  target: python
+  databases:
+    crm:
+      driver: sqlite
+      url:    "./data/crm.sqlite"
+```
+
+Bindings use `:name`, where each `name` must match a `TAKES` field. The
+runtime translates them to the driver's native paramstyle (`:name` for
+sqlite stays as-is; `%(name)s` for psycopg / pymysql) so author-written
+queries are portable across the three drivers.
+
+**Auto-mapping by `GIVES` shape:**
+
+| `GIVES` shape | Behavior |
+|---|---|
+| `List<{...}>` | One record per row, fields keyed by SELECT column / alias name. |
+| `{...}` (single record) | Exactly one row expected (zero / many → runtime error). |
+| Primitive (`int`, `str`, ...) | One row, one column expected. |
+| `int` for an INSERT / UPDATE / DELETE | The runtime detects DML by `cursor.description is None` and returns `cursor.rowcount`. |
+
+**Connections** are opened lazily and reused per database name — a
+`FOR EACH ... PARALLEL` block does not duplicate them; per-connection
+locks serialise access (sqlite is single-thread, psycopg / pymysql
+serialise per connection anyway). `atexit` closes everything at process
+exit.
+
+**Secrets:** `env:NAME` is allowed in `RESOURCES.databases.<name>.url`
+(typical for postgres / mysql credentials) but **rejected inside `query`**
+— mixing host-env values into raw SQL would be an injection vector.
+
+**Targets:** `python` and `mcp-server`. `claude-cli` and `langgraph` are
+rejected at compile time in v0.11.
+
 ## What's not in the cookbook (yet)
 
 - **Multi-field ASSERT** — accept `a > b` between two fields. Specced, planned.

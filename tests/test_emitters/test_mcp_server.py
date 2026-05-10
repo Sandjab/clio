@@ -709,3 +709,43 @@ def test_mcp_server_emit_mcp_tool_bundles_runtime(tmp_path):
     rt = tmp_path / "f" / "clio_runtime"
     assert (rt / "mcp_client.py").exists()
     assert (rt / "rest.py").exists()    # mcp_client imports subst from rest
+
+
+# --- impl.mode: sql emission on mcp-server target (v0.11) -------------------
+
+_SQL_SRV_SRC = (
+    "STEP get_orders\n"
+    "  TAKES: email: str\n"
+    "  GIVES: orders: List<{id: int, status: str}>\n"
+    "  MODE:  exact\n"
+    "  impl:\n"
+    "    mode:  sql\n"
+    "    db:    crm\n"
+    '    query: "SELECT id, status FROM orders WHERE email = :email"\n'
+    "FLOW f\n"
+    '  get_orders(email="x@y")\n'
+    "RESOURCES\n"
+    "  target: mcp-server\n"
+    "  databases:\n"
+    "    crm:\n"
+    "      driver: sqlite\n"
+    '      url:    "./crm.sqlite"\n'
+)
+
+
+def test_mcp_server_emit_sql_step(tmp_path):
+    import ast
+
+    from clio.emitters.mcp_server import MCPServerEmitter
+    MCPServerEmitter().emit(build_ir(parse(_SQL_SRV_SRC)), tmp_path)
+    body = (tmp_path / "f" / "steps" / "get_orders.py").read_text()
+    assert "from ..clio_runtime import sql as _sql" in body
+    assert "_sql.execute(_db_spec, _query, _params, gives_shape='list_of_records')" in body
+    ast.parse(body)
+
+
+def test_mcp_server_emit_sql_bundles_runtime(tmp_path):
+    from clio.emitters.mcp_server import MCPServerEmitter
+    MCPServerEmitter().emit(build_ir(parse(_SQL_SRV_SRC)), tmp_path)
+    rt = tmp_path / "f" / "clio_runtime"
+    assert (rt / "sql.py").exists()

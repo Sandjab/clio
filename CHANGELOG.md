@@ -1,5 +1,92 @@
 # Changelog
 
+## v0.11.0 — 2026-05-10
+
+### Language
+
+- **`impl.mode: sql`** (`docs/LANGUAGE_SPEC.md` §impl.mode: sql): run a
+  parameterized query against a database declared in `RESOURCES.databases`
+  (see below) and referenced by name (`db: <name>`). Bindings use `:name`
+  syntax keyed on `TAKES` field names. The runtime translates `:name` to
+  the driver's native paramstyle (`:name` for sqlite stays as-is; `%(name)s`
+  for psycopg / pymysql) and auto-maps result rows onto `GIVES` via
+  `cursor.description`. Multi-line queries use a YAML-style `|` block scalar.
+  `retry:` is **rejected at parse time** — wrap the step in `RESCUE` for
+  retry-then-abort. `env:NAME` in the query body is rejected (SQL-injection
+  vector); secrets belong in `RESOURCES.databases.<name>.url`. `GIVES` is
+  required (the runtime can't map a SELECT without a target shape).
+- **`RESOURCES.databases`** block: declares the SQL databases a flow can
+  talk to. Each entry has `driver:` (one of `sqlite` / `postgres` /
+  `mysql`) and `url:` (a path / connection string, optionally `env:NAME`).
+  Database names must be unique within a flow (parse-time error on
+  duplicates, mirroring `mcp_servers`); a database declared but never
+  referenced emits a stderr warning ('dead spec' lint).
+- **`GIVES`-driven result mapping** (no `columns:` field):
+  - `List<{...}>` → list of records, fields keyed by SELECT column / alias.
+  - `{...}` (single record) → one row expected (zero / many → runtime error).
+  - Primitive (`int`, `str`, ...) → one row × one column.
+  - DML (`INSERT` / `UPDATE` / `DELETE`, detected via `cursor.description is None`) → `cursor.rowcount`, regardless of declared `GIVES`.
+- **Multi-line `|` block scalar**: the lexer now recognises
+  `key: |\n  body...\n` as a literal-block scalar (YAML clip mode) and
+  emits a single `BLOCK_SCALAR` token. Common leading indent is stripped,
+  empty lines are preserved, trailing blanks are trimmed. Used by
+  `impl.sql.query` today; available to any future field that needs a
+  raw multi-line string.
+- New keywords: `sql`, `databases`.
+
+### IR
+
+- New AST/IR nodes: `SqlImpl` / `SqlImplIR`, `DatabaseSpec` /
+  `DatabaseSpecIR`. `ResourcesDecl` / `ResourcesIR` extended with a
+  `databases` field (default `()` for back-compat).
+- New cross-validation: every `impl.sql.db` must reference a declared
+  database (compile error if not); every `impl.sql` STEP must declare
+  `GIVES`; a database declared but never referenced emits a stderr
+  warning.
+
+### Emitters
+
+- `python` and `mcp-server`: emit `_sql.execute(_db_spec, _query, _params,
+  gives_shape='...')` per step. The new `clio/runtime/sql.py` module is
+  bundled into `clio_runtime/` whenever a flow has any `impl.sql` step.
+  Long-lived per-database connections live in a singleton dict keyed by
+  database name; a per-connection `threading.Lock` serialises access so
+  `FOR EACH ... PARALLEL` blocks share the connection safely (sqlite is
+  single-thread; psycopg / pymysql are connection-serialised anyway).
+  Connections close at process exit via `atexit`.
+- `claude-cli` and `langgraph`: **rejected at compile time** with a
+  pointer to `--target python` / `--target mcp-server`. The bash
+  orchestrator has no shared connection cache; LangGraph multi-step
+  branches are deferred.
+
+### Runtime
+
+- `clio/runtime/sql.py` — single module covering the three drivers. Lazy
+  imports keep `psycopg` / `pymysql` optional (`sqlite3` is stdlib). The
+  named-binding regex uses a lookbehind (`(?<!:):`) so PostgreSQL `::cast`
+  operators (e.g. `value::int`) are preserved unchanged. `env:NAME` in
+  the URL field is resolved at connection-open time; missing env var
+  raises `KeyError` with a clear message. mysql URLs are parsed via
+  `urlparse` into `pymysql.connect(host=, port=, user=, password=,
+  database=)` — credentials embedded in `mysql://user:pass@host/db` work
+  out of the box. Friendly `RuntimeError` if a driver dep is missing
+  (never an opaque `ImportError`).
+
+### Examples
+
+- `examples/sql_demo.clio` — minimal sqlite-backed customer-summary
+  flow showing both the `RESOURCES.databases` block and the `query: |`
+  block scalar.
+
+### Tests
+
+- 643 passing (+54 since v0.10): 6 lexer block-scalar, 11 parser sql /
+  databases, 6 IR sql validation, 22 runtime sql (sqlite in-memory:
+  list_of_records / record / primitive / DML rowcount, named-binding
+  translation per driver, env-URL resolution, friendly errors when
+  drivers are missing), 9 emitter sql (python smoke + mcp-server smoke
+  + ast.parse + per-target rejection on claude-cli + langgraph).
+
 ## v0.10.0 — 2026-05-10
 
 ### Language

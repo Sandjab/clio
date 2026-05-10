@@ -1846,3 +1846,73 @@ def test_python_emit_mcp_tool_renders_env_pairs_as_list_of_tuples(tmp_path):
     # env pairs round-trip through json-friendly list-of-tuples (so the
     # runtime can iterate (k, v) pairs without dict-ordering surprises).
     assert "'env': [('INDEX', 'env:DOCS_INDEX')]" in body
+
+
+# --- impl.mode: sql emission (v0.11) ----------------------------------------
+
+_SQL_PY_SRC = (
+    "STEP get_orders\n"
+    "  TAKES: email: str\n"
+    "  GIVES: orders: List<{id: int, status: str}>\n"
+    "  MODE:  exact\n"
+    "  impl:\n"
+    "    mode:  sql\n"
+    "    db:    crm\n"
+    "    query: |\n"
+    "      SELECT id, status\n"
+    "      FROM orders\n"
+    "      WHERE email = :email\n"
+    "FLOW f\n"
+    '  get_orders(email="x@y")\n'
+    "RESOURCES\n"
+    "  target: python\n"
+    "  databases:\n"
+    "    crm:\n"
+    "      driver: sqlite\n"
+    '      url:    "./crm.sqlite"\n'
+)
+
+
+def test_python_emit_sql_step_calls_runtime_execute(tmp_path):
+    import ast
+    PythonEmitter().emit(build_ir(parse(_SQL_PY_SRC)), tmp_path)
+    body = (tmp_path / "f" / "steps" / "get_orders.py").read_text()
+    assert "from ..clio_runtime import sql as _sql" in body
+    assert "_sql.execute(_db_spec, _query, _params, gives_shape='list_of_records')" in body
+    assert "'name': 'crm'" in body
+    assert "'driver': 'sqlite'" in body
+    assert "'email': email" in body
+    ast.parse(body)
+
+
+def test_python_emit_sql_bundles_runtime(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_SQL_PY_SRC)), tmp_path)
+    rt = tmp_path / "f" / "clio_runtime"
+    assert (rt / "sql.py").exists()
+
+
+def test_python_emit_sql_record_shape(tmp_path):
+    src = _SQL_PY_SRC.replace(
+        "  GIVES: orders: List<{id: int, status: str}>",
+        "  GIVES: order: {id: int, status: str}",
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "f" / "steps" / "get_orders.py").read_text()
+    assert "gives_shape='record'" in body
+
+
+def test_python_emit_sql_primitive_shape(tmp_path):
+    src = _SQL_PY_SRC.replace(
+        "  GIVES: orders: List<{id: int, status: str}>",
+        "  GIVES: count: int",
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "f" / "steps" / "get_orders.py").read_text()
+    assert "gives_shape='primitive'" in body
+
+
+def test_python_emit_sql_preserves_multiline_query(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_SQL_PY_SRC)), tmp_path)
+    body = (tmp_path / "f" / "steps" / "get_orders.py").read_text()
+    # The block scalar must round-trip the SQL with internal newlines as `\n`.
+    assert "_query = 'SELECT id, status\\nFROM orders\\nWHERE email = :email'" in body

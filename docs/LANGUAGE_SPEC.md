@@ -20,9 +20,11 @@ Also lifts `FOR EACH <var> IN <collection>:` from spec-only to implemented contr
 | `impl.rest.retry: {...}` (exponential/constant backoff) | ✅ | ✅ | ✅ honored at runtime, respects `Retry-After` | ✅ same | ✅ same |
 | `impl.mode: shell` | ✅ | ✅ | ✅ `subprocess.run([...], shell=False)` | ✅ standalone Python step with `subprocess` | ✅ `subprocess.run([...], shell=False)` |
 | `impl.shell.parse: json` | ✅ | ✅ | ✅ standalone Python step with `subprocess` + `json.loads` | ignored — stdout stored as raw `str` (since v0.5) | ✅ `subprocess.run([...]) + json.loads(stdout)` |
-| `impl.mode: sql` / `binary` | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `impl.mode: sql` (sqlite + postgres + mysql) | ✅ | ✅ | ✅ shared `clio_runtime.sql` | rejected at compile time | ✅ shared `clio_runtime.sql` |
+| `impl.mode: binary` | ❌ | ❌ | ❌ | ❌ | ❌ |
 | `impl.mode: mcp_tool` (stdio + SSE/HTTP) | ✅ | ✅ | ✅ long-lived client | ✅ per-step bootstrap | ✅ long-lived client |
 | `RESOURCES.mcp_servers` block (named server specs) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `RESOURCES.databases` block (named DB specs) | ✅ | ✅ | ✅ | rejected at compile time | ✅ |
 | `invoke.mode: cli` | ✅ | ✅ | rejected at compile time | (default behavior — `claude -p`) | rejected at compile time |
 | `invoke.mode: api` (`anthropic`) | ✅ | ✅ | ✅ with overrides | (uses RESOURCES.models chain) | rejected at compile time |
 | `invoke.mode: api` (`openai`) | ✅ | ✅ | ✅ — covers LiteLLM / OpenRouter / Ollama / vLLM via OpenAI-compat | rejected | rejected at compile time |
@@ -267,23 +269,57 @@ Other parse modes (`yaml`, `csv`, `lines`) are not supported in v0.5.
 
 #### `impl.mode: sql`
 
-Parameterized query against a database connection.
+Parameterized query against a database declared once in
+`RESOURCES.databases` (see below) and referenced by name from the step.
 
 ```
-STEP enrich_customer
+STEP get_customer_orders
   MODE:    exact
   TAKES:   email: str
-  GIVES:   customer: CustomerRecord
+  GIVES:   orders: List<{id: int, status: str, total_cents: int}>
   impl:
-    mode:        sql
-    connection:  env:CRM_DB_URL
+    mode:    sql
+    db:      crm                                # ← name from RESOURCES.databases
     query: |
-      SELECT id, segment, lifetime_value
-      FROM customers
-      WHERE email = :email
+      SELECT id, status, total_cents
+      FROM orders
+      WHERE customer_email = :email
 ```
 
-Bindings use `:name`. Result rows are mapped to the `GIVES` shape.
+**Field semantics:**
+
+| Field   | Required | Notes |
+|---------|:-:|---|
+| `mode`  | required | Must be `sql`. |
+| `db`    | required | Identifier; must match an entry in `RESOURCES.databases`. |
+| `query` | required | SQL string. Multi-line `|` block scalar supported. Bindings use `:name`, where `name` must match a `TAKES` field. The runtime translates `:name` to the driver's native named-binding form (`?` for sqlite via `executemany`-style mapping; `%(name)s` for psycopg; `%(name)s` for pymysql). |
+
+**Bindings:**
+
+- Only TAKES field names may be referenced as `:name` in the query body. The runtime passes a `{name: value}` dict computed from the step's TAKES.
+- `env:NAME` is **not** allowed inside `query` (secrets belong in `RESOURCES.databases.<name>.url`, not in query bodies). This is a parse-time rejection mirroring the same rule on `impl.mcp_tool.args`.
+
+**Result mapping (auto-map, no explicit `columns:` field):**
+
+The runtime reads `cursor.description` after `execute()` and maps each row to a dict keyed by the column name (or alias). Mapping then depends on the shape of `GIVES`:
+
+| `GIVES` shape | Behavior |
+|---|---|
+| `List<{f1: T1, ...}>` | One record per row. Each record carries the fields named in `GIVES`. Compile time only checks the List-of-Record shape; the column-vs-field name match is verified at runtime via `cursor.description`. A missing field on any row raises a runtime error citing the column name and step name. |
+| `{f1: T1, ...}` (single record) | Exactly one row expected. Zero or more-than-one rows raises a runtime error. |
+| Primitive (`int`, `str`, `float`, `bool`) | Exactly one row, one column expected. |
+| `int` for a DML query (INSERT / UPDATE / DELETE) | The runtime detects DML by `cursor.description is None` after `execute()` and returns `cursor.rowcount`. |
+
+Type coercion across drivers (e.g. sqlite returns `int` for boolean columns) is the runtime's job; values are passed through as-is by the underlying driver.
+
+**Restrictions:**
+
+- `retry:` on `impl.sql` is **rejected at parse time** (use a `RESCUE` handler — same policy as `impl.mcp_tool` since v0.10).
+- The `query` body must be a string literal, not an expression. No string concatenation, no template logic beyond `:name` bindings (no `${var}` substitution — that would invite SQL injection if mis-used by an author).
+- Only one statement per query. Multi-statement queries (`SELECT ...; UPDATE ...`) are rejected by the underlying driver.
+- Transactions across STEPs are not supported in v0.11. Each `impl.sql` STEP runs its query in autocommit mode.
+
+**Targets:** supported on `python` and `mcp-server` (which reuse the same `clio_runtime.sql` module). Rejected at compile time on `claude-cli` and `langgraph`.
 
 #### `impl.mode: mcp_tool`
 
@@ -463,6 +499,7 @@ RESOURCES
   impl:         <impl-block>                    # default impl for all exact steps in this flow
   invoke:       <invoke-block>                  # default invoke for all judgment steps in this flow
   mcp_servers:  {<name>: <server-spec>, ...}    # MCP servers callable from impl.mcp_tool steps
+  databases:    {<name>: <db-spec>, ...}        # databases callable from impl.sql steps
 ```
 
 #### `RESOURCES.mcp_servers`
@@ -511,6 +548,51 @@ Mixing transport-incompatible fields (e.g. `command:` on a `transport: sse` spec
 - A server referenced by an `impl.mcp_tool` step that is not declared in `RESOURCES.mcp_servers` is a compile-time error.
 - A `RESOURCES.mcp_servers` entry with no referencing step emits a compile-time warning (the server spec is dead code).
 - `command` and `url` are mutually exclusive within one server spec.
+
+#### `RESOURCES.databases`
+
+Declares the SQL databases a flow can talk to. Each entry is a named **DB
+spec** referenced from `impl.sql` steps via `db: <name>`. Database names
+must be unique within a flow (parse-time error on duplicates, mirroring
+`mcp_servers`).
+
+```
+RESOURCES
+  databases:
+    crm:                                        # local sqlite file
+      driver: sqlite
+      url:    "./data/crm.sqlite"
+
+    analytics:                                  # postgres via env URL
+      driver: postgres
+      url:    "env:ANALYTICS_DB_URL"
+
+    legacy:                                     # mysql via env URL
+      driver: mysql
+      url:    "env:LEGACY_DB_URL"
+```
+
+**Field semantics:**
+
+| Field    | Required | Notes |
+|----------|:-:|---|
+| `driver` | required | One of `sqlite` / `postgres` / `mysql`. Determines the runtime import (`sqlite3` stdlib, `psycopg`, `pymysql`) and the named-binding translation. |
+| `url`    | required | Connection URL or path. Format depends on driver: a filesystem path or `:memory:` for sqlite (the runtime also accepts `sqlite:///path` SQLAlchemy-style URLs); a `postgresql://user:pass@host:port/db` libpq-compatible URL for postgres; a `mysql://user:pass@host:port/db` URL for mysql. May be the literal `env:NAME` to inherit the URL from a host environment variable at runtime. |
+
+**Lifecycle (target-dependent):**
+
+- **`python` and `mcp-server` targets — long-lived per-database connection.** The first `impl.sql` step that references a database opens its connection lazily; subsequent steps in the same flow reuse it. Connections are closed at process exit via `atexit`. `FOR EACH ... PARALLEL` blocks share the singleton; the runtime serialises access via a per-connection lock so the underlying drivers (which are not all thread-safe at the connection level — sqlite, in particular, is single-thread by default) stay consistent.
+- **`claude-cli` and `langgraph` targets — rejected at compile time** in v0.11.
+
+**Validation rules:**
+
+- A database referenced by an `impl.sql` step that is not declared in `RESOURCES.databases` is a compile-time error.
+- A `RESOURCES.databases` entry with no referencing step emits a compile-time warning (the DB spec is dead code).
+- An unknown `driver` value is a parse-time error citing the offending line.
+- An empty `url` is a parse-time error.
+- Mixing extra unknown fields (e.g. `connection:` from the v0.2 inline form, `port:`, `host:`) is a parse-time error — the v0.11 form takes only `driver` and `url`.
+
+**Cross-target invariant:** the SQL string, the `:name` binding mapping, the auto-mapping rule (column ↔ `GIVES` field), and the DML-vs-SELECT detection are identical across `python` and `mcp-server` — only the connection caching layer differs.
 
 #### Override semantics for `impl` and `invoke`
 

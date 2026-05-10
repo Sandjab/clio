@@ -32,6 +32,7 @@ from clio.ir.graph import (
     McpToolImplIR,
     RestImplIR,
     ShellImplIR,
+    SqlImplIR,
     StepIR,
 )
 
@@ -63,9 +64,23 @@ class ClaudeCLIEmitter(BaseEmitter):
                 f"Rescue at line {rb.line}."
             )
 
+    def _reject_sql(self, graph: FlowGraph) -> None:
+        """impl.sql is not supported by the claude-cli target in v0.11
+        (the bash orchestrator has no shared connection cache and the
+        per-step subprocess boot pays the driver-import cost on every
+        call). Use --target python or --target mcp-server."""
+        for step in graph.steps:
+            if isinstance(step.impl, SqlImplIR):
+                raise ValueError(
+                    f"step {step.name!r}: impl.mode: sql is not supported by "
+                    f"the claude-cli target in v0.11; use --target python or "
+                    f"--target mcp-server"
+                )
+
     def emit(self, graph: FlowGraph, output_dir: Path) -> None:
         self._reject_parallel(graph)
         self._reject_rescue(graph)
+        self._reject_sql(graph)
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "CLAUDE.md").write_text(_CLAUDE_MD)
 

@@ -118,3 +118,97 @@ def test_lex_new_keywords():
     keyword_values = {t.value for t in tokens if t.type == TokenType.KEYWORD}
     for k in ("CACHE", "ttl", "ON_FAIL", "retry", "then", "escalate", "fallback", "abort"):
         assert k in keyword_values, f"missing keyword {k!r}"
+
+
+# ---- block scalar (`|` literal) — added for impl.sql.query ----------------
+
+
+def _block_scalar_token(src):
+    """Return the first BLOCK_SCALAR token from a lex run, or None."""
+    for tok in lex(src):
+        if tok.type == TokenType.BLOCK_SCALAR:
+            return tok
+    return None
+
+
+def test_lex_block_scalar_basic_multi_line():
+    src = (
+        "impl:\n"
+        "  query: |\n"
+        "    SELECT 1\n"
+        "    FROM t\n"
+    )
+    tok = _block_scalar_token(src)
+    assert tok is not None
+    assert tok.value == "SELECT 1\nFROM t"
+
+
+def test_lex_block_scalar_strips_common_indent_only():
+    """Lines indented further than the common minimum keep their extra spaces."""
+    src = (
+        "impl:\n"
+        "  query: |\n"
+        "    SELECT id,\n"
+        "      status,\n"
+        "      total\n"
+        "    FROM t\n"
+    )
+    tok = _block_scalar_token(src)
+    assert tok.value == "SELECT id,\n  status,\n  total\nFROM t"
+
+
+def test_lex_block_scalar_preserves_internal_blank_lines():
+    src = (
+        "impl:\n"
+        "  query: |\n"
+        "    SELECT 1\n"
+        "\n"
+        "    FROM t\n"
+    )
+    tok = _block_scalar_token(src)
+    assert tok.value == "SELECT 1\n\nFROM t"
+
+
+def test_lex_block_scalar_trims_trailing_blanks():
+    """YAML literal-block default (clip-mode): one trailing newline is
+    not represented in our scalar (lines after the body stop the body)."""
+    src = (
+        "impl:\n"
+        "  query: |\n"
+        "    SELECT 1\n"
+        "\n"
+        "  parse: json\n"
+    )
+    tok = _block_scalar_token(src)
+    assert tok.value == "SELECT 1"
+
+
+def test_lex_block_scalar_followed_by_dedent_returns_to_outer_indent():
+    """The body stops at the first line whose indent is <= the `|` line's
+    indent. The outer scope keeps tokenising normally afterwards."""
+    src = (
+        "impl:\n"
+        "  query: |\n"
+        "    SELECT 1\n"
+        "  parse: json\n"
+    )
+    tokens = lex(src)
+    types = [t.type for t in tokens]
+    assert TokenType.BLOCK_SCALAR in types
+    bs_idx = types.index(TokenType.BLOCK_SCALAR)
+    # The token right after the BLOCK_SCALAR's NEWLINE should be `parse`.
+    assert tokens[bs_idx].value == "SELECT 1"
+    # `parse` keyword appears later — sanity check that lexing recovered.
+    keyword_values = [t.value for t in tokens if t.type in (TokenType.KEYWORD, TokenType.IDENT)]
+    assert "parse" in keyword_values
+
+
+def test_lex_pipe_inside_enum_is_not_block_scalar():
+    """`enum(A | B | C)` keeps its inline PIPE tokens; only `|` at the
+    end of a line triggers a block scalar."""
+    src = "CONTRACT C\n  SHAPE\n    color: enum(red | green | blue)\n"
+    tokens = lex(src)
+    pipe_count = sum(1 for t in tokens if t.type == TokenType.PIPE)
+    bs_count = sum(1 for t in tokens if t.type == TokenType.BLOCK_SCALAR)
+    assert pipe_count == 2
+    assert bs_count == 0

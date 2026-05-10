@@ -42,6 +42,7 @@ from clio.ir.graph import (
     MatchBlockIR,
     RestImplIR,
     ShellImplIR,
+    SqlImplIR,
     WhileBlockIR,
 )
 
@@ -157,6 +158,12 @@ class LangGraphEmitter(BaseEmitter):
             )
 
         for step in graph.steps:
+            if isinstance(step.impl, SqlImplIR):
+                raise ValueError(
+                    f"step {step.name!r}: impl.mode: sql is not supported by "
+                    "the langgraph target in v0.11; use --target python or "
+                    "--target mcp-server"
+                )
             if isinstance(step.invoke, CliInvokeIR):
                 raise ValueError(
                     f"step {step.name!r}: invoke.mode: cli is not supported by the "

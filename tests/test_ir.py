@@ -3,9 +3,11 @@ import pytest
 from clio.ir.builder import IRBuildError, build_ir
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
+    DatabaseSpecIR,
     HttpServerSpecIR,
     McpToolImplIR,
     ShellImplIR,
+    SqlImplIR,
     SseServerSpecIR,
     StdioServerSpecIR,
 )
@@ -740,3 +742,104 @@ def test_ir_build_mcp_tool_sse_and_http_specs():
     by_name = {s.name: s for s in g.resources.mcp_servers}
     assert isinstance(by_name["remote_sse"], SseServerSpecIR)
     assert isinstance(by_name["remote_http"], HttpServerSpecIR)
+
+
+# --- impl.mode: sql IR build + cross-validation (v0.11) ---------------------
+
+
+_SQL_VALID_SRC = (
+    "STEP get_orders\n"
+    "  TAKES: email: str\n"
+    "  GIVES: orders: List<{id: int, status: str}>\n"
+    "  MODE:  exact\n"
+    "  impl:\n"
+    "    mode:  sql\n"
+    "    db:    crm\n"
+    '    query: "SELECT id, status FROM orders WHERE email = :email"\n'
+    "FLOW f\n"
+    '  get_orders(email="x@y")\n'
+    "RESOURCES\n"
+    "  target: python\n"
+    "  databases:\n"
+    "    crm:\n"
+    "      driver: sqlite\n"
+    '      url:    ":memory:"\n'
+)
+
+
+def test_ir_build_sql_basic():
+    g = build_ir(parse(_SQL_VALID_SRC))
+    step = g.steps[0]
+    assert isinstance(step.impl, SqlImplIR)
+    assert step.impl.db == "crm"
+    assert ":email" in step.impl.query
+    assert g.resources is not None
+    assert len(g.resources.databases) == 1
+    db = g.resources.databases[0]
+    assert isinstance(db, DatabaseSpecIR)
+    assert db.driver == "sqlite"
+
+
+def test_ir_build_sql_unknown_db_rejected():
+    src = _SQL_VALID_SRC.replace("db:    crm", "db:    ghost")
+    with pytest.raises(IRBuildError, match="ghost.*not declared"):
+        build_ir(parse(src))
+
+
+def test_ir_build_sql_missing_gives_rejected():
+    src = (
+        "STEP touch\n"
+        "  TAKES: email: str\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:  sql\n"
+        "    db:    crm\n"
+        '    query: "INSERT INTO log (email) VALUES (:email)"\n'
+        "FLOW f\n"
+        '  touch(email="x")\n'
+        "RESOURCES\n"
+        "  target: python\n"
+        "  databases:\n"
+        "    crm:\n"
+        "      driver: sqlite\n"
+        '      url:    ":memory:"\n'
+    )
+    with pytest.raises(IRBuildError, match="impl.sql requires a GIVES"):
+        build_ir(parse(src))
+
+
+def test_ir_build_sql_dead_db_warns(capsys):
+    src = (
+        _SQL_VALID_SRC
+        + "    unused:\n"
+        + "      driver: postgres\n"
+        + '      url:    "env:UNUSED_PG_URL"\n'
+    )
+    g = build_ir(parse(src))
+    captured = capsys.readouterr()
+    assert "unused is declared but never referenced" in captured.err
+    assert {d.name for d in g.resources.databases} == {"crm", "unused"}
+
+
+def test_ir_build_sql_record_gives_shape_accepted():
+    """A single-record GIVES is also valid (one row expected at runtime)."""
+    src = _SQL_VALID_SRC.replace(
+        "  GIVES: orders: List<{id: int, status: str}>",
+        "  GIVES: order: {id: int, status: str}",
+    )
+    g = build_ir(parse(src))
+    step = g.steps[0]
+    assert isinstance(step.impl, SqlImplIR)
+
+
+def test_ir_build_sql_primitive_gives_shape_accepted():
+    src = _SQL_VALID_SRC.replace(
+        "  GIVES: orders: List<{id: int, status: str}>",
+        "  GIVES: count: int",
+    ).replace(
+        '"SELECT id, status FROM orders WHERE email = :email"',
+        '"SELECT COUNT(*) FROM orders WHERE email = :email"',
+    )
+    g = build_ir(parse(src))
+    step = g.steps[0]
+    assert isinstance(step.impl, SqlImplIR)

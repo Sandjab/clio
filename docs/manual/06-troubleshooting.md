@@ -198,6 +198,48 @@ The compiled output ran a `mcp_tool` step but the `mcp` SDK isn't installed in t
 
 **Fix:** `pip install mcp` (or `pip install -U mcp` if `transport: http` complains about `streamablehttp_client` missing — that needs ≥ 1.4). The runtime imports `mcp` lazily, so REST-only and judgment-only flows in the same compiled package don't pay this cost.
 
+### `ParseError: impl.sql does not support 'retry:' in v0.11`
+
+Same policy as `impl.mcp_tool`: SQL errors don't fit a generic backoff scheme (a constraint violation will never succeed on retry; a connection drop usually needs a bigger pause than the runtime would pick). Use a `RESCUE` handler instead — it lets you decide explicitly how to recover.
+
+**Fix:** drop the `retry:` block. If you need retry-then-abort semantics, wrap the step in `RESCUE` (see [recipe #10](03-cookbook.md#10-critical-llm-pipeline-with-on_fail--rescue)).
+
+### `ParseError: impl.sql.query may not contain 'env:NAME' substitutions`
+
+`env:NAME` inline in a SQL query body would be a SQL-injection vector if the host env var ever held untrusted text. CLIO blocks this at parse time.
+
+**Fix:** put the secret in `RESOURCES.databases.<name>.url` (the URL field is the right place for credentials — `"env:CRM_DB_URL"`). If the secret is *data* the query genuinely needs (a tenant id, an API key passed through), pass it as a `:name` binding via TAKES, not via `env:`.
+
+### `IRBuildError: STEP 'X': impl.sql.db 'crm' is not declared in RESOURCES.databases (available: [...])`
+
+The step references a database name not in the flow's `RESOURCES.databases` block.
+
+**Fix:** add the named entry to `RESOURCES.databases`, or correct the typo in `impl.sql.db`. The error lists the available names.
+
+### `IRBuildError: STEP 'X': impl.sql requires a GIVES declaration`
+
+Every `impl.sql` step needs a `GIVES` shape — the runtime maps query rows onto it. A bare `INSERT INTO log VALUES (:x)` step without GIVES would silently discard the affected-row count, hiding bugs.
+
+**Fix:** add `GIVES: count: int` for DML (the runtime returns `cursor.rowcount`), or `GIVES: rows: List<{...}>` for a SELECT.
+
+### `warning: RESOURCES.databases.X is declared but never referenced by any impl.sql step (dead spec)`
+
+A database spec exists but no step uses it. Compile still succeeds — this is a lint, not an error.
+
+**Fix:** remove the unused entry, or wire up a step that uses it.
+
+### `RuntimeError: impl.sql with driver: postgres requires the 'psycopg' package`
+
+The compiled output tried to open a postgres connection but `psycopg` isn't installed in the runtime environment.
+
+**Fix:** `pip install 'psycopg[binary]'` (the `[binary]` extra avoids a libpq build). Same pattern for `mysql`: `pip install pymysql`. `sqlite` uses the stdlib and never raises this.
+
+### `RuntimeError: impl.sql: GIVES expects exactly one row, got N (db='X')`
+
+A step declared `GIVES: order: {...}` (a single record) but the SELECT returned 0 or 2+ rows.
+
+**Fix:** if 0-or-1 rows is the right shape, change the GIVES to `Optional<{...}>` (planned for a later milestone) or split into two steps with explicit existence handling. If the query was meant to be unique, add a `LIMIT 1` plus a `WHERE` clause that guarantees uniqueness, or switch to `GIVES: rows: List<{...}>` and assert downstream.
+
 ### `ValueError: invoke.protocol 'bedrock' is not yet supported`
 
 Bedrock and Vertex are specced but not implemented in any emitter yet.

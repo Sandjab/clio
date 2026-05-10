@@ -26,6 +26,7 @@ class TokenType(StrEnum):
     LBRACKET = "LBRACKET"
     RBRACKET = "RBRACKET"
     PIPE = "PIPE"
+    BLOCK_SCALAR = "BLOCK_SCALAR"   # `key: |` followed by an indented body, lexed as raw text
     NEWLINE = "NEWLINE"
     INDENT = "INDENT"
     DEDENT = "DEDENT"

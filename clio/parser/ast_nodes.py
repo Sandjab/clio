@@ -249,6 +249,7 @@ class ResourcesDecl:
     mcp_servers: "tuple[McpServerSpec, ...]"
     line: int
     col: int
+    databases: "tuple[DatabaseSpec, ...]" = ()
 
 
 @dataclass(frozen=True)
@@ -440,6 +441,33 @@ McpArgValue = (
     | dict[str, "McpArgValue"]
     | list["McpArgValue"]
 )
+
+
+@dataclass(frozen=True)
+class DatabaseSpec:
+    """One entry in RESOURCES.databases. See LANGUAGE_SPEC.md
+    §RESOURCES.databases. `driver` is one of `sqlite` / `postgres` /
+    `mysql`; `url` may be a literal connection string or `env:NAME`
+    (resolved at runtime in the emitted runtime helper). All databases
+    in a flow share the same shape — there are no transport-specific
+    subtypes the way McpServerSpec needs."""
+    name: str
+    driver: str                              # sqlite | postgres | mysql
+    url: str                                 # path/URL or env:NAME
+    line: int
+    col: int
+
+
+@dataclass(frozen=True)
+class SqlImpl(ImplBlock):
+    """impl.mode: sql — parameterized query against a database declared
+    in RESOURCES.databases. See LANGUAGE_SPEC.md §impl.mode: sql.
+    `db` references a name from RESOURCES.databases (validated at IR
+    build time). `query` is the raw SQL body with `:name` bindings;
+    the runtime maps `:name` to driver-native named-binding form and
+    builds the params dict from the step's TAKES."""
+    db: str
+    query: str
 
 
 @dataclass(frozen=True)

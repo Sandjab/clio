@@ -165,6 +165,29 @@ class McpToolImplIR(ImplIR):
 
 
 @dataclass(frozen=True)
+class DatabaseSpecIR:
+    """One entry in RESOURCES.databases (IR side). See LANGUAGE_SPEC.md
+    §RESOURCES.databases. `driver` is one of `sqlite` / `postgres` /
+    `mysql`; `url` may be a literal connection string or `env:NAME`
+    (resolved at runtime by `clio_runtime.sql`). All databases share the
+    same shape — there are no per-driver subtypes the way McpServerSpecIR
+    needs."""
+    name: str
+    driver: str                               # sqlite | postgres | mysql
+    url: str                                  # path/URL or env:NAME
+
+
+@dataclass(frozen=True)
+class SqlImplIR(ImplIR):
+    """impl.mode: sql — parameterized query against a database declared in
+    `ResourcesIR.databases` (validated at build-time). The runtime maps the
+    SQL `:name` bindings onto the step's TAKES dict and decides between a
+    SELECT (rows) and a DML (rowcount) result based on the GIVES shape."""
+    db: str
+    query: str
+
+
+@dataclass(frozen=True)
 class InvokeIR:
     """Sealed base for the per-step invoke: block. Subtypes: CliInvokeIR, ApiInvokeIR."""
 
@@ -312,6 +335,7 @@ class ResourcesIR:
     target: str
     models: tuple[str, ...]
     mcp_servers: tuple[McpServerSpecIR, ...] = ()
+    databases: tuple[DatabaseSpecIR, ...] = ()
 
 
 @dataclass(frozen=True)
