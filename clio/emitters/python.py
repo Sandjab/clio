@@ -22,6 +22,7 @@ from clio.emitters._python_helpers import (
     _type_to_python,
     emit_contracts,
     emit_default_exact_step,
+    emit_mcp_tool_step,
     emit_parallel_for_each_python,
     emit_rest_step,
     emit_shell_step,
@@ -35,6 +36,8 @@ from clio.ir.graph import (
     ForEachIR,
     IfBlockIR,
     MatchBlockIR,
+    McpServerSpecIR,
+    McpToolImplIR,
     RestImplIR,
     ShellImplIR,
     StepIR,
@@ -60,15 +63,22 @@ class PythonEmitter(BaseEmitter):
         (pkg_dir / "contracts.py").write_text(emit_contracts(graph))
 
         contracts_by_name = {c.name: c for c in graph.contracts}
+        mcp_servers_by_name = {
+            s.name: s
+            for s in (graph.resources.mcp_servers if graph.resources is not None else ())
+        }
         for step in graph.steps:
             if step.mode == "exact":
-                body = self._emit_exact_step(step, contracts_by_name)
+                body = self._emit_exact_step(step, contracts_by_name, mcp_servers_by_name)
             else:
                 body = self._emit_judgment_step(step, graph, contracts_by_name)
             (steps_dir / f"{step.name}.py").write_text(body)
 
         needs_requests = any(
             isinstance(s.impl, RestImplIR) for s in graph.steps
+        )
+        needs_mcp = any(
+            isinstance(s.impl, McpToolImplIR) for s in graph.steps
         )
         needs_openai = any(
             isinstance(s.invoke, ApiInvokeIR) and s.invoke.protocol == "openai"
@@ -102,15 +112,32 @@ class PythonEmitter(BaseEmitter):
         (runtime_dir / "logging.py").write_text((src_dir / "logging.py").read_text())
         if needs_requests:
             (runtime_dir / "rest.py").write_text((src_dir / "rest.py").read_text())
+        if needs_mcp:
+            # mcp_client imports `subst` from rest, so always bundle rest too.
+            if not needs_requests:
+                (runtime_dir / "rest.py").write_text((src_dir / "rest.py").read_text())
+            (runtime_dir / "mcp_client.py").write_text(
+                (src_dir / "mcp_client.py").read_text()
+            )
 
     def _emit_contracts(self, graph: FlowGraph) -> str:
         return emit_contracts(graph)
 
-    def _emit_exact_step(self, step: StepIR, contracts_by_name: dict[str, "ContractIR"]) -> str:
+    def _emit_exact_step(
+        self,
+        step: StepIR,
+        contracts_by_name: dict[str, "ContractIR"],
+        mcp_servers_by_name: dict[str, "McpServerSpecIR"],
+    ) -> str:
         if isinstance(step.impl, RestImplIR):
             return self._emit_rest_step(step, contracts_by_name, step.impl)
         if isinstance(step.impl, ShellImplIR):
             return self._emit_shell_step(step, contracts_by_name, step.impl)
+        if isinstance(step.impl, McpToolImplIR):
+            spec = mcp_servers_by_name[step.impl.server]   # validated upstream by IR
+            return emit_mcp_tool_step(
+                step, contracts_by_name, step.impl, spec, async_call=False,
+            )
 
         # default branch (no impl, or impl.mode: code)
         return emit_default_exact_step(step, contracts_by_name)

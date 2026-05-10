@@ -18,11 +18,19 @@ from clio.emitters._mcp_helpers import (
 from clio.emitters._python_helpers import (
     emit_contracts,
     emit_default_exact_step,
+    emit_mcp_tool_step,
     emit_rest_step,
     emit_shell_step,
 )
 from clio.emitters.base import BaseEmitter
-from clio.ir.graph import ApiInvokeIR, CliInvokeIR, FlowGraph, RestImplIR, ShellImplIR
+from clio.ir.graph import (
+    ApiInvokeIR,
+    CliInvokeIR,
+    FlowGraph,
+    McpToolImplIR,
+    RestImplIR,
+    ShellImplIR,
+)
 
 
 class MCPServerEmitter(BaseEmitter):
@@ -39,6 +47,7 @@ class MCPServerEmitter(BaseEmitter):
 
         needs_pydantic = bool(graph.contracts)
         needs_requests = any(isinstance(s.impl, RestImplIR) for s in graph.steps)
+        needs_mcp = any(isinstance(s.impl, McpToolImplIR) for s in graph.steps)
         (output_dir / "pyproject.toml").write_text(
             _pyproject_for_mcp(pkg_name, needs_pydantic=needs_pydantic, needs_requests=needs_requests)
         )
@@ -61,10 +70,18 @@ class MCPServerEmitter(BaseEmitter):
         )
         if cache_active:
             (runtime_dir / "cache.py").write_text((src_dir / "cache.py").read_text())
-        if needs_requests:
+        if needs_requests or needs_mcp:
             (runtime_dir / "rest.py").write_text((src_dir / "rest.py").read_text())
+        if needs_mcp:
+            (runtime_dir / "mcp_client.py").write_text(
+                (src_dir / "mcp_client.py").read_text()
+            )
 
         contracts_by_name = {c.name: c for c in graph.contracts}
+        mcp_servers_by_name = {
+            s.name: s
+            for s in (graph.resources.mcp_servers if graph.resources is not None else ())
+        }
         for step in graph.steps:
             if step.mode == "judgment":
                 body = emit_judgment_step_via_sampling(step, graph, contracts_by_name)
@@ -72,6 +89,11 @@ class MCPServerEmitter(BaseEmitter):
                 body = emit_rest_step(step, contracts_by_name, step.impl)
             elif isinstance(step.impl, ShellImplIR):
                 body = emit_shell_step(step, contracts_by_name, step.impl)
+            elif isinstance(step.impl, McpToolImplIR):
+                spec = mcp_servers_by_name[step.impl.server]   # validated upstream
+                body = emit_mcp_tool_step(
+                    step, contracts_by_name, step.impl, spec, async_call=False,
+                )
             else:
                 body = emit_default_exact_step(step, contracts_by_name)
             (steps_dir / f"{step.name}.py").write_text(body)

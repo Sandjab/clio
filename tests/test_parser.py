@@ -1,6 +1,13 @@
 import pytest
 
-from clio.parser.ast_nodes import ShellImpl
+from clio.parser.ast_nodes import (
+    HttpServerSpec,
+    McpToolImpl,
+    ResourcesDecl,
+    ShellImpl,
+    SseServerSpec,
+    StdioServerSpec,
+)
 from clio.parser.parser import ParseError, parse
 
 
@@ -1255,3 +1262,305 @@ def test_parse_for_each_as_without_parallel_fails():
     )
     with pytest.raises(Exception, match="AS binding is only valid with PARALLEL"):
         parse(bad)
+
+
+# --- impl.mode: mcp_tool + RESOURCES.mcp_servers (v0.10) ---------------------
+
+_MCP_FLOW_PROLOG = (
+    "STEP search\n"
+    "  TAKES: query: str\n"
+    "  GIVES: r: str\n"
+    "  MODE:  exact\n"
+    "  impl:\n"
+    "    mode:    mcp_tool\n"
+    "    server:  docs\n"
+    "    tool:    search\n"
+    "    args:    {q: \"${query}\"}\n"
+    "FLOW f\n"
+    '  search(query="x")\n'
+)
+
+
+def test_parse_mcp_tool_impl_basic():
+    src = (
+        _MCP_FLOW_PROLOG
+        + "RESOURCES\n"
+        + "  target: python\n"
+        + "  mcp_servers:\n"
+        + "    docs:\n"
+        + '      command: "mcp-server-docs"\n'
+    )
+    prog = parse(src)
+    step = next(d for d in prog.decls if hasattr(d, "name") and d.name == "search")
+    assert isinstance(step.impl, McpToolImpl)
+    assert step.impl.server == "docs"
+    assert step.impl.tool == "search"
+    assert step.impl.args == (("q", "${query}"),)
+    assert step.impl.timeout_seconds == 60   # default
+    assert step.impl.parse == "json"          # default
+
+
+def test_parse_mcp_tool_impl_with_timeout_and_parse():
+    src = (
+        "STEP search\n"
+        "  TAKES: query: str\n"
+        "  GIVES: r: str\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:    mcp_tool\n"
+        "    server:  docs\n"
+        "    tool:    search\n"
+        "    timeout: 30s\n"
+        "    parse:   text\n"
+        "FLOW f\n"
+        '  search(query="x")\n'
+        "RESOURCES\n"
+        "  target: python\n"
+        "  mcp_servers:\n"
+        "    docs:\n"
+        '      command: "mcp-server-docs"\n'
+    )
+    prog = parse(src)
+    step = next(d for d in prog.decls if hasattr(d, "name") and d.name == "search")
+    assert step.impl.timeout_seconds == 30
+    assert step.impl.parse == "text"
+
+
+def test_parse_mcp_tool_impl_retry_rejected():
+    src = (
+        "STEP search\n"
+        "  TAKES: query: str\n"
+        "  GIVES: r: str\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:    mcp_tool\n"
+        "    server:  docs\n"
+        "    tool:    search\n"
+        "    retry:   {attempts: 3}\n"
+        "FLOW f\n"
+        '  search(query="x")\n'
+    )
+    with pytest.raises(ParseError, match="impl.mcp_tool does not support 'retry:'"):
+        parse(src)
+
+
+def test_parse_mcp_tool_impl_unknown_field_rejected():
+    src = _MCP_FLOW_PROLOG.replace(
+        '    args:    {q: "${query}"}\n',
+        '    args:    {q: "${query}"}\n    bogus: 1\n',
+    )
+    with pytest.raises(ParseError, match="unknown field 'bogus'"):
+        parse(src)
+
+
+def test_parse_mcp_tool_impl_missing_server_rejected():
+    src = (
+        "STEP search\n"
+        "  TAKES: query: str\n"
+        "  GIVES: r: str\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:    mcp_tool\n"
+        "    tool:    search\n"
+        "FLOW f\n"
+        '  search(query="x")\n'
+    )
+    with pytest.raises(ParseError, match="missing required field 'server'"):
+        parse(src)
+
+
+def test_parse_mcp_tool_impl_invalid_parse_value_rejected():
+    src = _MCP_FLOW_PROLOG.replace(
+        '    args:    {q: "${query}"}\n',
+        '    args:    {q: "${query}"}\n    parse:   xml\n',
+    )
+    with pytest.raises(ParseError, match="parse must be 'json' or 'text'"):
+        parse(src)
+
+
+def test_parse_mcp_servers_stdio_full():
+    src = (
+        _MCP_FLOW_PROLOG
+        + "RESOURCES\n"
+        + "  target: python\n"
+        + "  mcp_servers:\n"
+        + "    docs:\n"
+        + "      transport: stdio\n"
+        + '      command:   "mcp-server-docs"\n'
+        + '      args:      ["--cfg", "x.json"]\n'
+        + '      env:       {INDEX: "env:DOCS_INDEX"}\n'
+    )
+    prog = parse(src)
+    res = next(d for d in prog.decls if isinstance(d, ResourcesDecl))
+    assert len(res.mcp_servers) == 1
+    spec = res.mcp_servers[0]
+    assert isinstance(spec, StdioServerSpec)
+    assert spec.name == "docs"
+    assert spec.command == "mcp-server-docs"
+    assert spec.args == ("--cfg", "x.json")
+    assert spec.env == (("INDEX", "env:DOCS_INDEX"),)
+
+
+def test_parse_mcp_servers_sse_full():
+    src = (
+        _MCP_FLOW_PROLOG
+        + "RESOURCES\n"
+        + "  target: python\n"
+        + "  mcp_servers:\n"
+        + "    docs:\n"
+        + "      transport: sse\n"
+        + '      url:       "https://api.example.com/mcp"\n'
+        + '      headers:   {Authorization: "env:TOKEN"}\n'
+    )
+    prog = parse(src)
+    res = next(d for d in prog.decls if isinstance(d, ResourcesDecl))
+    spec = res.mcp_servers[0]
+    assert isinstance(spec, SseServerSpec)
+    assert spec.url == "https://api.example.com/mcp"
+    assert spec.headers == (("Authorization", "env:TOKEN"),)
+
+
+def test_parse_mcp_servers_http_localhost_allowed():
+    src = (
+        _MCP_FLOW_PROLOG
+        + "RESOURCES\n"
+        + "  target: python\n"
+        + "  mcp_servers:\n"
+        + "    docs:\n"
+        + "      transport: http\n"
+        + '      url:       "http://localhost:8765/mcp"\n'
+    )
+    prog = parse(src)
+    res = next(d for d in prog.decls if isinstance(d, ResourcesDecl))
+    assert isinstance(res.mcp_servers[0], HttpServerSpec)
+
+
+def test_parse_mcp_servers_stdio_with_url_rejected():
+    src = (
+        _MCP_FLOW_PROLOG
+        + "RESOURCES\n"
+        + "  target: python\n"
+        + "  mcp_servers:\n"
+        + "    docs:\n"
+        + "      transport: stdio\n"
+        + '      command:   "mcp-server-docs"\n'
+        + '      url:       "https://example.com"\n'
+    )
+    with pytest.raises(ParseError, match="transport: stdio.*declares 'url'"):
+        parse(src)
+
+
+def test_parse_mcp_servers_sse_with_command_rejected():
+    src = (
+        _MCP_FLOW_PROLOG
+        + "RESOURCES\n"
+        + "  target: python\n"
+        + "  mcp_servers:\n"
+        + "    docs:\n"
+        + "      transport: sse\n"
+        + '      url:       "https://example.com"\n'
+        + '      command:   "bogus"\n'
+    )
+    with pytest.raises(ParseError, match="transport: sse.*declares 'command'"):
+        parse(src)
+
+
+def test_parse_mcp_servers_unknown_transport_rejected():
+    src = (
+        _MCP_FLOW_PROLOG
+        + "RESOURCES\n"
+        + "  target: python\n"
+        + "  mcp_servers:\n"
+        + "    docs:\n"
+        + "      transport: ftp\n"
+        + '      command:   "x"\n'
+    )
+    with pytest.raises(ParseError, match="transport must be one of"):
+        parse(src)
+
+
+def test_parse_mcp_servers_duplicate_name_rejected():
+    src = (
+        _MCP_FLOW_PROLOG
+        + "RESOURCES\n"
+        + "  target: python\n"
+        + "  mcp_servers:\n"
+        + "    docs:\n"
+        + '      command: "x"\n'
+        + "    docs:\n"
+        + '      command: "y"\n'
+    )
+    with pytest.raises(ParseError, match="duplicate server name"):
+        parse(src)
+
+
+def test_parse_mcp_servers_url_must_be_https_or_localhost():
+    src = (
+        _MCP_FLOW_PROLOG
+        + "RESOURCES\n"
+        + "  target: python\n"
+        + "  mcp_servers:\n"
+        + "    docs:\n"
+        + "      transport: sse\n"
+        + '      url:       "http://example.com/mcp"\n'
+    )
+    with pytest.raises(ParseError, match="url must be https"):
+        parse(src)
+
+
+def test_parse_mcp_servers_url_rejects_localhost_lookalike_ssrf():
+    # `startswith("http://localhost")` would let through `localhost.attacker.com`.
+    # urlparse + hostname check correctly rejects it.
+    src = (
+        _MCP_FLOW_PROLOG
+        + "RESOURCES\n"
+        + "  target: python\n"
+        + "  mcp_servers:\n"
+        + "    docs:\n"
+        + "      transport: sse\n"
+        + '      url:       "http://localhost.attacker.com/mcp"\n'
+    )
+    with pytest.raises(ParseError, match="url must be https"):
+        parse(src)
+
+
+def test_parse_mcp_servers_url_rejects_127_lookalike_ssrf():
+    # Same family — `127.0.0.1.nip.io` resolves elsewhere but startswith would
+    # have accepted it.
+    src = (
+        _MCP_FLOW_PROLOG
+        + "RESOURCES\n"
+        + "  target: python\n"
+        + "  mcp_servers:\n"
+        + "    docs:\n"
+        + "      transport: sse\n"
+        + '      url:       "http://127.0.0.1.nip.io/mcp"\n'
+    )
+    with pytest.raises(ParseError, match="url must be https"):
+        parse(src)
+
+
+def test_parse_mcp_tool_args_with_nested_dict_and_list():
+    src = (
+        "STEP query\n"
+        "  TAKES: q: str\n"
+        "  GIVES: r: str\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:    mcp_tool\n"
+        "    server:  db\n"
+        "    tool:    select\n"
+        "    args:    {filters: {kind: \"${q}\", limit: 10}, ids: [1, 2, 3]}\n"
+        "FLOW f\n"
+        '  query(q="x")\n'
+        "RESOURCES\n"
+        "  target: python\n"
+        "  mcp_servers:\n"
+        "    db:\n"
+        '      command: "mcp-server-db"\n'
+    )
+    prog = parse(src)
+    step = next(d for d in prog.decls if hasattr(d, "name") and d.name == "query")
+    args = dict(step.impl.args)
+    assert args["filters"] == {"kind": "${q}", "limit": 10}
+    assert args["ids"] == [1, 2, 3]

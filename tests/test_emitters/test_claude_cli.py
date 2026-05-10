@@ -522,3 +522,46 @@ def test_claude_cli_rejects_rescue(tmp_path):
     )
     with _pytest.raises(ValueError, match="RESCUE.*not supported.*claude-cli"):
         ClaudeCLIEmitter().emit(build_ir(parse(src)), tmp_path)
+
+
+# --- impl.mode: mcp_tool emission for claude-cli (v0.10) -------------------
+
+_MCP_CLI_SRC = (
+    "STEP search\n"
+    "  TAKES: query: str\n"
+    "  GIVES: r: str\n"
+    "  MODE:  exact\n"
+    "  impl:\n"
+    "    mode:    mcp_tool\n"
+    "    server:  docs\n"
+    "    tool:    search\n"
+    "    args:    {q: \"${query}\"}\n"
+    "FLOW f\n"
+    '  search(query="x")\n'
+    "RESOURCES\n"
+    "  target: claude-cli\n"
+    "  models: [haiku, sonnet, opus]\n"
+    "  mcp_servers:\n"
+    "    docs:\n"
+    '      command: "mcp-server-docs"\n'
+)
+
+
+def test_claude_cli_emit_mcp_tool_step_uses_asyncio_run(tmp_path):
+    import ast
+    ClaudeCLIEmitter().emit(build_ir(parse(_MCP_CLI_SRC)), tmp_path)
+    body = (tmp_path / "steps" / "01_search.py").read_text()
+    # Per-step bootstrap pattern: each script is its own asyncio entry-point.
+    assert "import asyncio" in body
+    assert "asyncio.run(_mcp.call_tool_async(" in body
+    assert "from clio_runtime import mcp_client as _mcp" in body
+    assert "STATE_FILE" in body
+    ast.parse(body)
+
+
+def test_claude_cli_emit_mcp_tool_bundles_runtime(tmp_path):
+    ClaudeCLIEmitter().emit(build_ir(parse(_MCP_CLI_SRC)), tmp_path)
+    rt = tmp_path / "clio_runtime"
+    assert (rt / "mcp_client.py").exists()
+    # mcp_client depends on rest.subst — rest must also be bundled.
+    assert (rt / "rest.py").exists()

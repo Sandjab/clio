@@ -1,3 +1,5 @@
+import sys
+
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
     ApiInvokeIR,
@@ -13,12 +15,15 @@ from clio.ir.graph import (
     FlowIR,
     ForEachIR,
     FormBodyIR,
+    HttpServerSpecIR,
     IfBlockIR,
     ImplIR,
     InvokeIR,
     JsonBodyIR,
     MatchBlockIR,
     MatchCaseIR,
+    McpServerSpecIR,
+    McpToolImplIR,
     MultipartBodyIR,
     OnFailChainIR,
     OnFailStrategyIR,
@@ -29,6 +34,8 @@ from clio.ir.graph import (
     RestImplIR,
     RetryPolicyIR,
     ShellImplIR,
+    SseServerSpecIR,
+    StdioServerSpecIR,
     StepIR,
     WhileBlockIR,
 )
@@ -48,6 +55,7 @@ from clio.parser.ast_nodes import (
     FlowDecl,
     ForEachBlock,
     FormBody,
+    HttpServerSpec,
     IdentExpr,
     IfBlock,
     ImplBlock,
@@ -56,6 +64,8 @@ from clio.parser.ast_nodes import (
     JsonBody,
     ListType,
     MatchBlock,
+    McpServerSpec,
+    McpToolImpl,
     MultipartBody,
     PrimitiveType,
     Program,
@@ -67,6 +77,8 @@ from clio.parser.ast_nodes import (
     RestImpl,
     RetryPolicy,
     ShellImpl,
+    SseServerSpec,
+    StdioServerSpec,
     StepCall,
     StepDecl,
     StrExpr,
@@ -129,7 +141,11 @@ def build_ir(program: Program) -> FlowGraph:
                 raise IRBuildError(
                     f"line {d.line}:{d.col}: only one RESOURCES declaration is allowed"
                 )
-            resources_ir = ResourcesIR(target=d.target, models=d.models)
+            resources_ir = ResourcesIR(
+                target=d.target,
+                models=d.models,
+                mcp_servers=tuple(_build_mcp_server_spec(s) for s in d.mcp_servers),
+            )
 
     graph = FlowGraph(
         steps=tuple(steps_by_name.values()),
@@ -138,6 +154,7 @@ def build_ir(program: Program) -> FlowGraph:
         resources=resources_ir,
     )
     _validate_parallel_for_each(graph)
+    _validate_mcp_tool_servers(graph)
     return graph
 
 
@@ -292,7 +309,30 @@ def _build_impl(decl: ImplBlock) -> ImplIR:
                 f"line {decl.line}: impl.cmd must contain at least one token"
             )
         return ShellImplIR(argv=argv, timeout_seconds=decl.timeout_seconds, parse=decl.parse)
+    if isinstance(decl, McpToolImpl):
+        return McpToolImplIR(
+            server=decl.server,
+            tool=decl.tool,
+            args=decl.args,
+            timeout_seconds=decl.timeout_seconds,
+            parse=decl.parse,
+        )
     raise IRBuildError(f"unknown ImplBlock subtype: {type(decl).__name__}")
+
+
+def _build_mcp_server_spec(decl: McpServerSpec) -> McpServerSpecIR:
+    if isinstance(decl, StdioServerSpec):
+        return StdioServerSpecIR(
+            name=decl.name,
+            command=decl.command,
+            args=decl.args,
+            env=decl.env,
+        )
+    if isinstance(decl, SseServerSpec):
+        return SseServerSpecIR(name=decl.name, url=decl.url, headers=decl.headers)
+    if isinstance(decl, HttpServerSpec):
+        return HttpServerSpecIR(name=decl.name, url=decl.url, headers=decl.headers)
+    raise IRBuildError(f"unknown McpServerSpec subtype: {type(decl).__name__}")
 
 
 def _build_rest_body(decl: RestBody) -> RestBodyIR:
@@ -996,6 +1036,62 @@ def _validate_parallel_for_each(graph: FlowGraph) -> None:
     _walk(graph.flow.chain)
     for rb in graph.flow.rescues:
         _walk(rb.body)
+
+
+def _validate_mcp_tool_servers(graph: FlowGraph) -> None:
+    """Cross-validate impl.mcp_tool steps against RESOURCES.mcp_servers.
+
+    Checks:
+      1. Every `impl.mcp_tool.server` references a name declared in
+         `RESOURCES.mcp_servers` (compile-time error otherwise).
+      2. `impl.mcp_tool.parse: text` requires GIVES of type `str`
+         (compile-time error otherwise — the runtime cannot coerce a
+         non-text content block into a non-str shape).
+      3. Server specs declared but never referenced trigger a `stderr`
+         warning ('dead spec' lint).
+    """
+    mcp_steps = [s for s in graph.steps if isinstance(s.impl, McpToolImplIR)]
+    declared: dict[str, McpServerSpecIR] = {}
+    if graph.resources is not None:
+        declared = {s.name: s for s in graph.resources.mcp_servers}
+
+    referenced: set[str] = set()
+    for step in mcp_steps:
+        impl = step.impl
+        assert isinstance(impl, McpToolImplIR)
+        if impl.server not in declared:
+            available = sorted(declared.keys())
+            hint = (
+                f" (available: {available})"
+                if available
+                else " (RESOURCES.mcp_servers is empty or absent)"
+            )
+            raise IRBuildError(
+                f"STEP {step.name!r}: impl.mcp_tool.server "
+                f"{impl.server!r} is not declared in RESOURCES.mcp_servers"
+                f"{hint}"
+            )
+        referenced.add(impl.server)
+        if impl.parse == "text":
+            if step.gives is None or not (
+                isinstance(step.gives.type, PrimitiveType)
+                and step.gives.type.name == "str"
+            ):
+                gtype = (
+                    _render(step.gives.type) if step.gives is not None else "(no GIVES)"
+                )
+                raise IRBuildError(
+                    f"STEP {step.name!r}: impl.mcp_tool.parse: text requires "
+                    f"GIVES of type 'str', got {gtype}"
+                )
+
+    unused = sorted(set(declared) - referenced)
+    for name in unused:
+        print(
+            f"warning: RESOURCES.mcp_servers.{name} is declared but never "
+            f"referenced by any impl.mcp_tool step (dead spec)",
+            file=sys.stderr,
+        )
 
 
 def _render(t: TypeExpr) -> str:

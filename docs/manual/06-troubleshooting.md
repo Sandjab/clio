@@ -156,6 +156,48 @@ bugs like passing a boolean by mistake).
 from `TAKES`, write `headers: {X-Page: "${page}"}` — `${var}` substitution
 takes care of stringifying via `str(...)` at runtime.
 
+### `ParseError: impl.mcp_tool does not support 'retry:' in v0.10`
+
+You wrote a `retry: {...}` block on a `mcp_tool` step.
+
+**Fix:** drop it. If you need retries on MCP tool calls, wrap the step in a `RESCUE` handler that calls a recovery step before `abort(...)` — see [LANGUAGE_SPEC.md §RESCUE handler](../LANGUAGE_SPEC.md). A first-class `retry:` block on `mcp_tool` is planned for v0.11+ (it needs different semantics from REST: tool errors come back as a CallToolResult `isError` flag, not an HTTP status).
+
+### `ParseError: RESOURCES.mcp_servers.<name> uses transport: stdio but declares 'url'`
+
+You mixed transport-incompatible fields. `stdio` servers use `command` + `args` + `env`; `sse` and `http` servers use `url` + `headers`.
+
+**Fix:** keep only the fields that match the chosen transport. The error message names the offending field. If you wanted a remote server, change `transport:` to `sse` or `http` and rewrite the spec accordingly.
+
+### `ParseError: RESOURCES.mcp_servers.<name>.url must be https:// (or http:// for localhost / 127.0.0.1)`
+
+For security, MCP server URLs must be HTTPS unless the host is local.
+
+**Fix:** use `https://` in production. For local development, `http://localhost` and `http://127.0.0.1` are allowed.
+
+### `IRBuildError: STEP 'X': impl.mcp_tool.server 'docs' is not declared in RESOURCES.mcp_servers (available: [...])`
+
+A step references a server name that doesn't exist in the flow's `mcp_servers:` block.
+
+**Fix:** declare the server in `RESOURCES.mcp_servers`, or correct the spelling. The error lists the available names. If `mcp_servers:` is missing entirely, add it.
+
+### `IRBuildError: STEP 'X': impl.mcp_tool.parse: text requires GIVES of type 'str', got int`
+
+`parse: text` returns the tool's text content block verbatim as a Python `str`. CLIO refuses to coerce it into a non-string GIVES (intentional — it would mask bugs).
+
+**Fix:** either change `GIVES` to `str`, or switch to `parse: json` if the tool returns JSON-shaped text and your contract has a richer shape. For numeric coercion, use a small `code` step downstream.
+
+### `warning: RESOURCES.mcp_servers.X is declared but never referenced by any impl.mcp_tool step (dead spec)`
+
+A server spec exists in `RESOURCES.mcp_servers` but no step uses it. Compile still succeeds — this is a lint, not an error.
+
+**Fix:** remove the unused spec, or wire up a step that calls it. If you're staging a future step, suppress the warning by leaving a `TODO:` comment near the spec.
+
+### `RuntimeError: The 'mcp' package is required for impl.mcp_tool steps`
+
+The compiled output ran a `mcp_tool` step but the `mcp` SDK isn't installed in that environment.
+
+**Fix:** `pip install mcp` (or `pip install -U mcp` if `transport: http` complains about `streamablehttp_client` missing — that needs ≥ 1.4). The runtime imports `mcp` lazily, so REST-only and judgment-only flows in the same compiled package don't pay this cost.
+
 ### `ValueError: invoke.protocol 'bedrock' is not yet supported`
 
 Bedrock and Vertex are specced but not implemented in any emitter yet.

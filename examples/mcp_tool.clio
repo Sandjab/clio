@@ -1,0 +1,76 @@
+# Sample flow demonstrating impl.mode: mcp_tool (v0.10).
+# Shows the three transports stdio / sse / http, ${var} templating in
+# tool args, env: secrets in headers/env, and parse: text vs json.
+#
+# To compile:
+#   python -m clio compile examples/mcp_tool.clio --target python --output ./out
+#   python -m clio compile examples/mcp_tool.clio --target mcp-server --output ./out-mcp
+#   python -m clio compile examples/mcp_tool.clio --target claude-cli --output ./out-cli
+#
+# To run the python target you must have the `mcp` SDK installed:
+#   pip install -e ./out[dev]   # or `pip install mcp` directly
+# and the `mcp-server-docs` / `mcp-server-db` binaries discoverable on PATH.
+
+CONTRACT search_hit
+  SHAPE: {title: str, score: float}
+
+# 1) stdio transport — local subprocess MCP server, env passed through.
+STEP search_docs
+  TAKES: query: str
+  GIVES: hits: List<search_hit>
+  MODE:  exact
+  impl:
+    mode:    mcp_tool
+    server:  docs
+    tool:    search
+    args:    {q: "${query}", top_k: 10}
+    timeout: 30s
+    parse:   json
+
+# 2) sse transport — remote HTTP server with bearer auth via env:.
+STEP analyze_remote
+  TAKES: text: str
+  GIVES: summary: str
+  MODE:  exact
+  impl:
+    mode:    mcp_tool
+    server:  remote
+    tool:    summarize
+    args:    {input: "${text}", style: "concise"}
+    parse:   text
+
+# 3) stdio with nested args (dict + list) and a non-string scalar.
+STEP query_db
+  TAKES: kind: str
+  GIVES: rows: str
+  MODE:  exact
+  impl:
+    mode:    mcp_tool
+    server:  db
+    tool:    select
+    args:    {filters: {kind: "${kind}", limit: 25}, ids: [1, 2, 3], active: true}
+    parse:   text
+
+FLOW pipeline
+  search_docs(query="design patterns")
+  -> analyze_remote(text="excerpt")
+  -> query_db(kind="docs")
+
+RESOURCES
+  target: python
+  mcp_servers:
+    docs:
+      transport: stdio
+      command:   "mcp-server-docs"
+      args:      ["--config", "./docs.json"]
+      env:       {INDEX_DIR: "env:DOCS_INDEX"}
+
+    remote:
+      transport: sse
+      url:       "https://api.example.com/mcp"
+      headers:   {Authorization: "env:MCP_REMOTE_TOKEN"}
+
+    db:
+      transport: stdio
+      command:   "mcp-server-db"
+      args:      ["--db", "postgres://localhost/x"]

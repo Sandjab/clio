@@ -114,6 +114,56 @@ class RestImplIR(ImplIR):
     retry: RetryPolicyIR | None
 
 
+# Sealed McpServerSpecIR hierarchy. One per transport.
+@dataclass(frozen=True)
+class McpServerSpecIR:
+    """Sealed base for one entry in RESOURCES.mcp_servers (IR side).
+    Subtypes: StdioServerSpecIR, SseServerSpecIR, HttpServerSpecIR."""
+    name: str
+
+
+@dataclass(frozen=True)
+class StdioServerSpecIR(McpServerSpecIR):
+    command: str
+    args: tuple[str, ...]
+    env: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class SseServerSpecIR(McpServerSpecIR):
+    url: str
+    headers: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class HttpServerSpecIR(McpServerSpecIR):
+    url: str
+    headers: tuple[tuple[str, str], ...]
+
+
+# Recursive type alias for tool-args values (mirrors ast_nodes.McpArgValue).
+McpArgScalarIR = str | int | float | bool | None
+McpArgValueIR = (
+    McpArgScalarIR
+    | dict[str, "McpArgValueIR"]
+    | list["McpArgValueIR"]
+)
+
+
+@dataclass(frozen=True)
+class McpToolImplIR(ImplIR):
+    """impl.mode: mcp_tool — call a tool exposed by a configured MCP server.
+    `server` references a name from `ResourcesIR.mcp_servers` (validated at
+    build-time). Each `args` value conforms to `McpArgValueIR` (scalar |
+    nested dict | nested list); annotated as `object` to keep IR-construction
+    simple — the recursive validation is enforced upstream at parse time."""
+    server: str
+    tool: str
+    args: tuple[tuple[str, object], ...]
+    timeout_seconds: int
+    parse: str   # "json" | "text"
+
+
 @dataclass(frozen=True)
 class InvokeIR:
     """Sealed base for the per-step invoke: block. Subtypes: CliInvokeIR, ApiInvokeIR."""
@@ -261,6 +311,7 @@ class FlowIR:
 class ResourcesIR:
     target: str
     models: tuple[str, ...]
+    mcp_servers: tuple[McpServerSpecIR, ...] = ()
 
 
 @dataclass(frozen=True)
