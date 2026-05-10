@@ -45,11 +45,11 @@ CLIO occupe l'angle « le pipeline lui-même est dans le langage, et tu choisis 
 
 ## Ce que ça ne fait pas (et que je préfère dire avant qu'on me le reproche)
 
-- **Pas de librairie d'intégrations.** LangChain a des centaines de tools, n8n a quatre cents nodes, CLIO a `impl.rest` et `impl.shell`. `impl.rest` n'est pas un placeholder : query templatées, en-têtes avec auth résolue depuis `os.environ`, cinq formes de body (JSON, raw, fichier inline, form-urlencoded, multipart), `retry` configurable avec backoff exponentiel et respect de `Retry-After`. Mais ça ne remplace pas une marketplace. Le pari : MCP devient le standard d'interop — plutôt que de bâtir des connecteurs, l'idée est de consommer les serveurs MCP existants comme des STEP. Pas encore livré côté consommateur.
+- **Pas de librairie d'intégrations.** LangChain a des centaines de tools, n8n a quatre cents nodes, CLIO a quatre primitives EXACT : `impl.rest`, `impl.shell`, `impl.mcp_tool`, `impl.sql`. `impl.rest` n'est pas un placeholder — query templatées, en-têtes avec auth résolue depuis `os.environ`, cinq formes de body (JSON, raw, fichier inline, form-urlencoded, multipart), `retry` configurable avec backoff exponentiel et respect de `Retry-After`. **`impl.mcp_tool` (v0.10) est la concrétisation du pari : MCP comme standard d'interop — un STEP appelle un tool sur un serveur MCP déclaré dans `RESOURCES.mcp_servers`, trois transports (stdio, SSE, HTTP), client long-vivant partagé entre les steps. `impl.sql` (v0.11) ajoute trois drivers (sqlite, postgres, mysql) avec bindings `:name` traduits automatiquement et auto-mapping des colonnes vers le shape `GIVES`.** Ça ne remplace toujours pas une marketplace de quatre cents nodes ; ça remplace les wrappers maison « fetch + json.loads » et « cursor.execute + zip(cols, row) » qu'on récrit à chaque projet.
 - **Pas d'observabilité native riche.** Des événements JSON-line structurés, mappables OpenTelemetry. Pas de Langfuse embarqué, pas de dashboard maison. C'est un choix — open standards plutôt que vendor lock-in — mais c'est pauvre comparé à LangSmith.
 - **Pas d'éditeur visuel, et il n'y en aura jamais.** Visualisation oui (`clio graph --format html` produit un HTML autonome cliquable), édition non. La source de vérité reste le fichier `.clio`.
 - **Pas de time-travel debugging.** Reprise à partir d'une étape oui (`--from-step N` via `state.json`), exploration d'historique non.
-- **Maturité d'écosystème : des mois, pas des années.** v0.8 publiée, v0.9 en cours sur `main` : quatre cibles (`claude-cli`, `python`, `mcp-server`, `langgraph`), dix exemples polis, 544 tests unitaires plus 13 e2e gated. Ça tourne, ce n'est pas Terraform.
+- **Maturité d'écosystème : des mois, pas des années.** v0.11 publiée : quatre cibles (`claude-cli`, `python`, `mcp-server`, `langgraph`), douze exemples polis, **651 tests unitaires plus 13 e2e gated**. Quatre revues de code Gemini consécutives sur les PR — chacune a remonté un vrai bug avant merge (SSRF par bypass `startswith`, `asyncio.Lock` au module level, regex SQL qui se faisait avoir par les literals `'time:00'`). Ça tourne, ce n'est pas Terraform.
 
 ## Pour qui c'est, pour qui ce ne l'est pas
 
@@ -59,7 +59,7 @@ CLIO occupe l'angle « le pipeline lui-même est dans le langage, et tu choisis 
 
 ## Le projet
 
-Open source, MIT, Python 3.12+. La spec du langage, l'architecture et le positionnement explicite vis-à-vis de LangGraph, n8n, BAML et LMQL sont dans le repo. Dix exemples qui compilent et tournent aujourd'hui : extraction d'entités, classification de corpus, RAG, routage de tickets, modération avec branches IF/MATCH, fan-out parallèle, pipeline critique avec ON_FAIL × RESCUE, intégration REST avancée (auth, multipart, retries).
+Open source, MIT, Python 3.12+. La spec du langage, l'architecture et le positionnement explicite vis-à-vis de LangGraph, n8n, BAML et LMQL sont dans le repo. Douze exemples qui compilent et tournent aujourd'hui : extraction d'entités, classification de corpus, RAG, routage de tickets avec branches IF/MATCH, fan-out parallèle, pipeline critique avec ON_FAIL × RESCUE, intégration REST avancée (auth, multipart, retries), consommation d'un serveur MCP (`mcp_tool.clio`), et requête SQL paramétrée avec auto-mapping vers le shape `GIVES` (`sql_demo.clio`).
 
 Si l'angle « écris ton workflow LLM comme un fichier source, compile-le vers la cible que tu veux, possède le code émis » résonne, j'aimerais des retours — en particulier sur les cas où la grammaire actuelle est trop pauvre ou, à l'inverse, trop bavarde.
 
