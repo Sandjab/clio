@@ -1508,3 +1508,91 @@ def test_resume_fails_when_start_at_exceeds_total_steps(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as exc:
         _import_and_run(tmp_path, "retention", start_at=total + 5)
     assert exc.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# RESCUE handler (v0.8)
+# ---------------------------------------------------------------------------
+
+RESCUE_SIMPLE_SRC = """STEP load
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE: exact
+
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: result: int
+  MODE: exact
+
+FLOW pipeline
+  load(path="x.csv")
+    -> detect(rows=rows)
+
+  RESCUE detect:
+    -> abort("detection failed")
+
+RESOURCES
+  target: python
+"""
+
+
+def test_python_emit_rescue_basic(tmp_path):
+    """The emitted python module must wrap the protected call in
+    try/except, define a _rescue_<step> helper, and render abort as
+    raise FlowAborted."""
+    graph = build_ir(parse(RESCUE_SIMPLE_SRC))
+    PythonEmitter().emit(graph, tmp_path)
+
+    flow_path = tmp_path / "pipeline" / "flow.py"
+    assert flow_path.exists(), f"flow.py missing in {sorted(tmp_path.rglob('*'))}"
+    flow_text = flow_path.read_text()
+
+    # FlowAborted is defined in the emitted flow module.
+    assert "class FlowAborted(Exception)" in flow_text
+    # Helper present.
+    assert "def _rescue_detect(state" in flow_text
+    # Abort renders as raise FlowAborted (single or double quoted literal).
+    assert (
+        "raise FlowAborted('detection failed')" in flow_text
+        or 'raise FlowAborted("detection failed")' in flow_text
+    )
+    # Try/except around the call site, dispatching to the rescue helper.
+    assert "try:" in flow_text
+    assert "_rescue_detect(state" in flow_text
+    assert "except FlowAborted:" in flow_text
+
+
+def test_python_runtime_rescue_aborts(tmp_path):
+    """Compile + run: detect raises, the rescue catches and re-raises FlowAborted."""
+    graph = build_ir(parse(RESCUE_SIMPLE_SRC))
+    PythonEmitter().emit(graph, tmp_path)
+
+    # Stub `load` to return a value, and `detect` to raise.
+    (tmp_path / "pipeline" / "steps" / "load.py").write_text(
+        '"""stubbed"""\n'
+        "def load(*, path):\n"
+        "    return [1, 2, 3]\n"
+    )
+    (tmp_path / "pipeline" / "steps" / "detect.py").write_text(
+        '"""stubbed"""\n'
+        "def detect(*, rows):\n"
+        '    raise RuntimeError("synthetic failure")\n'
+    )
+
+    import sys
+    import importlib
+    sys.path.insert(0, str(tmp_path))
+    try:
+        for k in list(sys.modules):
+            if k == "pipeline" or k.startswith("pipeline."):
+                del sys.modules[k]
+        flow_mod = importlib.import_module("pipeline.flow")
+        with pytest.raises(flow_mod.FlowAborted) as exc:
+            flow_mod.run()
+        assert "detection failed" in str(exc.value)
+    finally:
+        if str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))
+        for k in list(sys.modules):
+            if k == "pipeline" or k.startswith("pipeline."):
+                del sys.modules[k]

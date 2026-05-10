@@ -26,6 +26,7 @@ from clio.parser.ast_nodes import (
     PrimitiveType,
     Program,
     RecordType,
+    RescueBlock,
     RestImpl,
     ShellImpl,
     StepCall,
@@ -992,8 +993,15 @@ class _Parser:
         chain: list[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock] = [self.parse_flow_item()]
         # Skip newlines and indent/dedent changes between chain elements,
         # then look for ARROW. The -> may appear on a more-indented continuation line.
+        # Track the net INDENT count consumed here so we can pair each one
+        # with a matching DEDENT BEFORE the rescue-collection loop runs;
+        # otherwise the rescue loop would conflate chain-continuation
+        # DEDENTs with the FLOW's own closing DEDENT.
+        chain_indent_depth = 0
         while True:
             while self.peek().type in (TokenType.NEWLINE, TokenType.INDENT):
+                if self.peek().type == TokenType.INDENT:
+                    chain_indent_depth += 1
                 self.advance()
             if self.peek().type == TokenType.ARROW:
                 self.advance()
@@ -1001,11 +1009,46 @@ class _Parser:
             else:
                 break
 
-        # Consume any remaining newlines and dedents to close the FLOW block
+        # Pair the chain-continuation INDENTs with their closing DEDENTs
+        # so the rescue-collection loop sees only the chain-item indent
+        # (the FLOW body's INDENT level) and the FLOW's own closing DEDENT.
+        while chain_indent_depth > 0:
+            while self.peek().type == TokenType.NEWLINE:
+                self.advance()
+            if self.peek().type != TokenType.DEDENT:
+                break
+            self.advance()
+            chain_indent_depth -= 1
+
+        # Collect RESCUE blocks after the chain at the chain-item indent
+        # level INSIDE the FLOW block (per LANGUAGE_SPEC § flow_decl). Only
+        # NEWLINE trivia is consumed between the chain and the rescues; a
+        # DEDENT here closes the FLOW block and stops rescue collection so
+        # the next top-level decl (RESOURCES / STEP / CONTRACT / EOF) is
+        # parsed by parse_program.
+        rescues: list[RescueBlock] = []
+        while True:
+            while self.peek().type == TokenType.NEWLINE:
+                self.advance()
+            tok = self.peek()
+            if tok.type == TokenType.KEYWORD and tok.value == "RESCUE":
+                rescues.append(self.parse_rescue_block())
+                continue
+            break
+
+        # Close the FLOW's INDENT block: consume any DEDENTs (and
+        # interleaved NEWLINEs) that the lexer emitted to close out
+        # nested bodies and the FLOW itself, leaving the next top-level
+        # decl token in place for parse_program.
         while self.peek().type in (TokenType.NEWLINE, TokenType.DEDENT):
             self.advance()
 
-        return FlowDecl(name=ident.value, chain=tuple(chain), line=kw.line, col=kw.col)
+        return FlowDecl(
+            name=ident.value,
+            chain=tuple(chain),
+            rescues=tuple(rescues),
+            line=kw.line, col=kw.col,
+        )
 
     def parse_flow_item(self) -> "StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock":
         """A FLOW (or any nested body) item: step call, FOR EACH, IF/ELSE, MATCH, or WHILE."""
@@ -1178,6 +1221,34 @@ class _Parser:
             line=kw.line, col=kw.col,
         )
 
+    def parse_rescue_block(self) -> RescueBlock:
+        """RESCUE <step_name>:
+            <flow_item> -> <flow_item> -> ...
+
+        Top-level handler attached to a STEP from the FLOW main chain.
+        The last item of the body's top-level chain MUST be a call to
+        `abort("message")` (validated at IR build time, not in this parser).
+
+        A leading `->` is accepted (and discarded) so the body reads as a
+        natural continuation of the rescued step in the source: e.g.
+        `RESCUE step_a:\\n    -> abort("...")`.
+        """
+        kw = self.expect(TokenType.KEYWORD, "RESCUE")
+        step_tok = self.expect(TokenType.IDENT)
+        self.expect(TokenType.COLON)
+        self.expect(TokenType.NEWLINE)
+        self.expect(TokenType.INDENT)
+        # Optional leading arrow: the spec example uses `RESCUE step:\n -> ...`
+        # to evoke "continuing from the rescued step".
+        if self.peek().type == TokenType.ARROW:
+            self.advance()
+        body = self._parse_block_chain()
+        return RescueBlock(
+            step_name=step_tok.value,
+            body=body,
+            line=kw.line, col=kw.col,
+        )
+
     def parse_match_block(self) -> MatchBlock:
         """MATCH <state_field>.<sub_field>:
             CASE <value>: <flow_chain>
@@ -1313,10 +1384,24 @@ class _Parser:
         return CompareExpr(left=left, op=op, right=right)
 
     def parse_step_call(self) -> StepCall:
-        name_tok = self.expect(TokenType.IDENT)
+        # `abort` is a reserved keyword (see clio/keywords.py), but inside
+        # a rescue body it appears as a synthetic step call. The parser is
+        # permissive about where it can appear; the IR builder restricts
+        # it to rescue bodies. The single positional STRING argument is
+        # synthesised as `message=<str>` so downstream stages can treat
+        # abort uniformly with other step calls.
+        tok = self.peek()
+        is_abort = tok.type == TokenType.KEYWORD and tok.value == "abort"
+        if is_abort:
+            name_tok = self.advance()
+        else:
+            name_tok = self.expect(TokenType.IDENT)
         self.expect(TokenType.LPAREN)
         kwargs: list[tuple[str, object]] = []
-        if self.peek().type != TokenType.RPAREN:
+        if is_abort and self.peek().type == TokenType.STRING:
+            msg_tok = self.advance()
+            kwargs.append(("message", msg_tok.value))
+        elif self.peek().type != TokenType.RPAREN:
             kwargs.append(self._parse_call_arg())
             while self.peek().type == TokenType.COMMA:
                 self.advance()

@@ -419,3 +419,21 @@ def test_claude_cli_rejects_parallel(tmp_path):
     )
     with _pytest.raises(ValueError, match="claude-cli target does not support FOR EACH PARALLEL"):
         ClaudeCLIEmitter().emit(build_ir(parse(src)), tmp_path)
+
+
+def test_claude_cli_rejects_rescue(tmp_path):
+    """claude-cli rejects RESCUE — pointer to --target python / mcp-server."""
+    import pytest as _pytest
+    src = (
+        "STEP a\n"
+        "  TAKES: x: int\n"
+        "  GIVES: y: int\n"
+        "  MODE:  exact\n"
+        "FLOW p\n"
+        "  a(x=1)\n"
+        "\n"
+        "  RESCUE a:\n"
+        "    -> abort(\"x\")\n"
+    )
+    with _pytest.raises(ValueError, match="RESCUE.*not supported.*claude-cli"):
+        ClaudeCLIEmitter().emit(build_ir(parse(src)), tmp_path)

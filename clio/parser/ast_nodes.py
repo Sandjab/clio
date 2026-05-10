@@ -158,9 +158,24 @@ class WhileBlock:
 
 
 @dataclass(frozen=True)
+class RescueBlock:
+    """RESCUE step_name:
+           <chain ending with abort(message)>
+
+    Top-level handler attached to a STEP from the FLOW's main chain. The
+    body runs if step_name raises after its ON_FAIL chain is exhausted.
+    The body's last top-level item must be a StepCall to `abort`."""
+    step_name: str
+    body: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock, ...]"
+    line: int
+    col: int
+
+
+@dataclass(frozen=True)
 class FlowDecl:
     name: str
     chain: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock, ...]"
+    rescues: "tuple[RescueBlock, ...]"
     line: int
     col: int
 

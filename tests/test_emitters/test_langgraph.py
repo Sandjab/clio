@@ -223,3 +223,21 @@ def test_cli_compile_langgraph_target(tmp_path):
     assert rc == 0
     assert (out / "classify" / "flow.py").exists()
     assert "StateGraph(State)" in (out / "classify" / "flow.py").read_text()
+
+
+def test_langgraph_rejects_rescue(tmp_path):
+    """LangGraph rejects RESCUE handlers in v0.8 — message must point users to
+    --target python or --target mcp-server."""
+    src = (
+        "STEP a\n"
+        "  TAKES: x: int\n"
+        "  GIVES: y: int\n"
+        "  MODE:  exact\n"
+        "FLOW p\n"
+        "  a(x=1)\n"
+        "\n"
+        "  RESCUE a:\n"
+        "    -> abort(\"x\")\n"
+    )
+    with pytest.raises(ValueError, match="RESCUE.*not supported.*langgraph"):
+        LangGraphEmitter().emit(build_ir(parse(src)), tmp_path)

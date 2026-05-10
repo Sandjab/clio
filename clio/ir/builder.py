@@ -18,6 +18,7 @@ from clio.ir.graph import (
     MatchCaseIR,
     OnFailChainIR,
     OnFailStrategyIR,
+    RescueBlockIR,
     ResourcesIR,
     RestImplIR,
     ShellImplIR,
@@ -49,6 +50,7 @@ from clio.parser.ast_nodes import (
     PrimitiveType,
     Program,
     RecordType,
+    RescueBlock,
     ResourcesDecl,
     RestImpl,
     ShellImpl,
@@ -319,7 +321,145 @@ def _build_flow(
 ) -> FlowIR:
     available: dict[str, TypeExpr] = {}
     items = _build_flow_items(decl.chain, steps_by_name, contracts, available)
-    return FlowIR(name=decl.name, chain=tuple(items), line=decl.line)
+    # The set of step names that appear directly in the top-level chain —
+    # used by _build_rescue to enforce the v0.8 "top-level only" rule.
+    top_level_step_names: set[str] = {
+        item.step_name for item in items if isinstance(item, CallIR)
+    }
+    seen_rescue_steps: set[str] = set()
+    # Scope each RESCUE body to the state fields available BEFORE the
+    # protected step runs. If we passed the post-chain `available` dict,
+    # rescue bodies could reference fields produced by steps that come
+    # AFTER the protected step in source order — but at runtime those
+    # later steps never ran (the protected step raised), so state[...]
+    # would KeyError. Replay the top-level chain up to (but excluding)
+    # the protected step's CallIR; only top-level CallIRs and PARALLEL
+    # FOR EACH collectors expose fields to the outer scope.
+    rescues_ir = tuple(
+        _build_rescue(
+            rb, steps_by_name, contracts,
+            _scope_before_step(items, rb.step_name, steps_by_name),
+            top_level_step_names, seen_rescue_steps,
+        )
+        for rb in decl.rescues
+    )
+    return FlowIR(
+        name=decl.name,
+        chain=tuple(items),
+        rescues=rescues_ir,
+        line=decl.line,
+    )
+
+
+def _scope_before_step(
+    chain_items: list,
+    protected_step_name: str,
+    steps_by_name: dict[str, StepIR],
+) -> dict[str, TypeExpr]:
+    """Return the state-field type map visible just BEFORE `protected_step_name`
+    runs in the top-level chain. Mirrors the field-publishing logic of
+    `_build_flow_items`: top-level CallIRs publish their `step.gives`, and
+    PARALLEL FOR EACH with a collector publishes `List<body.gives.type>`.
+    Stops as soon as the protected step's CallIR is encountered; nested
+    inner blocks (IF/MATCH/WHILE/sequential FOR EACH) do not expose fields
+    to the outer scope (no narrowing in v0)."""
+    scope: dict[str, TypeExpr] = {}
+    for item in chain_items:
+        if isinstance(item, CallIR):
+            if item.step_name == protected_step_name:
+                break
+            step = steps_by_name.get(item.step_name)
+            if step is not None and step.gives is not None:
+                scope[step.gives.name] = step.gives.type
+            continue
+        if isinstance(item, ForEachIR) and item.parallel and item.collector and len(item.body) == 1:
+            body_call = item.body[0]
+            if hasattr(body_call, "step_name"):
+                body_step = steps_by_name.get(body_call.step_name)
+                if body_step is not None and body_step.gives is not None:
+                    scope[item.collector] = ListType(inner=body_step.gives.type)
+    return scope
+
+
+def _build_rescue(
+    decl: RescueBlock,
+    steps_by_name: dict[str, StepIR],
+    contracts: dict[str, ContractIR],
+    outer_available: dict[str, TypeExpr],
+    top_level_step_names: set[str],
+    seen_rescue_steps: set[str],
+) -> RescueBlockIR:
+    """Build a RescueBlockIR with validation. Rules:
+
+    1. step_name must reference an existing STEP.
+    2. step_name must appear in the top-level FLOW chain (v0.8 limitation —
+       rescues for steps nested inside FOR EACH / IF / MATCH / WHILE bodies
+       are deferred).
+    3. Each STEP gets at most one RESCUE.
+    4. ON_FAIL ending with abort + RESCUE on the same step is rejected
+       (redundant double-abort).
+    5. The body's last top-level item must be a CallIR to ``abort``.
+    """
+    # (1) Step exists.
+    step = steps_by_name.get(decl.step_name)
+    if step is None:
+        raise IRBuildError(
+            f"line {decl.line}: RESCUE refers to unknown step "
+            f"{decl.step_name!r}"
+        )
+
+    # (2) Top-level only.
+    if decl.step_name not in top_level_step_names:
+        raise IRBuildError(
+            f"line {decl.line}: RESCUE target {decl.step_name!r} must appear "
+            f"in the top-level FLOW chain (v0.8 limitation)"
+        )
+
+    # (3) Single rescue per step.
+    if decl.step_name in seen_rescue_steps:
+        raise IRBuildError(
+            f"line {decl.line}: step {decl.step_name!r} already has a RESCUE "
+            f"handler (duplicate)"
+        )
+    seen_rescue_steps.add(decl.step_name)
+
+    # (4) Reject redundant ON_FAIL trailing-abort + RESCUE on the same step.
+    if (
+        step.on_fail is not None
+        and step.on_fail.strategies
+        and step.on_fail.strategies[-1].kind == "abort"
+    ):
+        raise IRBuildError(
+            f"line {decl.line}: 'abort(...)' final clause in ON_FAIL is "
+            f"redundant when RESCUE {decl.step_name!r} is declared "
+            f"(rescue at line {decl.line}, abort in step at line {step.line})"
+        )
+
+    # Build the rescue body. The in_rescue flag flows through every nested
+    # block builder so `abort(...)` calls anywhere in the body's recursion
+    # tree are accepted.
+    body_scope = dict(outer_available)
+    body_items = _build_flow_items(
+        decl.body, steps_by_name, contracts, body_scope, in_rescue=True,
+    )
+
+    # (5) Body terminal abort (top-level only — abort buried in nested
+    #     IF/MATCH/WHILE/FOR EACH branches does NOT count).
+    if (
+        not body_items
+        or not isinstance(body_items[-1], CallIR)
+        or body_items[-1].step_name != "abort"
+    ):
+        raise IRBuildError(
+            f"line {decl.line}: RESCUE body for {decl.step_name!r} must end "
+            f"with abort(...) at the top level of the body chain"
+        )
+
+    return RescueBlockIR(
+        step_name=decl.step_name,
+        body=tuple(body_items),
+        line=decl.line,
+    )
 
 
 def _build_flow_items(
@@ -327,13 +467,21 @@ def _build_flow_items(
     steps_by_name: dict[str, StepIR],
     contracts: dict[str, ContractIR],
     available: dict[str, TypeExpr],
+    in_rescue: bool = False,
 ) -> list:
     """Build IR items from a chain of FlowItems. Mutates `available` to track
-    fields produced by step.gives so that downstream calls can reference them."""
+    fields produced by step.gives so that downstream calls can reference them.
+
+    `in_rescue` is True when this chain is the body of a RESCUE block (or
+    nested inside one). It propagates to recursive block builders and to
+    `_build_call` which uses it to permit synthetic `abort(...)` calls only
+    inside rescue bodies."""
     out: list = []
     for item in chain:
         if isinstance(item, ForEachBlock):
-            foreach_ir = _build_for_each(item, steps_by_name, contracts, available)
+            foreach_ir = _build_for_each(
+                item, steps_by_name, contracts, available, in_rescue=in_rescue,
+            )
             out.append(foreach_ir)
             # PARALLEL FOR EACH with a collector makes List<body.gives.type> available.
             if foreach_ir.parallel and foreach_ir.collector and len(foreach_ir.body) == 1:
@@ -344,16 +492,28 @@ def _build_flow_items(
                         available[foreach_ir.collector] = ListType(inner=body_step.gives.type)
             continue
         if isinstance(item, IfBlock):
-            out.append(_build_if_block(item, steps_by_name, contracts, available))
+            out.append(_build_if_block(
+                item, steps_by_name, contracts, available, in_rescue=in_rescue,
+            ))
             continue
         if isinstance(item, MatchBlock):
-            out.append(_build_match_block(item, steps_by_name, contracts, available))
+            out.append(_build_match_block(
+                item, steps_by_name, contracts, available, in_rescue=in_rescue,
+            ))
             continue
         if isinstance(item, WhileBlock):
-            out.append(_build_while_block(item, steps_by_name, contracts, available))
+            out.append(_build_while_block(
+                item, steps_by_name, contracts, available, in_rescue=in_rescue,
+            ))
             continue
         # StepCall path
-        out.append(_build_call(item, steps_by_name, contracts, available))
+        out.append(_build_call(
+            item, steps_by_name, contracts, available, in_rescue=in_rescue,
+        ))
+        # `abort` is a synthetic terminator inside RESCUE bodies — it has no
+        # registered StepIR and produces no state field.
+        if item.name == "abort":
+            continue
         step = steps_by_name[item.name]
         if step.gives is not None:
             available[step.gives.name] = step.gives.type
@@ -365,7 +525,17 @@ def _build_call(
     steps_by_name: dict[str, StepIR],
     contracts: dict[str, ContractIR],
     available: dict[str, TypeExpr],
+    in_rescue: bool = False,
 ) -> CallIR:
+    # `abort` is a synthetic call legal only inside RESCUE bodies. Outside a
+    # rescue body the IR builder rejects it (closes the Task 3 passthrough).
+    if call.name == "abort":
+        if not in_rescue:
+            raise IRBuildError(
+                f"line {call.line}:{call.col}: abort(...) is only valid "
+                f"inside a RESCUE body"
+            )
+        return CallIR(step_name=call.name, kwargs=call.kwargs, line=call.line)
     if call.name not in steps_by_name:
         raise IRBuildError(
             f"line {call.line}:{call.col}: unknown STEP {call.name!r}"
@@ -406,6 +576,7 @@ def _build_if_block(
     steps_by_name: dict[str, StepIR],
     contracts: dict[str, ContractIR],
     outer_available: dict[str, TypeExpr],
+    in_rescue: bool = False,
 ) -> IfBlockIR:
     """Validate and build an IF block IR node.
 
@@ -416,14 +587,20 @@ def _build_if_block(
     - <literal> is a string / number / bare-ident (enum value)
 
     Both branches are built in their own scope copy — fields produced inside
-    a branch do not leak to the outer chain (no type narrowing in v0)."""
+    a branch do not leak to the outer chain (no type narrowing in v0).
+    `in_rescue` propagates to nested chains so abort(...) is permitted in
+    branches when the IF is itself inside a rescue body."""
     cond_ir = _build_condition(decl.condition, contracts, outer_available, decl.line, decl.col)
 
     then_scope = dict(outer_available)
-    then_items = _build_flow_items(decl.then_body, steps_by_name, contracts, then_scope)
+    then_items = _build_flow_items(
+        decl.then_body, steps_by_name, contracts, then_scope, in_rescue=in_rescue,
+    )
 
     else_scope = dict(outer_available)
-    else_items = _build_flow_items(decl.else_body, steps_by_name, contracts, else_scope)
+    else_items = _build_flow_items(
+        decl.else_body, steps_by_name, contracts, else_scope, in_rescue=in_rescue,
+    )
 
     return IfBlockIR(
         condition=cond_ir,
@@ -523,15 +700,19 @@ def _build_while_block(
     steps_by_name: dict[str, StepIR],
     contracts: dict[str, ContractIR],
     outer_available: dict[str, TypeExpr],
+    in_rescue: bool = False,
 ) -> WhileBlockIR:
     """Validate and build a WHILE block IR node. Reuses _build_condition for
     the condition validation (same shape as IF). Body is built in its own
-    scope copy."""
+    scope copy. `in_rescue` propagates so abort(...) is permitted inside the
+    body when the WHILE is itself inside a rescue body."""
     cond_ir = _build_condition(
         decl.condition, contracts, outer_available, decl.line, decl.col,
     )
     body_scope = dict(outer_available)
-    body_items = _build_flow_items(decl.body, steps_by_name, contracts, body_scope)
+    body_items = _build_flow_items(
+        decl.body, steps_by_name, contracts, body_scope, in_rescue=in_rescue,
+    )
     return WhileBlockIR(
         condition=cond_ir,
         max_iters=decl.max_iters,
@@ -545,13 +726,16 @@ def _build_match_block(
     steps_by_name: dict[str, StepIR],
     contracts: dict[str, ContractIR],
     outer_available: dict[str, TypeExpr],
+    in_rescue: bool = False,
 ) -> MatchBlockIR:
     """Validate and build a MATCH block IR node.
 
     The scrutinee `<state_field>.<sub_field>` must point at an enum sub-field
     of an upstream contract. CASE values are checked against the enum
     variants — any unknown variant is an IR error. DEFAULT, if present, must
-    be the last arm. Each arm is built in its own scope copy."""
+    be the last arm. Each arm is built in its own scope copy. `in_rescue`
+    propagates so abort(...) is permitted in arms when the MATCH is itself
+    inside a rescue body."""
     if not isinstance(decl.scrutinee, FieldRefExpr):
         raise IRBuildError(
             f"line {decl.line}:{decl.col}: MATCH scrutinee must be "
@@ -600,6 +784,7 @@ def _build_match_block(
             # DEFAULT — already enforced last by the parser.
             arm_body = _build_flow_items(
                 arm.body, steps_by_name, contracts, dict(outer_available),
+                in_rescue=in_rescue,
             )
             cases_ir.append(MatchCaseIR(value=None, body=tuple(arm_body), line=arm.line))
             continue
@@ -617,6 +802,7 @@ def _build_match_block(
         seen_values.add(arm.value)
         arm_body = _build_flow_items(
             arm.body, steps_by_name, contracts, dict(outer_available),
+            in_rescue=in_rescue,
         )
         cases_ir.append(MatchCaseIR(value=arm.value, body=tuple(arm_body), line=arm.line))
 
@@ -633,6 +819,7 @@ def _build_for_each(
     steps_by_name: dict[str, StepIR],
     contracts: dict[str, ContractIR],
     outer_available: dict[str, TypeExpr],
+    in_rescue: bool = False,
 ) -> ForEachIR:
     """Validate and build a FOR EACH IR node.
 
@@ -641,6 +828,9 @@ def _build_for_each(
     - that field must be a ListType (otherwise iteration is undefined)
     - inside the body, `loop_var` is bound to the inner type and is also
       visible to nested calls/loops via the (mutated) inner scope
+
+    `in_rescue` propagates so abort(...) is permitted in the body when the
+    FOR EACH is itself inside a rescue body.
     """
     if decl.collection not in outer_available:
         raise IRBuildError(
@@ -657,7 +847,9 @@ def _build_for_each(
     inner_available = dict(outer_available)
     inner_available[decl.loop_var] = coll_type.inner
 
-    body_items = _build_flow_items(decl.body, steps_by_name, contracts, inner_available)
+    body_items = _build_flow_items(
+        decl.body, steps_by_name, contracts, inner_available, in_rescue=in_rescue,
+    )
 
     return ForEachIR(
         loop_var=decl.loop_var,
@@ -762,6 +954,8 @@ def _validate_parallel_for_each(graph: FlowGraph) -> None:
                 _walk(elem.body)
 
     _walk(graph.flow.chain)
+    for rb in graph.flow.rescues:
+        _walk(rb.body)
 
 
 def _render(t: TypeExpr) -> str:

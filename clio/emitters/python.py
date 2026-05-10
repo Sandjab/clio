@@ -407,6 +407,10 @@ class PythonEmitter(BaseEmitter):
         chain_groups: list[list[str]] = []
         imported_steps: list[str] = []
         steps_by_name = {s.name: s for s in graph.steps}
+        # RESCUE bookkeeping: the names of steps protected by a RESCUE block
+        # (used to wrap their call site in try/except) and the blocks
+        # themselves (used to emit the _rescue_<name> helper functions).
+        rescue_target_names = {rb.step_name for rb in graph.flow.rescues}
         # The currently-being-built group; reset between top-level items.
         # Mutated (.append) by closures below; never reassigned inside them.
         _current: list[str] = []
@@ -431,15 +435,41 @@ class PythonEmitter(BaseEmitter):
             # (no accumulation semantic in v0); the call is invoked for its side
             # effects on whatever it explicitly writes.
             if scope_local:
-                _current.append(
-                    f"{indent}{step.name}_mod.{step.name}({kwargs_str})"
-                )
+                call_line = f"{step.name}_mod.{step.name}({kwargs_str})"
             else:
-                _current.append(
-                    f"{indent}state[{out_name!r}] = {step.name}_mod.{step.name}({kwargs_str})"
+                call_line = (
+                    f"state[{out_name!r}] = {step.name}_mod.{step.name}({kwargs_str})"
                 )
+            # RESCUE: wrap the protected step's call site in try/except. Any
+            # uncaught Exception triggers _rescue_<name>(state); FlowAborted
+            # (raised by the rescue body's terminal abort) propagates verbatim.
+            # The IR builder restricts RESCUE targets to the top-level FLOW
+            # chain in v0.8, so this branch is only reached when scope_local
+            # is empty — i.e. never inside a FOR EACH / IF / MATCH / WHILE
+            # body. We still gate on `not scope_local` for defence in depth.
+            if step.name in rescue_target_names and not scope_local:
+                _current.append(f"{indent}try:")
+                _current.append(f"{indent}    {call_line}")
+                _current.append(f"{indent}except FlowAborted:")
+                _current.append(f"{indent}    raise")
+                _current.append(f"{indent}except Exception:")
+                _current.append(f"{indent}    _rescue_{step.name}(state)")
+                _current.append(f"{indent}    raise")
+            else:
+                _current.append(f"{indent}{call_line}")
 
         def _emit_item(item, indent: str, scope_local: set[str]) -> None:
+            # `abort("msg")` is a synthetic CallIR injected by the IR builder
+            # only inside RESCUE bodies. It compiles to `raise FlowAborted(msg)`
+            # regardless of context (rescue body root, or nested IF/MATCH/
+            # WHILE/FOR EACH inside the rescue body). Placed at the top of
+            # _emit_item so every recursive call site picks it up.
+            if isinstance(item, CallIR) and item.step_name == "abort":
+                msg = next(
+                    (v for k, v in item.kwargs if k == "message"), ""
+                )
+                _current.append(f"{indent}raise FlowAborted({msg!r})")
+                return
             if isinstance(item, ForEachIR):
                 if item.parallel:
                     _current.append(emit_parallel_for_each_python(item, steps_by_name, indent))
@@ -515,6 +545,23 @@ class PythonEmitter(BaseEmitter):
             _emit_item(item, "    ", set())
             chain_groups.append(list(_current))
 
+        # Emit one _rescue_<step_name>(state) helper per RESCUE block. Each
+        # helper body is rendered with the same _emit_item walker; the body's
+        # terminal abort(...) is rewritten to `raise FlowAborted(msg)`, so
+        # the helper never returns normally. The helpers live at module
+        # level (after `run`) and are called from the wrapped try/except in
+        # the main chain.
+        rescue_helpers: list[str] = []
+        for rb in graph.flow.rescues:
+            _current = []
+            for sub in rb.body:
+                _emit_item(sub, "    ", set())
+            rescue_helpers.append(
+                f"def _rescue_{rb.step_name}(state: dict) -> None:\n"
+                + "\n".join(_current)
+                + "\n"
+            )
+
         needs_concurrent = _has_parallel(graph.flow.chain)
         cf_import = (
             "import concurrent.futures\nimport contextvars\n\n"
@@ -535,6 +582,24 @@ class PythonEmitter(BaseEmitter):
                     chain_body_parts.append("        " + sub)
             chain_body_parts.append(f"            _persist_state({idx}, state)")
         chain_body = "\n".join(chain_body_parts)
+        # FlowAborted is defined locally in the emitted flow module when at
+        # least one RESCUE block is present. Keeping the class here (rather
+        # than in clio_runtime) means flow.py is self-contained for rescue
+        # semantics and existing snapshot fixtures stay byte-identical when
+        # no RESCUE is declared.
+        flow_aborted_block = (
+            "class FlowAborted(Exception):\n"
+            "    \"\"\"Raised by RESCUE bodies' terminal abort(...) call. Propagates out\n"
+            "    of `run()` and is re-raised verbatim by any try/except wrapper around\n"
+            "    a protected step's call site.\"\"\"\n"
+            "    pass\n"
+            "\n"
+            "\n"
+            if graph.flow.rescues else ""
+        )
+        rescue_helpers_block = (
+            "\n\n" + "\n\n".join(rescue_helpers) if rescue_helpers else ""
+        )
         # JSON-style double-quoted literal so callers can grep for
         # `set_flow("name")` consistently across emitters.
         flow_name_lit = json.dumps(graph.flow.name)
@@ -554,6 +619,7 @@ class PythonEmitter(BaseEmitter):
             f'from .clio_runtime import logging as _log\n'
             f'\n'
             f'\n'
+            f'{flow_aborted_block}'
             f'TOTAL_STEPS = {total_steps}\n'
             f'\n'
             f'\n'
@@ -600,6 +666,7 @@ class PythonEmitter(BaseEmitter):
             f'duration_ms=int((time.monotonic() - _t0) * 1000), '
             f'success=_success)\n'
             f'        _log.set_flow(None)\n'
+            f'{rescue_helpers_block}'
         )
 
     def _emit_main(self, pkg_name: str) -> str:

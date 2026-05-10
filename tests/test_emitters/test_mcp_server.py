@@ -379,7 +379,7 @@ def test_input_schema_keeps_state_ref_kwarg_in_required(tmp_path):
     )
     graph = FlowGraph(
         steps=(step,),
-        flow=FlowIR(name="hello", chain=(call,), line=5),
+        flow=FlowIR(name="hello", chain=(call,), rescues=(), line=5),
     )
     MCPServerEmitter().emit(graph, tmp_path)
     server_py = (tmp_path / "hello" / "server.py").read_text()
@@ -615,3 +615,56 @@ def test_mcp_judgment_step_no_onfail_wraps_in_try_except(tmp_path):
     assert "success=False" in body
     # And there should be a `raise` to re-throw the exception
     assert "    raise" in body or "raise\n" in body
+
+
+# ---------------------------------------------------------------------------
+# RESCUE handler (v0.8) — async mirror of the python target's lowering
+# ---------------------------------------------------------------------------
+
+RESCUE_MCP_SRC = """STEP load
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE: exact
+
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: result: int
+  MODE: judgment
+
+FLOW pipeline
+  load(path="x.csv")
+    -> detect(rows=rows)
+
+  RESCUE detect:
+    -> abort("detection failed")
+
+RESOURCES
+  target: mcp-server
+"""
+
+
+def test_mcp_emit_rescue_basic(tmp_path):
+    """The emitted mcp-server flow module must wrap the protected (judgment)
+    step in try/except, define an async _rescue_<step> helper that threads
+    _session, render abort as raise FlowAborted, and gate the FlowAborted
+    class on a RESCUE block being present."""
+    MCPServerEmitter().emit(build_ir(parse(RESCUE_MCP_SRC)), tmp_path)
+
+    flow_path = tmp_path / "pipeline" / "flow.py"
+    assert flow_path.exists(), f"flow.py missing in {sorted(tmp_path.rglob('*'))}"
+    flow_text = flow_path.read_text()
+
+    # FlowAborted is defined in the emitted flow module, gated on rescues.
+    assert "class FlowAborted(Exception)" in flow_text
+    # Async helper present, threading _session for judgment-mode rescues.
+    assert "async def _rescue_detect(state" in flow_text
+    assert "_session" in flow_text
+    # Abort renders as raise FlowAborted (single or double quoted literal).
+    assert (
+        "raise FlowAborted('detection failed')" in flow_text
+        or 'raise FlowAborted("detection failed")' in flow_text
+    )
+    # Try/except around the call site, awaiting the async rescue helper.
+    assert "try:" in flow_text
+    assert "except FlowAborted:" in flow_text
+    assert "await _rescue_detect(state" in flow_text

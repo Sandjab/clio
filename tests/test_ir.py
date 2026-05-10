@@ -600,7 +600,7 @@ def test_ir_rejects_nested_parallel():
         parallel=True,
         collector="outer_results",
     )
-    flow = FlowIR(name="pipe", chain=(outer,), line=1)
+    flow = FlowIR(name="pipe", chain=(outer,), rescues=(), line=1)
     leaf = StepIR(
         name="leaf",
         takes=(FieldIR(name="y", type=PrimitiveType("str")),),

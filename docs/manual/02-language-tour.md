@@ -144,6 +144,38 @@ load_text(file="input.txt")      # literal value
 
 A step's `TAKES` parameters are passed by keyword; the literal forms (`"input.txt"`, integers, booleans) are inlined into the call site at compile time.
 
+## RESCUE — multi-step failure handler (v0.8)
+
+`RESCUE step_a:` declares a top-level handler that runs if `step_a` raises
+after its `ON_FAIL` retry/escalate/fallback chain exhausts. Unlike
+`ON_FAIL: abort(...)` (which is a single declarative clause), the RESCUE
+body is a **chain of step calls** ending in `abort("message")`, so you can
+notify, log, or otherwise side-effect before aborting:
+
+```
+STEP detect_churn
+  ON_FAIL: retry(3) then escalate
+  ...
+
+FLOW pipeline
+  load_csv(...) -> detect_churn(...) -> route(...)
+
+  RESCUE detect_churn:
+    -> notify_slack(channel="#alerts")
+    -> abort("churn detection failed")
+```
+
+When `detect_churn` raises:
+1. `ON_FAIL: retry(3) then escalate` exhausts itself.
+2. The RESCUE body runs: `notify_slack` then `abort`.
+3. `abort` raises `FlowAborted("...")`. The chain item after `detect_churn`
+   (`route`) is skipped.
+
+**One RESCUE per STEP**; the handler attaches to a STEP that appears in
+the top-level FLOW chain (not nested inside FOR EACH / IF / MATCH /
+WHILE). Compiles to **python** and **mcp-server**; **langgraph** and
+**claude-cli** reject at compile time.
+
 ## Putting it together
 
 A complete minimal flow:

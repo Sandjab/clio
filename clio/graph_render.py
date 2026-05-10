@@ -474,15 +474,22 @@ def _render_node_card_html(step: StepIR) -> str:
 
 def _to_mermaid_rich_labels(
     graph: FlowGraph,
-) -> tuple[str, dict[str, dict], dict[str, dict], dict[str, dict], dict[str, dict]]:
+) -> tuple[
+    str,
+    dict[str, dict],
+    dict[str, dict],
+    dict[str, dict],
+    dict[str, dict],
+    dict[str, dict],
+]:
     """Mermaid source where each node label is the rich Tabloid-style HTML
     card. The viewer's CSS hides the underlying SVG rect so only the HTML
     label shows.
 
-    Returns (mermaid_source, foreach_meta, if_meta, match_meta, while_meta).
-    Each meta dict maps a node/cluster id to control-flow specifics; the
-    viewer JS uses them to enrich the Mermaid output with chip-pills /
-    decision cards.
+    Returns (mermaid_source, foreach_meta, if_meta, match_meta, while_meta,
+    rescue_meta). Each meta dict maps a node/cluster id to control-flow
+    specifics; the viewer JS uses them to enrich the Mermaid output with
+    chip-pills / decision cards / rescue side-panel enrichment.
     """
     steps_by_name = {s.name: s for s in graph.steps}
     lines: list[str] = ["flowchart TD"]
@@ -492,6 +499,7 @@ def _to_mermaid_rich_labels(
     if_meta: dict[str, dict] = {}
     match_meta: dict[str, dict] = {}
     while_meta: dict[str, dict] = {}
+    rescue_meta: dict[str, dict] = {}
 
     def declare(step_name: str, indent: str) -> None:
         if step_name in declared:
@@ -641,12 +649,64 @@ def _to_mermaid_rich_labels(
     else:
         walk(graph.flow.chain, "    ", [])
 
+    # RESCUE clusters — one red-tinted node per RescueBlockIR with a dotted
+    # "fails" edge from the protected step and a body sub-flow ending in an
+    # abort circle. Populates rescue_meta for the side-panel JS.
+    if graph.flow is not None and graph.flow.rescues:
+        for rb in graph.flow.rescues:
+            target_id = rb.step_name
+            rescue_id = f"rescue_{rb.step_name}"
+            lines.append(f'    {rescue_id}["RESCUE<br/>{rb.step_name}"]')
+            lines.append(f"    class {rescue_id} rescueClass")
+            lines.append(f"    {target_id} -. fails .-> {rescue_id}")
+            prev_id = rescue_id
+            body_summary: list[dict] = []
+            for item in rb.body:
+                if isinstance(item, CallIR):
+                    if item.step_name == "abort":
+                        abort_id = f"abort_{rb.step_name}"
+                        msg = next(
+                            (v for k, v in item.kwargs if k == "message"), ""
+                        )
+                        msg_str = str(msg).replace('"', '\\"')
+                        lines.append(f'    {abort_id}(("abort: {msg_str}"))')
+                        lines.append(f"    {prev_id} --> {abort_id}")
+                        prev_id = abort_id
+                        body_summary.append(
+                            {"step_name": "abort", "message": msg}
+                        )
+                    else:
+                        item_id = item.step_name
+                        # Declare the body step so it has a card if it isn't
+                        # already part of the main chain.
+                        declare(item.step_name, "    ")
+                        lines.append(f"    {prev_id} --> {item_id}")
+                        prev_id = item_id
+                        body_summary.append(
+                            {
+                                "step_name": item.step_name,
+                                "kwargs": list(item.kwargs),
+                            }
+                        )
+                # IF/MATCH/WHILE/FOR EACH inside a rescue body could be
+                # expanded later; v0.8 ships the call+abort path only.
+            rescue_meta[rescue_id] = {
+                "step_name": rb.step_name,
+                "body": body_summary,
+            }
+        # Red accent style for rescue nodes.
+        lines.append(
+            "    classDef rescueClass fill:#fce4e4,stroke:#d73a49,"
+            "stroke-width:2px,color:#7b1d1f"
+        )
+
     return (
         "\n".join(lines) + "\n",
         foreach_meta,
         if_meta,
         match_meta,
         while_meta,
+        rescue_meta,
     )
 
 
@@ -1165,6 +1225,7 @@ const FOREACH_META = __FOREACH_META_JSON__;
 const IF_META = __IF_META_JSON__;
 const MATCH_META = __MATCH_META_JSON__;
 const WHILE_META = __WHILE_META_JSON__;
+const RESCUE_META = __RESCUE_META_JSON__;
 
 document.title = 'CLIO graph — ' + TITLE;
 document.getElementById('flow-title').textContent = TITLE;
@@ -1396,9 +1457,14 @@ def to_html(graph: FlowGraph) -> str:
     the HTML in any browser with internet access (mermaid.js + Geist fonts
     are loaded from CDN).
     """
-    mermaid_source, foreach_meta, if_meta, match_meta, while_meta = (
-        _to_mermaid_rich_labels(graph)
-    )
+    (
+        mermaid_source,
+        foreach_meta,
+        if_meta,
+        match_meta,
+        while_meta,
+        rescue_meta,
+    ) = _to_mermaid_rich_labels(graph)
     mermaid_source = mermaid_source.rstrip("\n")
     steps_data = {s.name: _step_to_dict(s) for s in graph.steps}
     contracts_data = {c.name: _contract_to_dict(c) for c in graph.contracts}
@@ -1434,4 +1500,5 @@ def to_html(graph: FlowGraph) -> str:
         .replace("__IF_META_JSON__", json.dumps(if_meta, ensure_ascii=False))
         .replace("__MATCH_META_JSON__", json.dumps(match_meta, ensure_ascii=False))
         .replace("__WHILE_META_JSON__", json.dumps(while_meta, ensure_ascii=False))
+        .replace("__RESCUE_META_JSON__", json.dumps(rescue_meta, ensure_ascii=False))
     )

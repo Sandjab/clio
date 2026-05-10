@@ -365,3 +365,56 @@ def test_html_panel_has_mode_class_hooks():
     for cls in ("judgment", "exact-shell", "exact-rest", "exact-code"):
         assert f".v-panel.{cls}" in out
         assert f".node-card.{cls}" in out
+
+
+# --------------------------------------------------------------------------
+# RESCUE viewer cluster (mermaid + html)
+# --------------------------------------------------------------------------
+
+
+_RESCUE_VIEWER_SRC = (
+    "STEP a\n"
+    "  TAKES: x: int\n"
+    "  GIVES: y: int\n"
+    "  MODE:  exact\n"
+    "FLOW p\n"
+    "  a(x=1)\n"
+    "\n"
+    "  RESCUE a:\n"
+    '    -> abort("boom")\n'
+)
+
+
+def test_mermaid_renders_rescue_cluster():
+    """Mermaid output for a flow with a RESCUE block must contain a rescue
+    node, a dotted 'fails' edge from the protected step, and an abort node."""
+    out = _html(_RESCUE_VIEWER_SRC)
+    # The HTML viewer embeds the mermaid source inside a JSON string; we
+    # extract it and assert against the rich-label mermaid produced by
+    # `_to_mermaid_rich_labels` (the same source `to_html` uses).
+    mermaid_src = _extract_js_const(out, "MERMAID_SRC")
+    assert isinstance(mermaid_src, str)
+    # The rescue node id appears.
+    assert "rescue_a" in mermaid_src
+    # Dotted edge from the protected step `a` to `rescue_a` with label "fails".
+    assert "a -. fails .-> rescue_a" in mermaid_src
+    # Class for red accent.
+    assert "classDef rescueClass" in mermaid_src
+    # Abort node renders with the message.
+    assert "abort_a" in mermaid_src
+    assert "boom" in mermaid_src
+
+
+def test_html_exposes_rescue_meta():
+    """HTML viewer must expose rescue_meta to the JS via the placeholder."""
+    out = _html(_RESCUE_VIEWER_SRC)
+    # The JS const declaration is present.
+    assert "const RESCUE_META =" in out
+    # The placeholder is replaced with a JSON object containing the rescue.
+    rescue_meta = _extract_js_const(out, "RESCUE_META")
+    assert "rescue_a" in rescue_meta
+    entry = rescue_meta["rescue_a"]
+    assert entry["step_name"] == "a"
+    body = entry["body"]
+    assert any(item.get("step_name") == "abort" and item.get("message") == "boom"
+               for item in body)

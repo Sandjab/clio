@@ -196,12 +196,58 @@ WHILE draft.score < 0.85 MAX 3:
 
 Key idea: `MAX <int>` is **mandatory** — bounds the loop to keep LLM-driven flows terminating. The body must update the state field referenced by the condition (typically by writing back the same `gives.name`) so the loop can make progress. Compiles to python and mcp-server only — langgraph rejects `WHILE` in v0.7 (cyclic edges + state reducers planned for v0.8).
 
+## 10. Critical LLM pipeline with ON_FAIL × RESCUE
+
+For pipelines whose key STEP is a judgment (LLM) call, you usually want:
+
+1. Auto-retry on transient failures (network, rate-limit, glitchy LLM).
+2. Escalate to a more capable model if all retries fail.
+3. As a last resort, notify a human and abort with a contextual message.
+
+ON_FAIL handles (1) and (2) declaratively; RESCUE handles (3) procedurally:
+
+```
+STEP detect_churn
+  TAKES:    rows: List<int>
+  GIVES:    risks: List<{client: str, score: float}>
+  MODE:     judgment
+  ON_FAIL:  retry(3) then escalate
+
+STEP notify_slack
+  TAKES:    channel: str, reason: str
+  GIVES:    sent: bool
+  MODE:     exact
+
+FLOW pipeline
+  load_csv(path="data.csv") -> detect_churn(rows=rows)
+
+  RESCUE detect_churn:
+    -> notify_slack(channel="#alerts", reason="churn detection failed")
+    -> abort("churn detection failed — see #alerts")
+```
+
+The runtime sequence:
+- `load_csv` runs.
+- `detect_churn` runs. If it raises:
+  - `retry(3)` retries up to 3 times.
+  - `escalate` switches to a more capable model.
+  - If both exhaust, the `RESCUE` body runs: `notify_slack` then `abort`.
+- The chain after `detect_churn` is skipped.
+
+For a complete working example, see [`examples/critical_pipeline.clio`](../../examples/critical_pipeline.clio).
+
+Key idea: ON_FAIL declares **what to try** (retry/escalate/fallback);
+RESCUE declares **what to do once the tries are spent** (notify, log,
+clean up, then abort). The two compose: ON_FAIL runs first, RESCUE runs
+only on exhaustion. Compiles to python and mcp-server; langgraph and
+claude-cli reject at compile time.
+
 ## What's not in the cookbook (yet)
 
 - **Multi-field ASSERT** — accept `a > b` between two fields. Specced, planned.
 - **Boolean `and`/`or` keywords in ASSERT and conditions** — natural extension of the chained-comparator desugaring.
 - **`auto` MODE routing** — parsed, runtime decision not yet implemented.
-- **`.FAILS` postfix in IF conditions** — specced for failure-aware branching, not yet implemented.
+- **`.FAILS` postfix in IF conditions** — specced for failure-aware branching; for a multi-step failure handler today, see [recipe #10](#10-critical-llm-pipeline-with-on_fail--rescue).
 
 When these land, this page gets new recipes. (See [the changelog](../../CHANGELOG.md) for what's recently moved out of "not yet".)
 

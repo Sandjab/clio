@@ -77,3 +77,4 @@ class Keyword(str, Enum):
     DEFAULT = "DEFAULT"
     WHILE = "WHILE"
     MAX = "MAX"
+    RESCUE = "RESCUE"
