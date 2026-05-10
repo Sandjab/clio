@@ -1,6 +1,89 @@
 # Changelog
 
-## Unreleased
+## v0.9.0 — 2026-05-10
+
+### Viewer
+
+- **Replay an `events.jsonl` trace inside the HTML viewer**
+  (`docs/manual/05-cli-reference.md` §`graph` / `html`). The toolbar
+  now exposes a "Drop events.jsonl" target; once a trace is loaded, a
+  control bar appears with play/pause/prev/next/restart, a `0.1×→10×`
+  speed slider (default `2×`, scaled against real `ts` deltas), an
+  auto-follow side panel for the active step, and a stats summary
+  (`done` / `fail` / `total` walltime). Active steps pulse with a
+  colored stroke; failed `step_end` events get a red border. No
+  network calls — everything runs locally on the dropped file.
+- The replay UI is non-invasive: REST-less / event-less flows render
+  identically to v0.8 (the control bar stays hidden until a file is
+  dropped).
+
+### Tests
+
+- 6 new viewer tests asserting dropzone, control-bar elements, CSS
+  classes (`.replay-active`, `.replay-done`, `.replay-fail`), the
+  `Replay` JS module entry points, and the manual-click auto-follow
+  bypass. Suite total: 550 (up from 544).
+
+### Language
+
+- **`impl.rest` now parses and honors `query`, `headers`, and `body`**
+  (`docs/LANGUAGE_SPEC.md` §impl.mode: rest). Inline-dict values support
+  `${var}` substitution from `TAKES` and full-value `env:NAME` resolution
+  from `os.environ`. Five body forms — JSON dict, raw string, `"@./file"`
+  (content-type inferred from extension), `{form: {...}}` for
+  `application/x-www-form-urlencoded`, and `{multipart: {...}}` for
+  `multipart/form-data` (where `"@./path"` values become file parts).
+  Forbidden: `body` on `GET`, mixing `form` + `multipart`.
+- **`retry: {...}` replaces the parsed-but-ignored `retries: N` scalar**.
+  Required field `attempts`; optional `backoff` (`exponential` |
+  `constant`, default exponential), `base` (default 0.1s), `cap`
+  (default 30s), `on` (default `["5xx", "429", "timeout"]`,
+  also accepts `"network"`). Honored at runtime with `Retry-After`
+  precedence on the computed delay. The bare scalar `retries: N` is now
+  a parse-time error with a migration hint.
+- New AST + IR nodes: `RetryPolicy` / `RetryPolicyIR`, sealed
+  `RestBody` / `RestBodyIR` hierarchy with `JsonBody`, `RawBody`,
+  `FileBody`, `FormBody`, `MultipartBody` variants.
+- New parser primitives: inline-dict (`{k: v, ...}`) and inline-list
+  (`[v, ...]`) value parsers, used for the new REST fields. Bool/null
+  literals (`true`/`false`/`null`/`none`) are JSON-typed only inside
+  inline dicts/lists; bareword `parse: none` etc. keep their string value.
+- Inline-dict keys may now also be quoted strings, so users can write
+  HTTP headers with non-identifier characters
+  (`{"Content-Type": "application/json"}`).
+
+### Emitters
+
+- `python` and `mcp-server`: emit `requests.request(...)` with `params`,
+  `headers`, JSON / raw / file / form / multipart body construction, and
+  a retry loop wrapping the call when `impl.retry` is set. A new
+  `clio/runtime/rest.py` module is bundled into `clio_runtime/`
+  (templating + retry + content-type inference + file-body reading).
+  REST-less flows still produce identical output (no spurious helper
+  copy).
+- `claude-cli`: each REST step now imports the same bundled
+  `clio_runtime/rest.py` (added to `sys.path` at startup) and emits the
+  same kwargs construction + retry loop. The runtime bundle is now
+  copied whenever the flow has any REST or judgment step (not only
+  judgment, as in v0.8).
+
+### Documentation
+
+- `docs/LANGUAGE_SPEC.md` §impl.mode: rest fully rewritten with the new
+  syntax (templating rules, `body` table of 5 forms, `retry` field
+  semantics) and updated implementation-status row.
+- The legacy "v0 limitations carried forward" entries about
+  `query/headers/body` and `retries` are removed.
+
+### Tests
+
+- 31 new unit tests for `clio.runtime.rest` (templating, content-type,
+  retry classification, backoff, Retry-After parsing).
+- 14 new parser tests (query/headers/body forms, retry validation,
+  scalar-retries rejection, GET-with-body rejection,
+  form/multipart-combined rejection).
+- 13 new emitter tests (5 for python, 4 for claude-cli, plus runtime-
+  copy assertions). Suite total: 543 (up from 483 at v0.8).
 
 ## v0.8.0 — 2026-05-10
 

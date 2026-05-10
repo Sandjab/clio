@@ -280,12 +280,24 @@ def _impl_to_dict(i: ImplIR) -> dict:
         return d
     if isinstance(i, RestImplIR):
         d = {"mode": "rest", "method": i.method, "url": i.url}
+        if i.query is not None:
+            d["query"] = {k: v for k, v in i.query}
+        if i.headers is not None:
+            d["headers"] = {k: v for k, v in i.headers}
+        if i.body is not None:
+            d["body"] = type(i.body).__name__.removesuffix("IR")
         if i.response_path:
             d["response_path"] = i.response_path
         if i.timeout_seconds is not None:
             d["timeout"] = i.timeout_seconds
-        if i.retries is not None:
-            d["retries"] = i.retries
+        if i.retry is not None:
+            d["retry"] = {
+                "attempts": i.retry.attempts,
+                "backoff": i.retry.backoff,
+                "base": i.retry.base,
+                "cap": i.retry.cap,
+                "on": list(i.retry.on),
+            }
         return d
     return {"mode": type(i).__name__}
 
@@ -1174,6 +1186,119 @@ g.node:focus-visible .node-card {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation-duration: 0.001ms !important; }
 }
+
+/* ============== Replay UI (drag-drop events.jsonl) ============== */
+.viewer .v-toolbar .replay-drop {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; font-size: 12px; font-weight: 500;
+  background: var(--bg);
+  border: 1px dashed var(--rule);
+  color: var(--neutral-strong);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.viewer .v-toolbar .replay-drop:hover { border-color: var(--neutral-strong); }
+.viewer .v-toolbar .replay-drop.dragging { border-style: solid; background: var(--rst-tint); }
+.viewer .v-toolbar .replay-drop input[type="file"] { display: none; }
+.viewer .v-toolbar .replay-drop svg {
+  width: 12px; height: 12px;
+  stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+}
+
+.viewer .replay-bar {
+  display: none;
+  background: var(--surface);
+  border-bottom: 1px solid var(--rule);
+  padding: 10px 28px;
+  align-items: center; gap: 14px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.viewer .replay-bar.visible { display: flex; }
+.viewer .replay-bar button {
+  width: 28px; height: 28px;
+  border: 1px solid var(--rule);
+  background: var(--bg);
+  border-radius: 6px;
+  font-size: 12px;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  color: var(--ink);
+  font-family: inherit;
+  transition: background 0.12s, border-color 0.12s;
+}
+.viewer .replay-bar button:hover { background: var(--rst-tint); border-color: var(--rst-strong); }
+.viewer .replay-bar button:disabled { opacity: 0.4; cursor: not-allowed; }
+.viewer .replay-bar .replay-progress {
+  flex: 1;
+  display: flex; align-items: center; gap: 10px;
+  font-family: 'Geist Mono', monospace; font-size: 11px;
+}
+.viewer .replay-bar .replay-progress .replay-track {
+  flex: 1; height: 4px; background: var(--rule-soft); border-radius: 2px;
+  overflow: hidden;
+}
+.viewer .replay-bar .replay-progress .replay-fill {
+  height: 100%; background: var(--rst-strong);
+  width: 0%; transition: width 0.18s ease-out;
+}
+.viewer .replay-bar .speed-control {
+  display: flex; align-items: center; gap: 6px;
+  font-family: 'Geist Mono', monospace;
+}
+.viewer .replay-bar .speed-control input[type="range"] {
+  width: 90px; accent-color: var(--rst-strong);
+}
+.viewer .replay-bar .speed-control .speed-value {
+  font-size: 11px; color: var(--ink); min-width: 36px; text-align: right;
+}
+.viewer .replay-bar .follow-control {
+  display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  user-select: none;
+}
+.viewer .replay-bar .follow-control input[type="checkbox"] { accent-color: var(--rst-strong); }
+
+/* Active step pulse + tinted bg */
+@keyframes clio-replay-pulse {
+  0%, 100% { filter: drop-shadow(0 0 0 var(--rst-strong)); }
+  50%      { filter: drop-shadow(0 0 8px var(--rst-strong)); }
+}
+g.node.replay-active rect, g.node.replay-active polygon {
+  stroke: var(--rst-strong) !important;
+  stroke-width: 2.5px !important;
+}
+g.node.replay-active { animation: clio-replay-pulse 1.4s ease-in-out infinite; }
+
+/* Done — subtle dim + green check */
+g.node.replay-done rect, g.node.replay-done polygon {
+  opacity: 0.85;
+}
+g.node.replay-done::after { content: ""; }  /* placeholder; check rendered via JS */
+
+/* Fail — red border + ✗ marker */
+g.node.replay-fail rect, g.node.replay-fail polygon {
+  stroke: oklch(48% 0.18 25) !important;
+  stroke-width: 2.5px !important;
+}
+
+.replay-status-marker {
+  font-family: 'Geist Mono', monospace;
+  font-weight: 700;
+  font-size: 16px;
+  pointer-events: none;
+}
+.replay-status-marker.done { fill: oklch(50% 0.14 145); }
+.replay-status-marker.fail { fill: oklch(48% 0.18 25); }
+
+/* Stats summary bar (right of toolbar) */
+.viewer .replay-bar .replay-stats {
+  display: flex; gap: 12px;
+  font-family: 'Geist Mono', monospace; font-size: 11px;
+  color: var(--muted);
+}
+.viewer .replay-bar .replay-stats span strong { color: var(--ink); font-weight: 600; }
+
 </style>
 </head>
 <body>
@@ -1183,7 +1308,35 @@ g.node:focus-visible .node-card {
     <span class="pill" id="flow-target"><span class="dot"></span><span id="flow-target-text"></span></span>
     <span class="pill" id="flow-counts"></span>
     <span class="spacer"></span>
+    <label class="replay-drop" id="replay-drop" title="Drop or pick an events.jsonl file (CLIO_LOG=1 emits one).">
+      <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5 """
+    """a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline>"""
+    """<line x1="12" y1="3" x2="12" y2="15"></line></svg>
+      <span id="replay-drop-label">Drop events.jsonl</span>
+      <input type="file" id="replay-file" accept=".jsonl,.json,.log,application/json,text/plain">
+    </label>
     <span class="credit">CLIO viewer</span>
+  </div>
+  <div class="replay-bar" id="replay-bar" role="region" aria-label="Replay controls">
+    <button id="replay-restart" title="Restart (jump to start)" aria-label="Restart">&#9198;&#9198;</button>
+    <button id="replay-prev" title="Previous event" aria-label="Previous event">&#9198;</button>
+    <button id="replay-play" title="Play / pause" aria-label="Play / pause">&#9654;</button>
+    <button id="replay-next" title="Next event" aria-label="Next event">&#9197;</button>
+    <span class="replay-progress">
+      <span id="replay-progress-text">0 / 0</span>
+      <span class="replay-track"><span class="replay-fill" id="replay-fill"></span></span>
+      <span id="replay-current-step" style="min-width: 90px;"></span>
+    </span>
+    <span class="speed-control">
+      <span>speed</span>
+      <input type="range" min="0.1" max="10" step="0.1" value="2" id="replay-speed">
+      <span class="speed-value" id="replay-speed-value">2.0&times;</span>
+    </span>
+    <label class="follow-control" title="Auto-show details of the active step in the side panel.">
+      <input type="checkbox" id="replay-follow" checked>
+      <span>follow</span>
+    </label>
+    <span class="replay-stats" id="replay-stats"></span>
   </div>
   <main class="layout">
     <div class="v-graph" role="img" aria-label="Pipeline diagram">
@@ -1467,6 +1620,247 @@ function injectForeachBanners() {
 window.addEventListener('load', () => {
   setTimeout(injectForeachBanners, 300);
 });
+
+/* ============== Replay engine (events.jsonl drop-in) ============== */
+
+const REPLAY_GLYPH_PLAY  = String.fromCharCode(0x25B6);
+const REPLAY_GLYPH_PAUSE = String.fromCharCode(0x23F8);
+const REPLAY_GLYPH_TIMES = String.fromCharCode(0x00D7);
+
+const Replay = {
+  events: [],
+  idx: 0,
+  isPlaying: false,
+  speed: 2.0,
+  follow: true,
+  manualSelection: false,
+  _timer: null,
+
+  load(text) {
+    const out = [];
+    for (const line of text.split('\\n')) {
+      const t = line.trim();
+      if (!t) continue;
+      try {
+        const ev = JSON.parse(t);
+        if (ev && typeof ev.event === 'string') out.push(ev);
+      } catch (e) { /* skip malformed lines */ }
+    }
+    if (!out.length) {
+      this._setLabel('No valid events found');
+      return;
+    }
+    this.events = out;
+    this.idx = 0;
+    this.manualSelection = false;
+    document.getElementById('replay-bar').classList.add('visible');
+    this._setLabel(out.length + ' events loaded');
+    this.render();
+  },
+
+  _setLabel(msg) {
+    const lab = document.getElementById('replay-drop-label');
+    if (lab) lab.textContent = msg;
+  },
+
+  _stepStateAt(idx) {
+    /* Compute per-step state after applying events[0..idx-1]. */
+    const states = {};
+    for (let i = 0; i < idx; i++) {
+      const ev = this.events[i];
+      if (!ev || !ev.step) continue;
+      if (ev.event === 'step_start') states[ev.step] = 'active';
+      else if (ev.event === 'step_end') {
+        states[ev.step] = ev.success === false ? 'fail' : 'done';
+      }
+    }
+    return states;
+  },
+
+  render() {
+    const states = this._stepStateAt(this.idx);
+
+    /* Reset all node classes, then reapply. */
+    document.querySelectorAll('g.node').forEach(n => {
+      n.classList.remove('replay-active', 'replay-done', 'replay-fail');
+    });
+    document.querySelectorAll('g.node').forEach(n => {
+      const id = n.id || '';
+      const m = id.match(/^flowchart-(.+?)-\\d+$/);
+      if (!m) return;
+      const st = states[m[1]];
+      if (st) n.classList.add('replay-' + st);
+    });
+
+    /* Progress text + fill. */
+    const total = this.events.length;
+    const pctRaw = total ? Math.min(1, this.idx / total) : 0;
+    const pct = (pctRaw * 100).toFixed(1) + '%';
+    document.getElementById('replay-progress-text').textContent = this.idx + ' / ' + total;
+    document.getElementById('replay-fill').style.width = pct;
+
+    /* Current step display. */
+    const last = this.idx > 0 ? this.events[this.idx - 1] : null;
+    const cur = document.getElementById('replay-current-step');
+    if (last && last.step) {
+      cur.textContent = last.event + ': ' + last.step;
+    } else if (last) {
+      cur.textContent = last.event;
+    } else {
+      cur.textContent = '';
+    }
+
+    /* Stats summary. */
+    let nDone = 0, nFail = 0, totalMs = 0;
+    for (const ev of this.events.slice(0, this.idx)) {
+      if (ev.event === 'step_end') {
+        if (ev.success === false) nFail++; else nDone++;
+        if (typeof ev.duration_ms === 'number') totalMs += ev.duration_ms;
+      }
+    }
+    const stats = document.getElementById('replay-stats');
+    stats.replaceChildren();
+    const mk = (label, val) => {
+      const s = el('span', {});
+      s.appendChild(document.createTextNode(label + ' '));
+      s.appendChild(el('strong', { text: String(val) }));
+      return s;
+    };
+    stats.appendChild(mk('done', nDone));
+    if (nFail) stats.appendChild(mk('fail', nFail));
+    stats.appendChild(mk('total', (totalMs / 1000).toFixed(2) + 's'));
+
+    /* Auto-follow side panel on the most recent step_start. */
+    if (this.follow && !this.manualSelection && last && last.event === 'step_start' && last.step) {
+      try { showStep(last.step); } catch (e) { /* unknown step ignored */ }
+    }
+
+    /* Play/pause button glyph. */
+    const playBtn = document.getElementById('replay-play');
+    if (playBtn) playBtn.textContent = this.isPlaying ? REPLAY_GLYPH_PAUSE : REPLAY_GLYPH_PLAY;
+
+    /* Disable prev/next at edges. */
+    document.getElementById('replay-prev').disabled = this.idx <= 0;
+    document.getElementById('replay-next').disabled = this.idx >= this.events.length;
+  },
+
+  step(delta) {
+    this.idx = Math.max(0, Math.min(this.events.length, this.idx + delta));
+    this.render();
+  },
+
+  play() {
+    if (this.isPlaying) return;
+    if (this.idx >= this.events.length) this.idx = 0;
+    this.isPlaying = true;
+    this.render();
+    this._scheduleTick();
+  },
+
+  pause() {
+    this.isPlaying = false;
+    if (this._timer) { clearTimeout(this._timer); this._timer = null; }
+    this.render();
+  },
+
+  toggle() { this.isPlaying ? this.pause() : this.play(); },
+
+  _scheduleTick() {
+    /* Compute delay to next event from real timestamps if both present;
+     * fall back to 400 ms / speed. Clamp to [10, 5000] ms so the user
+     * never waits forever, even on a sparse trace. */
+    let delay = 400 / this.speed;
+    const cur = this.events[this.idx];
+    const nxt = this.events[this.idx + 1];
+    if (cur && nxt && cur.ts && nxt.ts) {
+      const t1 = Date.parse(cur.ts);
+      const t2 = Date.parse(nxt.ts);
+      if (!isNaN(t1) && !isNaN(t2) && t2 >= t1) {
+        delay = (t2 - t1) / this.speed;
+      }
+    }
+    delay = Math.max(10, Math.min(5000, delay));
+    this._timer = setTimeout(() => this._tick(), delay);
+  },
+
+  _tick() {
+    if (!this.isPlaying) return;
+    if (this.idx >= this.events.length) { this.pause(); return; }
+    this.idx++;
+    this.render();
+    if (this.idx < this.events.length) this._scheduleTick();
+    else this.pause();
+  },
+
+  restart() {
+    this.pause();
+    this.idx = 0;
+    this.manualSelection = false;
+    this.render();
+  },
+
+  setSpeed(v) {
+    this.speed = Math.max(0.1, Math.min(10, parseFloat(v) || 2));
+    document.getElementById('replay-speed-value').textContent =
+      this.speed.toFixed(1) + REPLAY_GLYPH_TIMES;
+  },
+
+  setFollow(on) { this.follow = !!on; },
+
+  noteManualSelection() {
+    /* Called when the user clicks a node directly. Disables auto-follow
+     * for the rest of the session (until restart() resets). */
+    this.manualSelection = true;
+  },
+};
+
+/* Wire UI controls. */
+(function initReplayUI() {
+  const drop = document.getElementById('replay-drop');
+  const file = document.getElementById('replay-file');
+  if (!drop || !file) return;
+
+  const readFile = (f) => {
+    const reader = new FileReader();
+    reader.onload = () => Replay.load(String(reader.result || ''));
+    reader.readAsText(f);
+  };
+
+  file.addEventListener('change', (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (f) readFile(f);
+  });
+  drop.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    drop.classList.add('dragging');
+  });
+  drop.addEventListener('dragleave', () => drop.classList.remove('dragging'));
+  drop.addEventListener('drop', (e) => {
+    e.preventDefault();
+    drop.classList.remove('dragging');
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) readFile(f);
+  });
+
+  document.getElementById('replay-play').addEventListener('click', () => Replay.toggle());
+  document.getElementById('replay-prev').addEventListener('click', () => Replay.step(-1));
+  document.getElementById('replay-next').addEventListener('click', () => Replay.step(1));
+  document.getElementById('replay-restart').addEventListener('click', () => Replay.restart());
+  document.getElementById('replay-speed').addEventListener('input', (e) => Replay.setSpeed(e.target.value));
+  document.getElementById('replay-follow').addEventListener('change', (e) => Replay.setFollow(e.target.checked));
+
+  /* Initial label glyph. */
+  document.getElementById('replay-play').textContent = REPLAY_GLYPH_PLAY;
+})();
+
+/* When the user clicks a node manually, disable replay auto-follow so we
+ * don't fight them. They can re-enable it via the checkbox or by
+ * restarting the replay. */
+const _origActivateNode = activateNode;
+activateNode = function(node) {
+  Replay.noteManualSelection();
+  return _origActivateNode(node);
+};
 </script>
 </body>
 </html>

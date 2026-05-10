@@ -53,13 +53,65 @@ class ShellImplIR(ImplIR):
 
 
 @dataclass(frozen=True)
+class RetryPolicyIR:
+    """IR for `retry: {...}` on a REST step. See LANGUAGE_SPEC.md §impl.mode: rest / retry."""
+    attempts: int
+    backoff: str
+    base: float
+    cap: float
+    on: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RestBodyIR:
+    """Sealed base for the IR body of an impl.rest step.
+    Subtypes: JsonBodyIR, RawBodyIR, FileBodyIR, FormBodyIR, MultipartBodyIR."""
+
+
+@dataclass(frozen=True)
+class JsonBodyIR(RestBodyIR):
+    """body as application/json — flat scalar dict (v1)."""
+    fields: tuple[tuple[str, "JsonScalarIR"], ...]
+
+
+@dataclass(frozen=True)
+class RawBodyIR(RestBodyIR):
+    """body as text/plain (overridable via headers)."""
+    template: str
+
+
+@dataclass(frozen=True)
+class FileBodyIR(RestBodyIR):
+    """body loaded from a path at runtime; content-type inferred from extension."""
+    path: str
+
+
+@dataclass(frozen=True)
+class FormBodyIR(RestBodyIR):
+    """body as application/x-www-form-urlencoded."""
+    fields: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class MultipartBodyIR(RestBodyIR):
+    """body as multipart/form-data. Values starting with `@` are file paths."""
+    fields: tuple[tuple[str, str], ...]
+
+
+JsonScalarIR = str | int | float | bool | None
+
+
+@dataclass(frozen=True)
 class RestImplIR(ImplIR):
     """impl.mode: rest — HTTP call to an external endpoint."""
     method: str
     url: str
+    query: tuple[tuple[str, "JsonScalarIR"], ...] | None
+    headers: tuple[tuple[str, str], ...] | None
+    body: RestBodyIR | None
     response_path: str | None
     timeout_seconds: int | None
-    retries: int | None
+    retry: RetryPolicyIR | None
 
 
 @dataclass(frozen=True)

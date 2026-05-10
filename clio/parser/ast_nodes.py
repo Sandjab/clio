@@ -309,13 +309,68 @@ class ShellImpl(ImplBlock):
 
 
 @dataclass(frozen=True)
+class RetryPolicy:
+    """`retry: {...}` policy attached to an impl.rest step.
+    See LANGUAGE_SPEC.md §impl.mode: rest / retry."""
+    attempts: int
+    backoff: str = "exponential"        # "exponential" | "constant"
+    base: float = 0.1                   # seconds
+    cap: float = 30.0                   # seconds
+    on: tuple[str, ...] = ("5xx", "429", "timeout")
+
+
+# Sealed RestBody hierarchy.
+@dataclass(frozen=True)
+class RestBody:
+    """Sealed base for impl.rest body. Subtypes: JsonBody, RawBody, FileBody,
+    FormBody, MultipartBody. See LANGUAGE_SPEC.md §impl.mode: rest / body."""
+
+
+@dataclass(frozen=True)
+class JsonBody(RestBody):
+    """body: {field: value, ...}  → application/json (flat dict, v1)."""
+    fields: tuple[tuple[str, "JsonScalar"], ...]
+
+
+@dataclass(frozen=True)
+class RawBody(RestBody):
+    """body: "raw text ${var}"  → text/plain (overridable via headers)."""
+    template: str
+
+
+@dataclass(frozen=True)
+class FileBody(RestBody):
+    """body: "@./payload.json"  → file body, content-type inferred from extension."""
+    path: str
+
+
+@dataclass(frozen=True)
+class FormBody(RestBody):
+    """body: {form: {...}}  → x-www-form-urlencoded."""
+    fields: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class MultipartBody(RestBody):
+    """body: {multipart: {...}}  → multipart/form-data. Values starting with `@` are file paths."""
+    fields: tuple[tuple[str, str], ...]
+
+
+# Type alias for JSON-body scalar values (flat in v1).
+JsonScalar = str | int | float | bool | None
+
+
+@dataclass(frozen=True)
 class RestImpl(ImplBlock):
     """impl.mode: rest — HTTP call to an external endpoint."""
     method: str                    # GET | POST | PUT | PATCH | DELETE
     url: str
+    query: tuple[tuple[str, "JsonScalar"], ...] | None
+    headers: tuple[tuple[str, str], ...] | None
+    body: RestBody | None
     response_path: str | None      # e.g. "results[0].geometry.location"
     timeout_seconds: int | None
-    retries: int | None
+    retry: RetryPolicy | None
 
 
 @dataclass(frozen=True)

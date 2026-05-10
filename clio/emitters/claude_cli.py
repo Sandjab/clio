@@ -11,7 +11,6 @@ from pathlib import Path
 from clio.emitters._claude_cli_helpers import (
     _CLAUDE_MD,
     _EXACT_STEP_TEMPLATE,
-    _REST_STEP_TEMPLATE,
     _SHELL_STEP_TEMPLATE,
     _STEP_NO_FIELDS,
     _field_doc,
@@ -21,6 +20,7 @@ from clio.emitters._claude_cli_helpers import (
     _render_prompt,
     _render_type,
     _resolve_iter_inner_type,
+    emit_rest_step_cli,
 )
 from clio.emitters.base import BaseEmitter
 from clio.ir.contracts import type_to_json_schema
@@ -86,22 +86,35 @@ class ClaudeCLIEmitter(BaseEmitter):
 
         if graph.flow is not None:
             self._emit_run_sh(graph, output_dir)
-            if any(
+            needs_judgment_runtime = any(
                 self._step_for_call(graph, c).mode == "judgment"
                 for c in _flatten_calls(graph.flow.chain)
-            ):
-                self._copy_runtime(output_dir)
+            )
+            needs_rest_runtime = any(
+                isinstance(s.impl, RestImplIR) for s in graph.steps
+            )
+            if needs_judgment_runtime or needs_rest_runtime:
+                self._copy_runtime(output_dir, include_rest=needs_rest_runtime)
 
-    def _copy_runtime(self, output_dir: Path) -> None:
-        """Copy `clio.runtime.*` into the output as a top-level `clio_runtime/` package."""
+    def _copy_runtime(self, output_dir: Path, include_rest: bool = False) -> None:
+        """Copy `clio.runtime.*` into the output as a top-level `clio_runtime/` package.
+        Always copies the judgment-validation helpers; `include_rest=True` also
+        bundles `rest.py` (templating + retry helpers used by emitted REST steps)."""
         from clio import runtime as src_pkg
         src_dir = Path(src_pkg.__file__).parent
         dest = output_dir / "clio_runtime"
         dest.mkdir(exist_ok=True)
-        for name in ("__init__.py", "validate.py", "substitute.py", "cache.py"):
+        names = ["__init__.py", "validate.py", "substitute.py", "cache.py"]
+        if include_rest:
+            names.append("rest.py")
+        for name in names:
             src_file = src_dir / name
             if src_file.exists():
                 (dest / name).write_text(src_file.read_text())
+        # Ensure __init__.py exists even if it was missing from the source pkg.
+        init = dest / "__init__.py"
+        if not init.exists():
+            init.write_text("")
 
     @staticmethod
     def _step_for_call(graph: FlowGraph, call) -> StepIR:
@@ -471,42 +484,7 @@ class ClaudeCLIEmitter(BaseEmitter):
             io_doc = "\n".join(_field_doc(f) for f in step.takes)
             if step.gives:
                 io_doc += f"\nGIVES: {step.gives.name}: {_render_type(step.gives.type)}"
-            argparse_block = "\n".join(
-                f'    parser.add_argument("--{f.name}", required=True)'
-                for f in step.takes
-            ) or "    pass"
-
-            templating_active = "${" in step.impl.url
-            if templating_active:
-                unused_takes = ""
-                url_lines = [f"    url = {step.impl.url!r}"]
-                for f in step.takes:
-                    url_lines.append(
-                        f"    url = url.replace('${{{f.name}}}', str(args.{f.name}))"
-                    )
-                url_block = "\n".join(url_lines) + "\n"
-                url_arg = "url"
-            else:
-                unused_takes = (
-                    "".join(f"    _ = args.{f.name}\n" for f in step.takes)
-                    if step.takes else ""
-                )
-                url_block = ""
-                url_arg = repr(step.impl.url)
-
-            out_name = step.gives.name if step.gives else "result"
-            body = _REST_STEP_TEMPLATE.format(
-                name=step.name,
-                io_doc=io_doc,
-                argparse_block=argparse_block,
-                unused_takes=unused_takes,
-                url_block=url_block,
-                url_arg=url_arg,
-                method=step.impl.method,
-                timeout_repr=repr(step.impl.timeout_seconds),
-                response_path_repr=repr(step.impl.response_path),
-                out_name=out_name,
-            )
+            body = emit_rest_step_cli(step, step.impl, io_doc)
         elif isinstance(step.impl, ShellImplIR):
             io_doc = "\n".join(_field_doc(f) for f in step.takes)
             if step.gives:

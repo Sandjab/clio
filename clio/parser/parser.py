@@ -10,25 +10,32 @@ from clio.parser.ast_nodes import (
     EnumType,
     Field,
     FieldRefExpr,
+    FileBody,
     FloatExpr,
     FlowDecl,
     ForEachBlock,
+    FormBody,
     IdentExpr,
     IfBlock,
     ImplBlock,
     IntExpr,
     InvokeBlock,
+    JsonBody,
     ListType,
     MatchBlock,
     MatchCase,
+    MultipartBody,
     OnFailChain,
     OnFailStrategy,
     PrimitiveType,
     Program,
+    RawBody,
     RecordType,
     RescueBlock,
     ResourcesDecl,
+    RestBody,
     RestImpl,
+    RetryPolicy,
     ShellImpl,
     StepCall,
     StepDecl,
@@ -398,13 +405,21 @@ class _Parser:
         raise ParseError(f"impl.mode {mode_value!r} not yet implemented", mode_line, mode_col)
 
     def _parse_impl_field_value(self) -> object:
+        """Top-level impl field value: scalar (string-preserving) or inline
+        dict/list. Bareword identifiers like `parse: none` keep their string
+        value here; bool/null literals are only resolved inside inline
+        dicts/lists, where JSON-style typing is expected."""
         t = self.peek()
+        if t.type == TokenType.LBRACE:
+            return self._parse_inline_dict()
+        if t.type == TokenType.LBRACKET:
+            return self._parse_inline_list()
         if t.type == TokenType.STRING:
             self.advance()
             return t.value
         if t.type == TokenType.NUMBER:
             self.advance()
-            return int(t.value) if "." not in t.value else float(t.value)
+            return float(t.value) if "." in t.value or "e" in t.value.lower() else int(t.value)
         if t.type == TokenType.DURATION:
             self.advance()
             return _duration_to_seconds(t.value)
@@ -415,6 +430,100 @@ class _Parser:
             f"expected impl field value, got {t.type.value} {t.value!r}",
             t.line, t.col,
         )
+
+    def _parse_dict_value(self) -> object:
+        """Value inside an inline dict/list — JSON-style typing: bareword
+        `true`/`false` become bools, `null`/`none` become None."""
+        t = self.peek()
+        if t.type == TokenType.LBRACE:
+            return self._parse_inline_dict()
+        if t.type == TokenType.LBRACKET:
+            return self._parse_inline_list()
+        if t.type == TokenType.STRING:
+            self.advance()
+            return t.value
+        if t.type == TokenType.NUMBER:
+            self.advance()
+            return float(t.value) if "." in t.value or "e" in t.value.lower() else int(t.value)
+        if t.type == TokenType.DURATION:
+            self.advance()
+            return _duration_to_seconds(t.value)
+        if t.type == TokenType.KEYWORD or t.type == TokenType.IDENT:
+            self.advance()
+            if t.value == "true":
+                return True
+            if t.value == "false":
+                return False
+            if t.value in ("null", "none"):
+                return None
+            return t.value
+        raise ParseError(
+            f"expected inline dict/list value, got {t.type.value} {t.value!r}",
+            t.line, t.col,
+        )
+
+    def _parse_inline_dict(self) -> dict[str, object]:
+        """{ key: value, key: value, ... } — keys are IDENT/KEYWORD, values
+        are `_parse_dict_value`. Empty dict allowed."""
+        open_brace = self.expect(TokenType.LBRACE)
+        result: dict[str, object] = {}
+        if self.peek().type == TokenType.RBRACE:
+            self.advance()
+            return result
+        while True:
+            key_tok = self.peek()
+            # Bareword keys (IDENT/KEYWORD) cover the common case; quoted-string
+            # keys let users write headers with non-identifier characters
+            # (`Content-Type`, `X-Forwarded-For`, etc.).
+            if key_tok.type not in (TokenType.IDENT, TokenType.KEYWORD, TokenType.STRING):
+                raise ParseError(
+                    f"expected inline dict key, got {key_tok.type.value} {key_tok.value!r}",
+                    key_tok.line, key_tok.col,
+                )
+            if key_tok.value in result:
+                raise ParseError(
+                    f"duplicate key {key_tok.value!r} in inline dict",
+                    key_tok.line, key_tok.col,
+                )
+            self.advance()
+            self.expect(TokenType.COLON)
+            result[key_tok.value] = self._parse_dict_value()
+            if self.peek().type == TokenType.COMMA:
+                self.advance()
+                continue
+            break
+        if self.peek().type != TokenType.RBRACE:
+            t = self.peek()
+            raise ParseError(
+                f"expected ',' or '}}' in inline dict opened at "
+                f"{open_brace.line}:{open_brace.col}, got {t.type.value} {t.value!r}",
+                t.line, t.col,
+            )
+        self.advance()
+        return result
+
+    def _parse_inline_list(self) -> list[object]:
+        """[ value, value, ... ] — values are `_parse_dict_value`."""
+        open_bracket = self.expect(TokenType.LBRACKET)
+        result: list[object] = []
+        if self.peek().type == TokenType.RBRACKET:
+            self.advance()
+            return result
+        while True:
+            result.append(self._parse_dict_value())
+            if self.peek().type == TokenType.COMMA:
+                self.advance()
+                continue
+            break
+        if self.peek().type != TokenType.RBRACKET:
+            t = self.peek()
+            raise ParseError(
+                f"expected ',' or ']' in inline list opened at "
+                f"{open_bracket.line}:{open_bracket.col}, got {t.type.value} {t.value!r}",
+                t.line, t.col,
+            )
+        self.advance()
+        return result
 
     def _build_code_impl(
         self, fields: dict[str, tuple[object, int, int]], line: int, col: int,
@@ -502,7 +611,19 @@ class _Parser:
         line: int, col: int,
         mode_line: int, mode_col: int,
     ) -> RestImpl:
-        allowed = {"method", "url", "response_path", "timeout", "retries"}
+        allowed = {
+            "method", "url", "query", "headers", "body",
+            "response_path", "timeout", "retry",
+        }
+        # Reject the legacy scalar form upfront, with a clear migration hint.
+        if "retries" in fields:
+            _, fline, fcol = fields["retries"]
+            raise ParseError(
+                "impl.retries (scalar) is no longer accepted; use "
+                "`retry: {attempts: N}` instead — see LANGUAGE_SPEC.md "
+                "§impl.mode: rest / retry",
+                fline, fcol,
+            )
         unknown = set(fields.keys()) - allowed
         if unknown:
             sample = sorted(unknown)[0]
@@ -532,6 +653,26 @@ class _Parser:
                 uline, ucol,
             )
 
+        query = None
+        if "query" in fields:
+            qv, qline, qcol = fields["query"]
+            query = self._build_rest_scalar_dict("impl.query", qv, qline, qcol)
+
+        headers = None
+        if "headers" in fields:
+            hv, hline, hcol = fields["headers"]
+            headers = self._build_rest_headers_dict(hv, hline, hcol)
+
+        body = None
+        if "body" in fields:
+            bv, bline, bcol = fields["body"]
+            if method == "GET":
+                raise ParseError(
+                    "impl.body is not allowed on GET — use impl.query instead",
+                    bline, bcol,
+                )
+            body = self._build_rest_body(bv, bline, bcol)
+
         response_path = None
         if "response_path" in fields:
             rp, rline, rcol = fields["response_path"]
@@ -552,22 +693,209 @@ class _Parser:
                 )
             timeout_seconds = to
 
-        retries = None
-        if "retries" in fields:
-            rv, rline, rcol = fields["retries"]
-            if not isinstance(rv, int):
-                raise ParseError(
-                    f"impl.retries must be an integer, got {rv!r}",
-                    rline, rcol,
-                )
-            retries = rv
+        retry = None
+        if "retry" in fields:
+            rv, rline, rcol = fields["retry"]
+            retry = self._build_retry_policy(rv, rline, rcol)
 
         return RestImpl(
             line=line, col=col,
             method=method, url=url,
+            query=query,
+            headers=headers,
+            body=body,
             response_path=response_path,
             timeout_seconds=timeout_seconds,
-            retries=retries,
+            retry=retry,
+        )
+
+    def _build_rest_scalar_dict(
+        self, field_name: str, value: object, line: int, col: int,
+    ) -> tuple[tuple[str, str | int | float | bool | None], ...]:
+        """Validate that `value` is a flat dict of scalar values
+        (str | int | float | bool | None). Returns a stable-ordered tuple."""
+        if not isinstance(value, dict):
+            raise ParseError(
+                f"{field_name} must be an inline dict {{key: value, ...}}, "
+                f"got {type(value).__name__}",
+                line, col,
+            )
+        out: list[tuple[str, str | int | float | bool | None]] = []
+        for k, v in value.items():
+            if not isinstance(v, (str, int, float, bool)) and v is not None:
+                raise ParseError(
+                    f"{field_name}.{k} must be a scalar (string, number, bool, null), "
+                    f"got {type(v).__name__}",
+                    line, col,
+                )
+            out.append((k, v))
+        return tuple(out)
+
+    def _build_rest_headers_dict(
+        self, value: object, line: int, col: int,
+    ) -> tuple[tuple[str, str], ...]:
+        if not isinstance(value, dict):
+            raise ParseError(
+                f"impl.headers must be an inline dict, got {type(value).__name__}",
+                line, col,
+            )
+        out: list[tuple[str, str]] = []
+        for k, v in value.items():
+            if not isinstance(v, str):
+                raise ParseError(
+                    f"impl.headers.{k} must be a string "
+                    f"(quote it: \"{v}\" if needed), got {type(v).__name__}",
+                    line, col,
+                )
+            out.append((k, v))
+        return tuple(out)
+
+    def _build_rest_body(
+        self, value: object, line: int, col: int,
+    ) -> RestBody:
+        # Form 2 — raw string  /  Form 3 — file (`@./path`)
+        if isinstance(value, str):
+            if value.startswith("@"):
+                path = value[1:]
+                if not path:
+                    raise ParseError(
+                        "impl.body file reference must specify a path after `@`",
+                        line, col,
+                    )
+                return FileBody(path=path)
+            return RawBody(template=value)
+
+        # Forms 1 / 4 / 5 — dict-shaped
+        if isinstance(value, dict):
+            keys = set(value.keys())
+            if keys == {"form"}:
+                inner = value["form"]
+                return FormBody(fields=self._build_rest_form_dict("impl.body.form", inner, line, col))
+            if keys == {"multipart"}:
+                inner = value["multipart"]
+                return MultipartBody(fields=self._build_rest_form_dict(
+                    "impl.body.multipart", inner, line, col, allow_at_prefix=True))
+            if keys & {"form", "multipart"}:
+                raise ParseError(
+                    "impl.body cannot combine 'form' and 'multipart' (or other top-level keys); "
+                    "pick one form — see LANGUAGE_SPEC.md §impl.mode: rest / body",
+                    line, col,
+                )
+            # Otherwise it's a JSON dict — flat scalars only in v1.
+            jfields: list[tuple[str, str | int | float | bool | None]] = []
+            for k, v in value.items():
+                if not isinstance(v, (str, int, float, bool)) and v is not None:
+                    raise ParseError(
+                        f"impl.body JSON dict supports flat scalar values in v1; "
+                        f"field {k!r} is {type(v).__name__}",
+                        line, col,
+                    )
+                jfields.append((k, v))
+            return JsonBody(fields=tuple(jfields))
+
+        raise ParseError(
+            f"impl.body must be a string, an inline dict, or `\"@./file\"`; "
+            f"got {type(value).__name__}",
+            line, col,
+        )
+
+    def _build_rest_form_dict(
+        self, field_name: str, value: object, line: int, col: int,
+        allow_at_prefix: bool = False,
+    ) -> tuple[tuple[str, str], ...]:
+        if not isinstance(value, dict):
+            raise ParseError(
+                f"{field_name} must be an inline dict, got {type(value).__name__}",
+                line, col,
+            )
+        out: list[tuple[str, str]] = []
+        for k, v in value.items():
+            if not isinstance(v, str):
+                raise ParseError(
+                    f"{field_name}.{k} must be a string, got {type(v).__name__}",
+                    line, col,
+                )
+            if v.startswith("@") and not allow_at_prefix:
+                raise ParseError(
+                    f"{field_name}.{k}: file uploads (@./path) are only "
+                    "allowed inside multipart bodies",
+                    line, col,
+                )
+            out.append((k, v))
+        return tuple(out)
+
+    def _build_retry_policy(
+        self, value: object, line: int, col: int,
+    ) -> RetryPolicy:
+        if not isinstance(value, dict):
+            raise ParseError(
+                f"impl.retry must be an inline dict {{attempts: N, ...}}, "
+                f"got {type(value).__name__}",
+                line, col,
+            )
+        allowed = {"attempts", "backoff", "base", "cap", "on"}
+        unknown = set(value.keys()) - allowed
+        if unknown:
+            sample = sorted(unknown)[0]
+            raise ParseError(
+                f"unknown field {sample!r} in impl.retry "
+                f"(allowed: {sorted(allowed)})",
+                line, col,
+            )
+        if "attempts" not in value:
+            raise ParseError(
+                "impl.retry requires 'attempts' (e.g. retry: {attempts: 3})",
+                line, col,
+            )
+        attempts = value["attempts"]
+        if not isinstance(attempts, int) or attempts < 1:
+            raise ParseError(
+                f"impl.retry.attempts must be a positive integer, got {attempts!r}",
+                line, col,
+            )
+        backoff = value.get("backoff", "exponential")
+        if backoff not in ("exponential", "constant"):
+            raise ParseError(
+                f"impl.retry.backoff must be 'exponential' or 'constant', got {backoff!r}",
+                line, col,
+            )
+        base_raw = value.get("base", 0.1)
+        if not isinstance(base_raw, (int, float)) or base_raw <= 0:
+            raise ParseError(
+                f"impl.retry.base must be a positive number, got {base_raw!r}",
+                line, col,
+            )
+        cap_raw = value.get("cap", 30.0)
+        if not isinstance(cap_raw, (int, float)) or cap_raw <= 0:
+            raise ParseError(
+                f"impl.retry.cap must be a positive number, got {cap_raw!r}",
+                line, col,
+            )
+        on_value: tuple[str, ...]
+        if "on" in value:
+            on_raw = value["on"]
+            if not isinstance(on_raw, list) or not all(isinstance(x, str) for x in on_raw):
+                raise ParseError(
+                    f"impl.retry.on must be a list of strings, got {on_raw!r}",
+                    line, col,
+                )
+            valid = {"5xx", "429", "timeout", "network"}
+            for x in on_raw:
+                if x not in valid:
+                    raise ParseError(
+                        f"impl.retry.on contains unknown token {x!r}; "
+                        f"allowed: {sorted(valid)}",
+                        line, col,
+                    )
+            on_value = tuple(on_raw)
+        else:
+            on_value = ("5xx", "429", "timeout")
+        return RetryPolicy(
+            attempts=attempts,
+            backoff=backoff,
+            base=float(base_raw),
+            cap=float(cap_raw),
+            on=on_value,
         )
 
     def parse_invoke_block(self, line: int, col: int) -> InvokeBlock:

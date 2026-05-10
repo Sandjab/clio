@@ -112,6 +112,52 @@ def test_compile_critical_pipeline_python(tmp_path):
     assert "see #alerts" in flow_body
 
 
+def test_compile_rest_advanced_example(tmp_path):
+    """rest_advanced.clio exercises the v0.9 impl.rest extensions:
+    templated query/headers, all 5 body forms (json/raw/file/form/multipart),
+    and retry: {...} (both default and constant-backoff variants)."""
+    out = _compile_to_tree(REPO_ROOT / "examples/rest_advanced.clio", tmp_path)
+    step_dir = out / "pipeline" / "steps"
+    step_files = {p.stem for p in step_dir.glob("*.py") if p.stem != "__init__"}
+    assert step_files == {
+        "geocode", "create_user", "login", "upload_cv", "echo", "push_payload",
+    }
+
+    # The runtime helper module is bundled.
+    assert (out / "pipeline" / "clio_runtime" / "rest.py").exists()
+
+    # geocode: GET with query/headers + retry exponential.
+    geocode = (step_dir / "geocode.py").read_text()
+    assert "_kwargs['params'] = _rest.render_dict(" in geocode
+    assert "_kwargs['headers'] = _rest.render_dict(" in geocode
+    assert "_attempts = 3" in geocode
+    assert "_backoff = 'exponential'" in geocode
+
+    # create_user: JSON body.
+    create = (step_dir / "create_user.py").read_text()
+    assert "_kwargs['json'] = _rest.render_dict(" in create
+
+    # login: form body — `data=` dict, no `files=`.
+    login = (step_dir / "login.py").read_text()
+    assert "_kwargs['data'] = _rest.render_dict(" in login
+
+    # upload_cv: multipart body — both `_files` and `_form` paths.
+    upload = (step_dir / "upload_cv.py").read_text()
+    assert "_files: dict = {}" in upload
+    assert "_form: dict = {}" in upload
+
+    # echo: raw body — text/plain content-type set when no headers given.
+    echo = (step_dir / "echo.py").read_text()
+    assert "_kwargs['data'] = _rest.subst('raw text ${msg}'" in echo
+    assert "text/plain" in echo
+
+    # push_payload: file body + constant-backoff retry covering network.
+    push = (step_dir / "push_payload.py").read_text()
+    assert "_rest.read_file_body('./payload.json'" in push
+    assert "_backoff = 'constant'" in push
+    assert "'network'" in push
+
+
 def test_compile_critical_pipeline_mcp_server(tmp_path):
     """critical_pipeline.clio also compiles to mcp-server target with
     async equivalents (async _rescue_detect_churn, await wrapping)."""

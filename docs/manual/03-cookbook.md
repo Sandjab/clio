@@ -242,6 +242,88 @@ clean up, then abort). The two compose: ON_FAIL runs first, RESCUE runs
 only on exhaustion. Compiles to python and mcp-server; langgraph and
 claude-cli reject at compile time.
 
+## 11. REST API integration with auth, retries, and file upload
+
+You want to call an external HTTP API from a CLIO step. Common needs:
+templated query parameters, an env-resolved bearer token in the headers,
+a structured JSON body with values pulled from `TAKES`, automatic retry
+on transient 5xx / 429 / network errors, and the ability to upload a
+binary file via multipart.
+
+```
+CONTRACT geo_point
+  SHAPE: {lat: float, lng: float}
+
+# GET with templated query, env-resolved API key, exponential retry.
+STEP geocode
+  TAKES: address: str
+  GIVES: location: geo_point
+  MODE:  exact
+  impl:
+    mode:           rest
+    method:         GET
+    url:            "https://maps.googleapis.com/maps/api/geocode/json"
+    query:          {address: "${address}", key: "env:GOOGLE_MAPS_KEY"}
+    headers:        {Accept: "application/json"}
+    response_path:  "results[0].geometry.location"
+    timeout:        30s
+    retry:          {attempts: 3, on: ["5xx", "429", "timeout"]}
+
+# POST with JSON body — values templated, bool literal accepted inline.
+STEP create_user
+  TAKES: name: str, email: str
+  GIVES: id: str
+  MODE:  exact
+  impl:
+    mode:    rest
+    method:  POST
+    url:     "https://api.example.com/v1/users"
+    headers: {Authorization: "env:AUTH_HEADER", "Content-Type": "application/json"}
+    body:    {name: "${name}", email: "${email}", active: true}
+    response_path: "id"
+
+# POST with multipart body — text fields + binary file part.
+STEP upload_cv
+  TAKES: label: str
+  GIVES: r: str
+  MODE:  exact
+  impl:
+    mode:   rest
+    method: POST
+    url:    "https://api.example.com/v1/uploads"
+    body:   {multipart: {label: "${label}", file: "@./cv.pdf"}}
+    response_path: "id"
+```
+
+What's going on:
+
+- **Templating**. Inside any string value (`url`, dict values, `body`),
+  `${var}` is substituted at runtime from the step's `TAKES`. A value
+  whose **whole** content is `env:NAME` reads `os.environ[NAME]` instead
+  — that's how `env:GOOGLE_MAPS_KEY` becomes the actual API key without
+  it appearing in the source.
+- **Headers with non-identifier characters**. `Content-Type` contains a
+  hyphen, which isn't a valid bareword key, so it's quoted:
+  `{"Content-Type": "application/json"}`.
+- **Body forms**. `body: {dict}` ⇒ `application/json`; `body: "raw text"`
+  ⇒ `text/plain`; `body: "@./payload.json"` ⇒ file content with the
+  Content-Type inferred from the extension; `body: {form: {...}}` ⇒
+  `application/x-www-form-urlencoded`; `body: {multipart: {...}}` ⇒
+  `multipart/form-data`, where any value starting with `@` becomes a
+  binary file part. You cannot combine `form` and `multipart`.
+- **Retry**. `retry: {attempts: 3}` is the minimal form; the rest of
+  the policy uses documented defaults (exponential backoff, 0.1s base,
+  30s cap, retry on `5xx` / `429` / `timeout`). Add `"network"` to `on`
+  to also retry on connection errors. The `Retry-After` response header
+  is honored when present.
+- The legacy `retries: 3` scalar is **rejected at parse time** in v0.9
+  with a migration hint; if you want retries, write `retry: {attempts: 3}`.
+
+Compiles to all three exact-supporting targets (`python`,
+`mcp-server`, `claude-cli`) — each emits the same kwargs construction
+and the same retry loop, with `clio_runtime/rest.py` bundled into the
+output for the templating + retry helpers.
+
 ## What's not in the cookbook (yet)
 
 - **Multi-field ASSERT** — accept `a > b` between two fields. Specced, planned.

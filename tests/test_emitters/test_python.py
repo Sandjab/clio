@@ -544,8 +544,10 @@ def test_emit_rest_step_imports_requests_and_calls_request(tmp_path):
     assert "import requests" in body
     assert "requests.request(" in body
     assert "method='GET'" in body
-    assert "url='https://api.example.com/geocode'" in body
-    assert "timeout=30" in body
+    # URL is now templated through _rest.subst (harmless if no ${var} present).
+    assert "_rest.subst('https://api.example.com/geocode', _takes)" in body
+    assert "url=_url" in body
+    assert "_kwargs['timeout'] = 30" in body
 
 
 def test_emit_rest_step_parses_as_python(tmp_path):
@@ -597,12 +599,14 @@ _REST_TEMPLATED_SRC = (
 def test_emit_rest_step_templates_takes_into_url(tmp_path):
     PythonEmitter().emit(build_ir(parse(_REST_TEMPLATED_SRC)), tmp_path)
     body = (tmp_path / "geo" / "steps" / "geocode.py").read_text()
-    assert "_url = 'https://api.example.com/geo/${country}?q=${address}'" in body
-    assert "_url = _url.replace('${address}', str(address))" in body
-    assert "_url = _url.replace('${country}', str(country))" in body
+    # URL templating is now delegated to _rest.subst at runtime, fed by a
+    # `_takes` dict built from the function's TAKES.
+    assert (
+        "_url = _rest.subst('https://api.example.com/geo/${country}?q=${address}', _takes)"
+    ) in body
+    assert "'address': address" in body
+    assert "'country': country" in body
     assert "url=_url" in body
-    assert "_ = address" not in body
-    assert "_ = country" not in body
 
 
 def test_emit_rest_step_templated_parses_as_python(tmp_path):
@@ -610,6 +614,195 @@ def test_emit_rest_step_templated_parses_as_python(tmp_path):
     PythonEmitter().emit(build_ir(parse(_REST_TEMPLATED_SRC)), tmp_path)
     body = (tmp_path / "geo" / "steps" / "geocode.py").read_text()
     ast.parse(body)
+
+
+# --- impl.rest extended emission (query/headers/body/retry) ---
+
+_REST_FULL_SRC = (
+    "STEP geocode\n"
+    "  TAKES: address: str\n"
+    "  GIVES: location: str\n"
+    "  MODE:  exact\n"
+    "  impl:\n"
+    "    mode: rest\n"
+    "    method: GET\n"
+    '    url: "https://api.example.com/geo"\n'
+    '    query: {address: "${address}", limit: 10, key: "env:API_KEY"}\n'
+    '    headers: {Accept: "application/json", Authorization: "env:AUTH_HEADER"}\n'
+    '    response_path: "results[0]"\n'
+    "    timeout: 30s\n"
+    "    retry: {attempts: 3, backoff: exponential, base: 0.1, cap: 30, on: [\"5xx\", \"429\", \"timeout\"]}\n"
+    "FLOW geo\n"
+    '  geocode(address="123 Main St")\n'
+)
+
+
+def test_emit_rest_step_emits_query_via_render_dict(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_REST_FULL_SRC)), tmp_path)
+    body = (tmp_path / "geo" / "steps" / "geocode.py").read_text()
+    assert "_kwargs['params'] = _rest.render_dict(" in body
+    assert "'address', '${address}'" in body
+    assert "'limit', 10" in body
+    assert "'key', 'env:API_KEY'" in body
+
+
+def test_emit_rest_step_emits_headers_via_render_dict(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_REST_FULL_SRC)), tmp_path)
+    body = (tmp_path / "geo" / "steps" / "geocode.py").read_text()
+    assert "_kwargs['headers'] = _rest.render_dict(" in body
+    assert "'Authorization', 'env:AUTH_HEADER'" in body
+
+
+def test_emit_rest_step_emits_retry_loop(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_REST_FULL_SRC)), tmp_path)
+    body = (tmp_path / "geo" / "steps" / "geocode.py").read_text()
+    assert "_attempts = 3" in body
+    assert "for _i in range(_attempts):" in body
+    assert "_rest.is_retryable_response(" in body
+    assert "_rest.is_retryable_exception(" in body
+    assert "_rest.compute_delay(" in body
+    assert "Retry-After" in body
+
+
+def test_emit_rest_step_copies_runtime_rest_module(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_REST_FULL_SRC)), tmp_path)
+    rest_runtime = (tmp_path / "geo" / "clio_runtime" / "rest.py")
+    assert rest_runtime.exists()
+    src = rest_runtime.read_text()
+    assert "def subst(" in src
+    assert "def render_dict(" in src
+    assert "def compute_delay(" in src
+
+
+def test_emit_rest_step_no_retry_emits_single_request(tmp_path):
+    src = (
+        "STEP fetch\n"
+        "  TAKES: id: str\n"
+        "  GIVES: r: str\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: GET\n"
+        '    url: "https://example.com/${id}"\n'
+        "FLOW f\n"
+        '  fetch(id="1")\n'
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "f" / "steps" / "fetch.py").read_text()
+    assert "for _i in range(_attempts)" not in body
+    assert "response = requests.request(method='GET', url=_url, **_kwargs)" in body
+
+
+_REST_BODY_JSON_SRC = (
+    "STEP create\n"
+    "  TAKES: name: str\n"
+    "  GIVES: id: str\n"
+    "  MODE: exact\n"
+    "  impl:\n"
+    "    mode: rest\n"
+    "    method: POST\n"
+    '    url: "https://api.example.com/users"\n'
+    '    body: {name: "${name}", active: true, count: 0}\n'
+    "FLOW f\n"
+    '  create(name="alice")\n'
+)
+
+
+def test_emit_rest_body_json_uses_json_kwarg(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_REST_BODY_JSON_SRC)), tmp_path)
+    body = (tmp_path / "f" / "steps" / "create.py").read_text()
+    assert "_kwargs['json'] = _rest.render_dict(" in body
+    assert "'active', True" in body
+
+
+def test_emit_rest_body_raw_uses_data_with_text_plain(tmp_path):
+    src = (
+        "STEP echo\n"
+        "  TAKES: msg: str\n"
+        "  GIVES: r: str\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: POST\n"
+        '    url: "https://example.com/echo"\n'
+        '    body: "raw ${msg}"\n'
+        "FLOW f\n"
+        '  echo(msg="hi")\n'
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "f" / "steps" / "echo.py").read_text()
+    assert "_kwargs['data'] = _rest.subst('raw ${msg}', _takes)" in body
+    assert "Content-Type" in body
+    assert "text/plain" in body
+
+
+def test_emit_rest_body_file_uses_read_file_body(tmp_path):
+    src = (
+        "STEP send\n"
+        "  TAKES: id: str\n"
+        "  GIVES: r: str\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: POST\n"
+        '    url: "https://example.com/upload"\n'
+        '    body: "@./payload.json"\n'
+        "FLOW f\n"
+        '  send(id="1")\n'
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "f" / "steps" / "send.py").read_text()
+    assert "_rest.read_file_body('./payload.json', _takes)" in body
+    assert "_kwargs['data'] = _data" in body
+
+
+def test_emit_rest_body_form_uses_data_dict(tmp_path):
+    src = (
+        "STEP login\n"
+        "  TAKES: u: str, p: str\n"
+        "  GIVES: r: str\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: POST\n"
+        '    url: "https://example.com/login"\n'
+        '    body: {form: {user: "${u}", password: "${p}"}}\n'
+        "FLOW f\n"
+        '  login(u="bob", p="hunter2")\n'
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "f" / "steps" / "login.py").read_text()
+    assert "_kwargs['data'] = _rest.render_dict(" in body
+    assert "'user', '${u}'" in body
+
+
+def test_emit_rest_body_multipart_routes_at_files_to_files(tmp_path):
+    src = (
+        "STEP upload\n"
+        "  TAKES: lab: str\n"
+        "  GIVES: r: str\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: POST\n"
+        '    url: "https://example.com/upload"\n'
+        '    body: {multipart: {label: "${lab}", file: "@./blob.bin"}}\n'
+        "FLOW f\n"
+        '  upload(lab="cv")\n'
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "f" / "steps" / "upload.py").read_text()
+    assert "_files: dict = {}" in body
+    assert "_form: dict = {}" in body
+    assert "if isinstance(_v, str) and _v.startswith('@'):" in body
+    assert "_rest.content_type_for_path(_path)" in body
+    # File handle is closed via context manager (no fd leak across loop iterations).
+    assert "with open(_path, 'rb') as _f:" in body
+    # Cross-platform basename (Path(...).name handles `\` on Windows).
+    assert "Path(_path).name" in body
+    assert "_f.read()" in body
+    # The pathlib import is added on demand only when the body is multipart.
+    assert "from pathlib import Path" in body
 
 
 _SHELL_SRC = (

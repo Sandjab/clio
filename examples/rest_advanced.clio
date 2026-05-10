@@ -1,0 +1,91 @@
+CONTRACT geo_point
+  SHAPE: {lat: float, lng: float}
+
+CONTRACT user_record
+  SHAPE: {id: str, email: str}
+
+# 1) GET with templated query, env-resolved API key, retries on 5xx/429.
+STEP geocode
+  TAKES: address: str
+  GIVES: location: geo_point
+  MODE:  exact
+  impl:
+    mode:           rest
+    method:         GET
+    url:            "https://maps.googleapis.com/maps/api/geocode/json"
+    query:          {address: "${address}", key: "env:GOOGLE_MAPS_KEY"}
+    headers:        {Accept: "application/json"}
+    response_path:  "results[0].geometry.location"
+    timeout:        30s
+    retry:          {attempts: 3, on: ["5xx", "429", "timeout"]}
+
+# 2) POST with JSON body — values templated, bool literal accepted inline.
+STEP create_user
+  TAKES: name: str, email: str
+  GIVES: user: user_record
+  MODE:  exact
+  impl:
+    mode:    rest
+    method:  POST
+    url:     "https://api.example.com/v1/users"
+    headers: {Authorization: "env:AUTH_HEADER", "Content-Type": "application/json"}
+    body:    {name: "${name}", email: "${email}", active: true}
+    response_path: ""
+
+# 3) POST with form-urlencoded body (login flow).
+STEP login
+  TAKES: u: str, p: str
+  GIVES: token: str
+  MODE:  exact
+  impl:
+    mode:   rest
+    method: POST
+    url:    "https://api.example.com/login"
+    body:   {form: {username: "${u}", password: "${p}"}}
+    response_path: "access_token"
+
+# 4) POST with multipart body — text fields + file part.
+STEP upload_cv
+  TAKES: label: str
+  GIVES: r: str
+  MODE:  exact
+  impl:
+    mode:   rest
+    method: POST
+    url:    "https://api.example.com/v1/uploads"
+    body:   {multipart: {label: "${label}", file: "@./cv.pdf"}}
+    response_path: "id"
+
+# 5) PUT with raw body (text/plain by default, override via headers).
+STEP echo
+  TAKES: msg: str
+  GIVES: r: str
+  MODE:  exact
+  impl:
+    mode:   rest
+    method: PUT
+    url:    "https://api.example.com/echo"
+    body:   "raw text ${msg}"
+    response_path: ""
+
+# 6) POST with file body (content-type inferred from extension), constant
+#    backoff retry that also covers transient network failures.
+STEP push_payload
+  TAKES: tag: str
+  GIVES: r: str
+  MODE:  exact
+  impl:
+    mode:   rest
+    method: POST
+    url:    "https://api.example.com/payloads"
+    body:   "@./payload.json"
+    retry:  {attempts: 5, backoff: constant, base: 0.5, cap: 5, on: ["5xx", "429", "timeout", "network"]}
+    response_path: "id"
+
+FLOW pipeline
+  geocode(address="123 Main St")
+  -> create_user(name="alice", email="a@x.com")
+  -> login(u="bob", p="hunter2")
+  -> upload_cv(label="cv")
+  -> echo(msg="hi")
+  -> push_payload(tag="t1")

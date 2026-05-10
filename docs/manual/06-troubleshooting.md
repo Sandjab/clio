@@ -117,6 +117,45 @@ The most common shape is the first: `ON_FAIL: retry(3) then escalate`
 
 **Fix:** Either drop `abort(...)` from the `ON_FAIL` chain (keeping only `retry`/`escalate`/`fallback`) and let `RESCUE` produce the final abort, or remove the `RESCUE X:` block entirely and let `ON_FAIL: ... then abort(...)` produce it.
 
+### `ParseError: impl.retries (scalar) is no longer accepted; use retry: {attempts: N} instead`
+
+You wrote the legacy v0.8 form `retries: 3` on an `impl: rest` step. v0.9
+requires the explicit object form so the policy is unambiguous.
+
+**Fix:** rewrite as `retry: {attempts: 3}`. That picks up the documented
+defaults (exponential backoff, base 0.1s, cap 30s, retry on
+`5xx` / `429` / `timeout`). Override any sub-field you want, e.g.
+`retry: {attempts: 5, backoff: constant, base: 0.5, on: ["5xx", "network"]}`.
+
+### `ParseError: impl.body is not allowed on GET — use impl.query instead`
+
+You attached a `body:` field to a `method: GET` step. HTTP semantics
+forbid that. The compiler rejects it at parse time so the mistake doesn't
+sneak into the generated code.
+
+**Fix:** move the parameters into `query: {...}` (URL-encoded querystring).
+If you really mean to send a body with a GET, change the method.
+
+### `ParseError: impl.body cannot combine 'form' and 'multipart'`
+
+You wrote `body: {form: {...}, multipart: {...}}`. The two body forms are
+mutually exclusive — they imply different content-types and require a
+different `requests` kwarg path.
+
+**Fix:** pick one. If you need to send both fields and a file in the same
+request, use `multipart` exclusively (text fields become regular form
+parts, `"@./path"` values become file parts).
+
+### `ParseError: impl.headers.X must be a string`
+
+A header value is a number or bool: e.g. `headers: {X-Page: 10}`. HTTP
+header values are strings; CLIO won't auto-stringify (which would hide
+bugs like passing a boolean by mistake).
+
+**Fix:** quote it: `headers: {X-Page: "10"}`. If the value is templated
+from `TAKES`, write `headers: {X-Page: "${page}"}` — `${var}` substitution
+takes care of stringifying via `str(...)` at runtime.
+
 ### `ValueError: invoke.protocol 'bedrock' is not yet supported`
 
 Bedrock and Vertex are specced but not implemented in any emitter yet.
