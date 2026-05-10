@@ -915,6 +915,8 @@ def _validate_parallel_for_each(graph: FlowGraph) -> None:
                 _walk(elem.body)
 
     _walk(graph.flow.chain)
+    for rb in graph.flow.rescues:
+        _walk(rb.body)
 
 
 def _render(t: TypeExpr) -> str:

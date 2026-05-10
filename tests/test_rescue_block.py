@@ -280,3 +280,31 @@ FLOW p
 """
     with pytest.raises(IRBuildError, match="abort.* only valid inside a RESCUE"):
         build_ir(_parse(src))
+
+
+def test_walker_descends_into_rescue_body():
+    """_validate_parallel_for_each must descend into rescue.body. A nested
+    FOR EACH PARALLEL inside a rescue body must be rejected with the same
+    nesting-parallel error as anywhere else in the FLOW."""
+    src = """
+STEP load
+  TAKES: x: int
+  GIVES: items: List<int>
+  MODE:  exact
+
+STEP work
+  TAKES: i: int
+  GIVES: r: int
+  MODE:  exact
+
+FLOW p
+  load(x=1)
+
+  RESCUE load:
+    -> FOR EACH a IN items PARALLEL AS A:
+         FOR EACH b IN items PARALLEL AS B:
+           work(i=b)
+    -> abort("nested parallel forbidden")
+"""
+    with pytest.raises(IRBuildError, match="nested inside another"):
+        build_ir(_parse(src))
