@@ -1,8 +1,14 @@
 import pytest
 
-from clio.ir.builder import build_ir
+from clio.ir.builder import IRBuildError, build_ir
 from clio.ir.contracts import type_to_json_schema
-from clio.ir.graph import ShellImplIR
+from clio.ir.graph import (
+    HttpServerSpecIR,
+    McpToolImplIR,
+    ShellImplIR,
+    SseServerSpecIR,
+    StdioServerSpecIR,
+)
 from clio.parser.parser import parse
 
 
@@ -638,3 +644,99 @@ def test_ir_accepts_parallel_inside_sequential_foreach():
     assert outer.parallel is False
     inner = outer.body[1]
     assert inner.parallel is True
+
+
+# --- impl.mode: mcp_tool IR build + cross-validation (v0.10) ----------------
+
+
+_MCP_VALID_SRC = (
+    "STEP search\n"
+    "  TAKES: query: str\n"
+    "  GIVES: r: str\n"
+    "  MODE:  exact\n"
+    "  impl:\n"
+    "    mode:    mcp_tool\n"
+    "    server:  docs\n"
+    "    tool:    search\n"
+    "    args:    {q: \"${query}\"}\n"
+    "FLOW f\n"
+    '  search(query="x")\n'
+    "RESOURCES\n"
+    "  target: python\n"
+    "  mcp_servers:\n"
+    "    docs:\n"
+    "      transport: stdio\n"
+    '      command:   "mcp-server-docs"\n'
+)
+
+
+def test_ir_build_mcp_tool_basic():
+    g = build_ir(parse(_MCP_VALID_SRC))
+    step = g.steps[0]
+    assert isinstance(step.impl, McpToolImplIR)
+    assert step.impl.server == "docs"
+    assert step.impl.tool == "search"
+    assert step.impl.parse == "json"
+    assert g.resources is not None
+    assert len(g.resources.mcp_servers) == 1
+    assert isinstance(g.resources.mcp_servers[0], StdioServerSpecIR)
+
+
+def test_ir_build_mcp_tool_unknown_server_rejected():
+    src = _MCP_VALID_SRC.replace("server:  docs", "server:  ghost")
+    with pytest.raises(IRBuildError, match="ghost.*not declared"):
+        build_ir(parse(src))
+
+
+def test_ir_build_mcp_tool_parse_text_with_non_str_gives_rejected():
+    src = (
+        "STEP search\n"
+        "  TAKES: query: str\n"
+        "  GIVES: r: int\n"   # non-str — incompatible with parse: text
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:    mcp_tool\n"
+        "    server:  docs\n"
+        "    tool:    search\n"
+        "    parse:   text\n"
+        "FLOW f\n"
+        '  search(query="x")\n'
+        "RESOURCES\n"
+        "  target: python\n"
+        "  mcp_servers:\n"
+        "    docs:\n"
+        '      command: "x"\n'
+    )
+    with pytest.raises(IRBuildError, match="parse: text requires GIVES of type 'str'"):
+        build_ir(parse(src))
+
+
+def test_ir_build_mcp_tool_dead_server_warns(capsys):
+    src = (
+        _MCP_VALID_SRC
+        + "    unused:\n"
+        + "      transport: sse\n"
+        + '      url:       "https://example.com/mcp"\n'
+    )
+    g = build_ir(parse(src))
+    captured = capsys.readouterr()
+    assert "unused is declared but never referenced" in captured.err
+    # Build still succeeds — the server spec is in the IR even if dead.
+    assert {s.name for s in g.resources.mcp_servers} == {"docs", "unused"}
+
+
+def test_ir_build_mcp_tool_sse_and_http_specs():
+    src = (
+        _MCP_VALID_SRC
+        + "    remote_sse:\n"
+        + "      transport: sse\n"
+        + '      url:       "https://api.example.com/sse"\n'
+        + "    remote_http:\n"
+        + "      transport: http\n"
+        + '      url:       "https://api.example.com/http"\n'
+    )
+    # Must not warn-as-error; we capture stderr but build_ir succeeds.
+    g = build_ir(parse(src))
+    by_name = {s.name: s for s in g.resources.mcp_servers}
+    assert isinstance(by_name["remote_sse"], SseServerSpecIR)
+    assert isinstance(by_name["remote_http"], HttpServerSpecIR)

@@ -20,6 +20,7 @@ from clio.emitters._claude_cli_helpers import (
     _render_prompt,
     _render_type,
     _resolve_iter_inner_type,
+    emit_mcp_tool_step_cli,
     emit_rest_step_cli,
 )
 from clio.emitters.base import BaseEmitter
@@ -28,6 +29,7 @@ from clio.ir.graph import (
     ContractIR,
     FlowGraph,
     ForEachIR,
+    McpToolImplIR,
     RestImplIR,
     ShellImplIR,
     StepIR,
@@ -81,6 +83,7 @@ class ClaudeCLIEmitter(BaseEmitter):
 
         steps_dir = output_dir / "steps"
         steps_dir.mkdir(exist_ok=True)
+        self._graph = graph   # used by _emit_step for cross-step lookups (mcp_servers)
         for idx, step in enumerate(graph.steps, start=1):
             self._emit_step(steps_dir, idx, step)
 
@@ -93,13 +96,27 @@ class ClaudeCLIEmitter(BaseEmitter):
             needs_rest_runtime = any(
                 isinstance(s.impl, RestImplIR) for s in graph.steps
             )
-            if needs_judgment_runtime or needs_rest_runtime:
-                self._copy_runtime(output_dir, include_rest=needs_rest_runtime)
+            needs_mcp_runtime = any(
+                isinstance(s.impl, McpToolImplIR) for s in graph.steps
+            )
+            if needs_judgment_runtime or needs_rest_runtime or needs_mcp_runtime:
+                self._copy_runtime(
+                    output_dir,
+                    include_rest=needs_rest_runtime or needs_mcp_runtime,
+                    include_mcp=needs_mcp_runtime,
+                )
 
-    def _copy_runtime(self, output_dir: Path, include_rest: bool = False) -> None:
+    def _copy_runtime(
+        self,
+        output_dir: Path,
+        include_rest: bool = False,
+        include_mcp: bool = False,
+    ) -> None:
         """Copy `clio.runtime.*` into the output as a top-level `clio_runtime/` package.
         Always copies the judgment-validation helpers; `include_rest=True` also
-        bundles `rest.py` (templating + retry helpers used by emitted REST steps)."""
+        bundles `rest.py` (templating + retry helpers used by emitted REST steps);
+        `include_mcp=True` adds `mcp_client.py` (and forces `rest.py` since
+        mcp_client imports `subst` from it)."""
         from clio import runtime as src_pkg
         src_dir = Path(src_pkg.__file__).parent
         dest = output_dir / "clio_runtime"
@@ -107,6 +124,8 @@ class ClaudeCLIEmitter(BaseEmitter):
         names = ["__init__.py", "validate.py", "substitute.py", "cache.py"]
         if include_rest:
             names.append("rest.py")
+        if include_mcp:
+            names.append("mcp_client.py")
         for name in names:
             src_file = src_dir / name
             if src_file.exists():
@@ -467,8 +486,7 @@ class ClaudeCLIEmitter(BaseEmitter):
                 parts.append(f'--{name}={shlex.quote(str(value))}')
         return " ".join(parts)
 
-    @staticmethod
-    def _emit_step(steps_dir: Path, idx: int, step: StepIR) -> None:
+    def _emit_step(self, steps_dir: Path, idx: int, step: StepIR) -> None:
         prefix = f"{idx:02d}_{step.name}"
         if step.mode == "judgment":
             (steps_dir / f"{prefix}.prompt").write_text(_render_prompt(step))
@@ -485,6 +503,19 @@ class ClaudeCLIEmitter(BaseEmitter):
             if step.gives:
                 io_doc += f"\nGIVES: {step.gives.name}: {_render_type(step.gives.type)}"
             body = emit_rest_step_cli(step, step.impl, io_doc)
+        elif isinstance(step.impl, McpToolImplIR):
+            io_doc = "\n".join(_field_doc(f) for f in step.takes)
+            if step.gives:
+                io_doc += f"\nGIVES: {step.gives.name}: {_render_type(step.gives.type)}"
+            mcp_servers_by_name = {
+                s.name: s
+                for s in (
+                    self._graph.resources.mcp_servers
+                    if self._graph.resources is not None else ()
+                )
+            }
+            spec = mcp_servers_by_name[step.impl.server]   # validated upstream
+            body = emit_mcp_tool_step_cli(step, step.impl, spec, io_doc)
         elif isinstance(step.impl, ShellImplIR):
             io_doc = "\n".join(_field_doc(f) for f in step.takes)
             if step.gives:

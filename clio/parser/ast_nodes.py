@@ -246,6 +246,7 @@ class BoolAndExpr(ExprNode):
 class ResourcesDecl:
     target: str
     models: tuple[str, ...]
+    mcp_servers: "tuple[McpServerSpec, ...]"
     line: int
     col: int
 
@@ -371,6 +372,74 @@ class RestImpl(ImplBlock):
     response_path: str | None      # e.g. "results[0].geometry.location"
     timeout_seconds: int | None
     retry: RetryPolicy | None
+
+
+# Sealed McpServerSpec hierarchy. One per transport.
+@dataclass(frozen=True)
+class McpServerSpec:
+    """Sealed base for one entry in RESOURCES.mcp_servers. Subtypes:
+    StdioServerSpec, SseServerSpec, HttpServerSpec. See LANGUAGE_SPEC.md
+    §RESOURCES.mcp_servers."""
+    name: str
+    line: int
+    col: int
+
+
+@dataclass(frozen=True)
+class StdioServerSpec(McpServerSpec):
+    """transport: stdio — subprocess MCP server. `env` values may use
+    `env:NAME` to inherit from the host env at runtime."""
+    command: str
+    args: tuple[str, ...]
+    env: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class SseServerSpec(McpServerSpec):
+    """transport: sse — Server-Sent Events MCP server. `headers` values
+    may use `env:NAME`."""
+    url: str
+    headers: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class HttpServerSpec(McpServerSpec):
+    """transport: http — HTTP MCP server (streamable). `headers` values
+    may use `env:NAME`."""
+    url: str
+    headers: tuple[tuple[str, str], ...]
+
+
+# Type alias for tool-args scalar values.
+McpArgScalar = str | int | float | bool | None
+
+
+@dataclass(frozen=True)
+class McpToolImpl(ImplBlock):
+    """impl.mode: mcp_tool — call a tool exposed by a configured MCP server.
+    See LANGUAGE_SPEC.md §impl.mode: mcp_tool. Each `args` entry value
+    conforms to `McpArgValue` (scalar | nested dict | nested list); the
+    annotation is `object` to keep the parser-side construction simple,
+    and the recursive validation is enforced at parse time."""
+    server: str                              # name from RESOURCES.mcp_servers
+    tool: str                                # tool name on the server
+    args: tuple[tuple[str, object], ...]     # may be ()
+    timeout_seconds: int                     # default 60
+    parse: str = "json"                      # "json" | "text"
+
+
+# Recursive type alias for tool-args values: scalars, dicts (str → value),
+# or lists of values. String values can carry `${var}` substitutions
+# (resolved at runtime by the bundled clio_runtime.mcp_client). Nested
+# dicts and lists stay as native Python types — the top-level
+# `McpToolImpl.args` is an immutable tuple of (key, value) pairs but the
+# nested values keep dict/list shape so the runtime can json.dumps them
+# directly.
+McpArgValue = (
+    McpArgScalar
+    | dict[str, "McpArgValue"]
+    | list["McpArgValue"]
+)
 
 
 @dataclass(frozen=True)

@@ -324,6 +324,97 @@ Compiles to all three exact-supporting targets (`python`,
 and the same retry loop, with `clio_runtime/rest.py` bundled into the
 output for the templating + retry helpers.
 
+## 12. Calling MCP tools (`impl.mode: mcp_tool`)
+
+`impl.mode: mcp_tool` lets a STEP delegate to a tool exposed by an MCP
+(Model Context Protocol) server. The server is declared once in
+`RESOURCES.mcp_servers`, then any number of steps can reference it by
+name. Three transports are supported: `stdio` (local subprocess), `sse`
+(Server-Sent Events over HTTPS), and `http` (streamable HTTP).
+
+```clio
+CONTRACT search_hit
+  SHAPE: {title: str, score: float}
+
+# stdio: local subprocess server, env passed through.
+STEP search_docs
+  TAKES: query: str
+  GIVES: hits: List<search_hit>
+  MODE:  exact
+  impl:
+    mode:    mcp_tool
+    server:  docs                          # ← name from RESOURCES.mcp_servers
+    tool:    search                         # tool exposed by that server
+    args:    {q: "${query}", top_k: 10}
+    timeout: 30s                            # tool-call timeout (default 60s)
+    parse:   json                           # 'json' (default) or 'text'
+
+# sse: remote server with bearer auth via env:.
+STEP analyze_remote
+  TAKES: text: str
+  GIVES: summary: str
+  MODE:  exact
+  impl:
+    mode:    mcp_tool
+    server:  remote
+    tool:    summarize
+    args:    {input: "${text}", style: "concise"}
+    parse:   text                           # GIVES must be `str`
+
+FLOW pipeline
+  search_docs(query="design patterns")
+  -> analyze_remote(text="excerpt")
+
+RESOURCES
+  target: python
+  mcp_servers:
+    docs:
+      transport: stdio
+      command:   "mcp-server-docs"
+      args:      ["--config", "./docs.json"]
+      env:       {INDEX_DIR: "env:DOCS_INDEX"}
+
+    remote:
+      transport: sse
+      url:       "https://api.example.com/mcp"
+      headers:   {Authorization: "env:MCP_REMOTE_TOKEN"}
+```
+
+**Templating in `args`.** `${var}` in any **string** value resolves
+from `TAKES` at runtime. Numbers, booleans, and `null` pass through
+unchanged. Nested dicts and lists are walked recursively. Unlike `impl.rest`,
+`env:NAME` is **not** allowed in tool `args` — secrets belong in the
+server spec's `env` (stdio) or `headers` (sse/http).
+
+**Lifecycle.** On the `python` and `mcp-server` targets the runtime keeps
+**one long-lived client per server**: the first call boots it, all
+subsequent calls reuse it, and an `atexit` handler tears it down at flow
+exit. A `FOR EACH ... PARALLEL` block reuses the same client (MCP is
+concurrency-safe over a single connection). On `claude-cli` each step is
+a standalone Python script, so the client is started, called, and torn
+down within that script — stdio servers pay subprocess-boot per step;
+SSE/HTTP servers pay only the HTTP-handshake cost.
+
+**Retry.** `impl.mcp_tool` does **not** accept a `retry:` block in v0.10.
+Wrap the step in a `RESCUE` handler if you need retry-then-abort:
+
+```clio
+RESCUE search_docs:
+  notify_team(reason="MCP tool failed")
+  -> abort("docs server unreachable")
+```
+
+**v0.10 limits.** Tool catalog is not validated at compile time (a typo
+in `tool:` is a runtime error). Only the first text content block of a
+response is consumed (multi-block responses get the first text part
+extracted). For `parse: text`, GIVES must be exactly `str` — coercion
+to `int`/`float`/`bool` is intentionally not done.
+
+The compiled output bundles `clio_runtime/mcp_client.py` (singleton
+client cache + sync↔async bridge) and `clio_runtime/rest.py` (templating
+helper). Install the SDK with `pip install mcp` (or `pip install -e
+./out[mcp]` once the bundled extras lands in v0.11).
+
 ## What's not in the cookbook (yet)
 
 - **Multi-field ASSERT** — accept `a > b` between two fields. Specced, planned.

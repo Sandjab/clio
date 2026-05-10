@@ -1,5 +1,93 @@
 # Changelog
 
+## v0.10.0 — 2026-05-10
+
+### Language
+
+- **`impl.mode: mcp_tool`** (`docs/LANGUAGE_SPEC.md` §impl.mode: mcp_tool):
+  call a tool exposed by an MCP (Model Context Protocol) server. The
+  step references a server declared in `RESOURCES.mcp_servers` (see
+  below) by name and passes a `tool` + `args` dict. `${var}` in any
+  string-typed `args` value resolves from `TAKES`; numeric / bool /
+  null leaves pass through; nested dicts and lists are walked
+  recursively. `parse: json` (default) `json.loads` the first text
+  content block and validates against `GIVES`; `parse: text` returns
+  the raw text as a `str` (compile error if `GIVES` is not `str`).
+  `timeout:` defaults to `60s`. `retry:` is rejected at parse time —
+  wrap the step in a `RESCUE` handler if you need retry-then-abort.
+  `env:NAME` is *not* allowed in `args` (secrets belong in the server
+  spec, not the tool arguments).
+- **`RESOURCES.mcp_servers`** block: declares MCP servers a flow can
+  talk to. Three transports — `stdio` (subprocess: `command` / `args`
+  / `env`), `sse` (Server-Sent Events: `url` / `headers`), and `http`
+  (streamable HTTP: `url` / `headers`). `env:` and `headers.*` values
+  may use `env:NAME` for secrets. URLs must be `https://` unless host
+  is `localhost` / `127.0.0.1`. Mixing transport-incompatible fields
+  (e.g. `command` on a `sse` spec) is a parse-time error.
+- New keywords: `mcp_tool`, `mcp_servers`, `stdio`, `sse`, `http`.
+
+### IR
+
+- New AST/IR nodes: `McpToolImpl` / `McpToolImplIR`, sealed
+  `McpServerSpec` / `McpServerSpecIR` hierarchy with `Stdio*`, `Sse*`,
+  `Http*` variants. `ResourcesDecl` / `ResourcesIR` extended with a
+  `mcp_servers` field.
+- New cross-validations: every `impl.mcp_tool.server` must reference a
+  declared server (compile error if not); `parse: text` requires
+  GIVES of type `str` (compile error otherwise); a server declared
+  but never referenced emits a `stderr` warning ('dead spec').
+
+### Emitters
+
+- `python` and `mcp-server`: emit `_mcp.call_tool_sync(server_spec,
+  tool, args, takes, timeout=..., parse=...)` per step. The new
+  `clio/runtime/mcp_client.py` module is bundled into
+  `clio_runtime/` (along with `rest.py` for the templating helper)
+  whenever a flow has any `mcp_tool` step. Long-lived per-server
+  clients are kept in a daemon-thread asyncio loop (sync ↔ async
+  bridge); `atexit` tears them down at process exit.
+- `claude-cli`: each `mcp_tool` step is a standalone Python script
+  that runs `asyncio.run(_mcp.call_tool_async(...))`. Per-step
+  bootstrap — claude-cli's bash orchestrator has no place to hold a
+  long-lived client across subprocess invocations. The runtime
+  bundle now also copies `mcp_client.py`.
+
+### Runtime
+
+- New `clio/runtime/mcp_client.py` (≈ 250 lines, lazy-imports the
+  `mcp` SDK). `render_args(args, takes)` substitutes `${var}` over
+  scalar/dict/list args; `_resolve_env(value)` resolves `env:NAME`
+  in headers/env entries. Public API: `call_tool_async` (used by
+  `claude-cli` step scripts) and `call_tool_sync` (used by the
+  `python` / `mcp-server` emitted code).
+
+### Documentation
+
+- New §RESOURCES.mcp_servers and §impl.mode: mcp_tool sections in
+  `docs/LANGUAGE_SPEC.md`. Implementation-status table updated:
+  `mcp_tool` is now ✅ on parser / IR / python / mcp-server / claude-cli.
+- New cookbook recipe (`docs/manual/03-cookbook.md` §12) — calling
+  MCP tools across the three transports with full templating example.
+- Eight new troubleshooting entries (`docs/manual/06-troubleshooting.md`)
+  for the `mcp_tool` and `mcp_servers` parse-time errors and the
+  runtime "mcp SDK not installed" diagnostic.
+- New `examples/mcp_tool.clio` exercising all 3 transports + nested
+  args + `parse: text` vs `parse: json`.
+
+### Tests
+
+- 16 new parser tests (transport variants, field validation, retry
+  rejection, parse value, duplicate name, URL https requirement).
+- 5 new IR tests (build, server resolution, parse:text+non-str
+  rejection, dead-spec warning, sse/http variants).
+- 7 new emitter tests (3 python + 2 mcp-server + 2 claude-cli) —
+  covers code generation, runtime bundling, env-list-of-tuples
+  rendering.
+- 9 new runtime tests (`tests/test_runtime_mcp_client.py`) on
+  `render_args` recursion, `_resolve_env` whole-string semantics,
+  and the lazy-import friendly error.
+- Suite total: 587 (up from 551 at v0.9.0).
+
 ## v0.9.0 — 2026-05-10
 
 ### Viewer

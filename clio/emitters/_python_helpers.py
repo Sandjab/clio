@@ -16,12 +16,17 @@ from clio.ir.graph import (
     FileBodyIR,
     ForEachIR,
     FormBodyIR,
+    HttpServerSpecIR,
     InvokeIR,
     JsonBodyIR,
+    McpServerSpecIR,
+    McpToolImplIR,
     MultipartBodyIR,
     RawBodyIR,
     RestImplIR,
     ShellImplIR,
+    SseServerSpecIR,
+    StdioServerSpecIR,
     StepIR,
 )
 from clio.parser.ast_nodes import (
@@ -788,6 +793,127 @@ def emit_shell_step(
         f'    _log.emit("step_end", step={step.name!r}, mode="exact",\n'
         f'              duration_ms=int((time.monotonic() - _t0) * 1000), success=True)\n'
         f'{return_line}'
+    )
+
+
+def _server_spec_dict_repr(spec: McpServerSpecIR) -> str:
+    """Render an `McpServerSpecIR` as a Python dict literal usable in
+    emitted code. The runtime helpers (`clio_runtime.mcp_client`) read
+    this dict shape (with keys: name, transport, command, args, env, url,
+    headers) and resolve `env:NAME` values at runtime."""
+    if isinstance(spec, StdioServerSpecIR):
+        return (
+            "{"
+            f"'name': {spec.name!r}, "
+            f"'transport': 'stdio', "
+            f"'command': {spec.command!r}, "
+            f"'args': {list(spec.args)!r}, "
+            f"'env': {list(spec.env)!r}"
+            "}"
+        )
+    if isinstance(spec, SseServerSpecIR):
+        return (
+            "{"
+            f"'name': {spec.name!r}, "
+            f"'transport': 'sse', "
+            f"'url': {spec.url!r}, "
+            f"'headers': {list(spec.headers)!r}"
+            "}"
+        )
+    if isinstance(spec, HttpServerSpecIR):
+        return (
+            "{"
+            f"'name': {spec.name!r}, "
+            f"'transport': 'http', "
+            f"'url': {spec.url!r}, "
+            f"'headers': {list(spec.headers)!r}"
+            "}"
+        )
+    raise ValueError(f"unknown McpServerSpecIR subtype: {type(spec).__name__}")
+
+
+def emit_mcp_tool_step(
+    step: StepIR,
+    contracts_by_name: dict[str, ContractIR],
+    impl: McpToolImplIR,
+    server_spec: McpServerSpecIR,
+    *,
+    async_call: bool = False,
+) -> str:
+    """Emit a mcp_tool-impl exact step. Shared by python (sync) and
+    mcp-server (async) targets. claude-cli has its own emitter (per-step
+    bootstrap script) — see `_claude_cli_helpers.py`."""
+    params = _step_signature(step, contracts_by_name)
+    ret_type = (
+        _type_to_python(step.gives.type, contracts_by_name)
+        if step.gives is not None else "None"
+    )
+    takes_doc = (
+        "\n    ".join(f"{t.name}: {_render_type_short(t.type)}" for t in step.takes)
+        if step.takes else "(no TAKES)"
+    )
+    gives_doc = (
+        f"{step.gives.name}: {_render_type_short(step.gives.type)}"
+        if step.gives is not None else "(no GIVES)"
+    )
+
+    takes_dict_lines = (
+        ["    _takes = {"]
+        + [f"        {t.name!r}: {_to_field_name(t.name)}," for t in step.takes]
+        + ["    }"]
+        if step.takes else ["    _takes: dict = {}"]
+    )
+
+    server_spec_line = f"    _server = {_server_spec_dict_repr(server_spec)}"
+    args_repr = "{" + ", ".join(f"{k!r}: {v!r}" for k, v in impl.args) + "}"
+    args_line = f"    _args = {args_repr}"
+
+    call_kwargs = (
+        f"_server, {impl.tool!r}, _args, _takes, "
+        f"timeout={impl.timeout_seconds}, parse={impl.parse!r}"
+    )
+    if async_call:
+        call_line = f"    _result = await _mcp.call_tool_async({call_kwargs})"
+        def_line = f"async def {step.name}({params}) -> {ret_type}:"
+    else:
+        call_line = f"    _result = _mcp.call_tool_sync({call_kwargs})"
+        def_line = f"def {step.name}({params}) -> {ret_type}:"
+
+    contracts_import = (
+        "from .. import contracts\n" if _uses_contract_refs(step) else ""
+    )
+
+    body_lines = [
+        def_line,
+        '    _t0 = time.monotonic()',
+        f'    _log.emit("step_start", step={step.name!r}, mode="exact")',
+        *takes_dict_lines,
+        server_spec_line,
+        args_line,
+        call_line,
+        f'    _log.emit("step_end", step={step.name!r}, mode="exact",',
+        "              duration_ms=int((time.monotonic() - _t0) * 1000), success=True)",
+        "    return _result",
+    ]
+
+    return (
+        f'"""STEP {step.name} (exact, impl: mcp_tool)\n'
+        f'TAKES:\n'
+        f'    {takes_doc}\n'
+        f'GIVES:\n'
+        f'    {gives_doc}\n\n'
+        f'Auto-generated from `impl: mode: mcp_tool`. Calls the MCP server\n'
+        f'declared in RESOURCES.mcp_servers.{impl.server!r} (transport: '
+        f'{server_spec.__class__.__name__.replace("ServerSpecIR", "").lower()}).\n'
+        f'See LANGUAGE_SPEC.md §impl.mode: mcp_tool.\n'
+        f'"""\n'
+        f'from __future__ import annotations\n\n'
+        f'import time\n\n'
+        f'from ..clio_runtime import logging as _log\n'
+        f'from ..clio_runtime import mcp_client as _mcp\n'
+        f'{contracts_import}'
+        f'\n\n'
+        + "\n".join(body_lines) + "\n"
     )
 
 

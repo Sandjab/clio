@@ -1790,3 +1790,59 @@ def test_python_runtime_rescue_aborts(tmp_path):
         for k in list(sys.modules):
             if k == "pipeline" or k.startswith("pipeline."):
                 del sys.modules[k]
+
+
+# --- impl.mode: mcp_tool emission (v0.10) -----------------------------------
+
+_MCP_PY_SRC = (
+    "STEP search\n"
+    "  TAKES: query: str\n"
+    "  GIVES: r: str\n"
+    "  MODE:  exact\n"
+    "  impl:\n"
+    "    mode:    mcp_tool\n"
+    "    server:  docs\n"
+    "    tool:    search\n"
+    "    args:    {q: \"${query}\", limit: 10}\n"
+    "    timeout: 30s\n"
+    "FLOW f\n"
+    '  search(query="x")\n'
+    "RESOURCES\n"
+    "  target: python\n"
+    "  mcp_servers:\n"
+    "    docs:\n"
+    "      transport: stdio\n"
+    '      command:   "mcp-server-docs"\n'
+    '      args:      ["--cfg"]\n'
+    '      env:       {INDEX: "env:DOCS_INDEX"}\n'
+)
+
+
+def test_python_emit_mcp_tool_step_uses_call_tool_sync(tmp_path):
+    import ast
+    PythonEmitter().emit(build_ir(parse(_MCP_PY_SRC)), tmp_path)
+    body = (tmp_path / "f" / "steps" / "search.py").read_text()
+    assert "from ..clio_runtime import mcp_client as _mcp" in body
+    assert "_mcp.call_tool_sync(" in body
+    assert "'transport': 'stdio'" in body
+    assert "'command': 'mcp-server-docs'" in body
+    assert "'q': '${query}'" in body
+    assert "timeout=30" in body
+    assert "parse='json'" in body
+    ast.parse(body)
+
+
+def test_python_emit_mcp_tool_bundles_runtime(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_MCP_PY_SRC)), tmp_path)
+    rt = tmp_path / "f" / "clio_runtime"
+    assert (rt / "mcp_client.py").exists()
+    # mcp_client imports `subst` from rest, so rest must be bundled too.
+    assert (rt / "rest.py").exists()
+
+
+def test_python_emit_mcp_tool_renders_env_pairs_as_list_of_tuples(tmp_path):
+    PythonEmitter().emit(build_ir(parse(_MCP_PY_SRC)), tmp_path)
+    body = (tmp_path / "f" / "steps" / "search.py").read_text()
+    # env pairs round-trip through json-friendly list-of-tuples (so the
+    # runtime can iterate (k, v) pairs without dict-ordering surprises).
+    assert "'env': [('INDEX', 'env:DOCS_INDEX')]" in body

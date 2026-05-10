@@ -668,3 +668,44 @@ def test_mcp_emit_rescue_basic(tmp_path):
     assert "try:" in flow_text
     assert "except FlowAborted:" in flow_text
     assert "await _rescue_detect(state" in flow_text
+
+
+# --- impl.mode: mcp_tool emission for mcp-server (v0.10) --------------------
+
+_MCP_SRV_SRC = (
+    "STEP search\n"
+    "  TAKES: query: str\n"
+    "  GIVES: r: str\n"
+    "  MODE:  exact\n"
+    "  impl:\n"
+    "    mode:    mcp_tool\n"
+    "    server:  docs\n"
+    "    tool:    search\n"
+    "    args:    {q: \"${query}\"}\n"
+    "FLOW f\n"
+    '  search(query="x")\n'
+    "RESOURCES\n"
+    "  target: mcp-server\n"
+    "  mcp_servers:\n"
+    "    docs:\n"
+    '      command: "mcp-server-docs"\n'
+)
+
+
+def test_mcp_server_emit_mcp_tool_step_uses_call_tool_sync(tmp_path):
+    import ast
+
+    from clio.emitters.mcp_server import MCPServerEmitter
+    MCPServerEmitter().emit(build_ir(parse(_MCP_SRV_SRC)), tmp_path)
+    body = (tmp_path / "f" / "steps" / "search.py").read_text()
+    assert "_mcp.call_tool_sync(" in body
+    assert "from ..clio_runtime import mcp_client as _mcp" in body
+    ast.parse(body)
+
+
+def test_mcp_server_emit_mcp_tool_bundles_runtime(tmp_path):
+    from clio.emitters.mcp_server import MCPServerEmitter
+    MCPServerEmitter().emit(build_ir(parse(_MCP_SRV_SRC)), tmp_path)
+    rt = tmp_path / "f" / "clio_runtime"
+    assert (rt / "mcp_client.py").exists()
+    assert (rt / "rest.py").exists()    # mcp_client imports subst from rest

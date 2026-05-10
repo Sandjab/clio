@@ -15,6 +15,7 @@ from clio.parser.ast_nodes import (
     FlowDecl,
     ForEachBlock,
     FormBody,
+    HttpServerSpec,
     IdentExpr,
     IfBlock,
     ImplBlock,
@@ -24,6 +25,8 @@ from clio.parser.ast_nodes import (
     ListType,
     MatchBlock,
     MatchCase,
+    McpServerSpec,
+    McpToolImpl,
     MultipartBody,
     OnFailChain,
     OnFailStrategy,
@@ -37,6 +40,8 @@ from clio.parser.ast_nodes import (
     RestImpl,
     RetryPolicy,
     ShellImpl,
+    SseServerSpec,
+    StdioServerSpec,
     StepCall,
     StepDecl,
     StrExpr,
@@ -57,7 +62,8 @@ class ParseError(Exception):
 _PRIMITIVE_TYPES = {"int", "float", "str", "bool"}
 _VALID_MODES = {"exact", "judgment"}
 _VALID_LANGS = {"python", "rust", "go", "node", "bash", "auto"}
-_VALID_IMPL_MODES = {"code", "rest", "shell"}
+_VALID_IMPL_MODES = {"code", "rest", "shell", "mcp_tool"}
+_VALID_MCP_TRANSPORTS = {"stdio", "sse", "http"}
 _VALID_HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 _VALID_INVOKE_MODES = {"cli", "api"}
 _VALID_PROTOCOLS = {"anthropic", "openai", "bedrock", "vertex"}
@@ -116,6 +122,7 @@ class _Parser:
 
         target: str | None = None
         models: tuple[str, ...] = ()
+        mcp_servers: tuple[McpServerSpec, ...] = ()
         while self.peek().type != TokenType.DEDENT:
             t = self.peek()
             if t.type == TokenType.KEYWORD and t.value == "target":
@@ -142,6 +149,10 @@ class _Parser:
                 self.expect(TokenType.RBRACKET)
                 models = tuple(vals)
                 self.expect(TokenType.NEWLINE)
+            elif t.type == TokenType.KEYWORD and t.value == "mcp_servers":
+                self.advance()
+                self.expect(TokenType.COLON)
+                mcp_servers = self._parse_mcp_servers_block()
             elif t.type == TokenType.KEYWORD and t.value in {"budget", "prefer", "strategy"}:
                 raise ParseError(
                     f"RESOURCES field {t.value!r} is not supported in v0.1 "
@@ -167,7 +178,13 @@ class _Parser:
                 kw.line, kw.col,
             )
 
-        return ResourcesDecl(target=target, models=models, line=kw.line, col=kw.col)
+        return ResourcesDecl(
+            target=target,
+            models=models,
+            mcp_servers=mcp_servers,
+            line=kw.line,
+            col=kw.col,
+        )
 
     def parse_step(self) -> StepDecl:
         kw = self.expect(TokenType.KEYWORD, "STEP")
@@ -401,6 +418,8 @@ class _Parser:
             return self._build_rest_impl(fields, line, col, mode_line, mode_col)
         if mode_value == "shell":
             return self._build_shell_impl(fields, line, col, mode_line, mode_col)
+        if mode_value == "mcp_tool":
+            return self._build_mcp_tool_impl(fields, line, col, mode_line, mode_col)
         # unreachable: mode validation happened above
         raise ParseError(f"impl.mode {mode_value!r} not yet implemented", mode_line, mode_col)
 
@@ -896,6 +915,306 @@ class _Parser:
             base=float(base_raw),
             cap=float(cap_raw),
             on=on_value,
+        )
+
+    # ---- mcp_tool / mcp_servers builders -----------------------------------
+
+    def _parse_mcp_servers_block(self) -> tuple[McpServerSpec, ...]:
+        """Parse the indented `mcp_servers:` block. Each entry is a
+        `<name>:` header followed by an indented field block (transport /
+        command / args / env / url / headers)."""
+        self.expect(TokenType.NEWLINE)
+        self.expect(TokenType.INDENT)
+        out: list[McpServerSpec] = []
+        seen: set[str] = set()
+        while self.peek().type != TokenType.DEDENT:
+            name_tok = self.peek()
+            if name_tok.type not in (TokenType.IDENT, TokenType.KEYWORD):
+                raise ParseError(
+                    f"expected MCP server name, got {name_tok.type.value} "
+                    f"{name_tok.value!r}",
+                    name_tok.line, name_tok.col,
+                )
+            if name_tok.value in seen:
+                raise ParseError(
+                    f"RESOURCES.mcp_servers has duplicate server name "
+                    f"{name_tok.value!r}",
+                    name_tok.line, name_tok.col,
+                )
+            seen.add(name_tok.value)
+            self.advance()
+            self.expect(TokenType.COLON)
+            self.expect(TokenType.NEWLINE)
+            self.expect(TokenType.INDENT)
+            spec_fields: dict[str, object] = {}
+            while self.peek().type != TokenType.DEDENT:
+                field_tok = self.peek()
+                if field_tok.type not in (TokenType.IDENT, TokenType.KEYWORD):
+                    raise ParseError(
+                        f"expected MCP server spec field, got "
+                        f"{field_tok.type.value} {field_tok.value!r}",
+                        field_tok.line, field_tok.col,
+                    )
+                field_name = field_tok.value
+                if field_name in spec_fields:
+                    raise ParseError(
+                        f"RESOURCES.mcp_servers.{name_tok.value} has duplicate "
+                        f"field {field_name!r}",
+                        field_tok.line, field_tok.col,
+                    )
+                self.advance()
+                self.expect(TokenType.COLON)
+                spec_fields[field_name] = self._parse_impl_field_value()
+                self.expect(TokenType.NEWLINE)
+            self.expect(TokenType.DEDENT)
+            out.append(self._build_mcp_server_spec(
+                name_tok.value, spec_fields, name_tok.line, name_tok.col,
+            ))
+        self.expect(TokenType.DEDENT)
+        return tuple(out)
+
+    def _build_mcp_server_spec(
+        self, name: str, spec: object, line: int, col: int,
+    ) -> McpServerSpec:
+        if not isinstance(spec, dict):
+            raise ParseError(
+                f"RESOURCES.mcp_servers.{name} must be an inline dict, "
+                f"got {type(spec).__name__}",
+                line, col,
+            )
+        transport = spec.get("transport", "stdio")
+        if transport not in _VALID_MCP_TRANSPORTS:
+            raise ParseError(
+                f"RESOURCES.mcp_servers.{name}.transport must be one of "
+                f"{sorted(_VALID_MCP_TRANSPORTS)}, got {transport!r}",
+                line, col,
+            )
+
+        stdio_keys = {"command", "args", "env"}
+        net_keys = {"url", "headers"}
+        provided = set(spec.keys()) - {"transport"}
+        unknown = provided - stdio_keys - net_keys
+        if unknown:
+            sample = sorted(unknown)[0]
+            raise ParseError(
+                f"RESOURCES.mcp_servers.{name} has unknown field {sample!r} "
+                f"(allowed: transport, command, args, env, url, headers)",
+                line, col,
+            )
+
+        if transport == "stdio":
+            forbidden = provided & net_keys
+            if forbidden:
+                sample = sorted(forbidden)[0]
+                raise ParseError(
+                    f"RESOURCES.mcp_servers.{name} uses transport: stdio "
+                    f"but declares {sample!r} (only valid on sse/http)",
+                    line, col,
+                )
+            if "command" not in spec:
+                raise ParseError(
+                    f"RESOURCES.mcp_servers.{name} (transport: stdio) is "
+                    f"missing required field 'command'",
+                    line, col,
+                )
+            command = spec["command"]
+            if not isinstance(command, str) or not command:
+                raise ParseError(
+                    f"RESOURCES.mcp_servers.{name}.command must be a non-empty string",
+                    line, col,
+                )
+            args_raw = spec.get("args", [])
+            if not isinstance(args_raw, list):
+                raise ParseError(
+                    f"RESOURCES.mcp_servers.{name}.args must be an inline list, "
+                    f"got {type(args_raw).__name__}",
+                    line, col,
+                )
+            for a in args_raw:
+                if not isinstance(a, str):
+                    raise ParseError(
+                        f"RESOURCES.mcp_servers.{name}.args entries must be "
+                        f"strings, got {type(a).__name__}",
+                        line, col,
+                    )
+            env_raw = spec.get("env", {})
+            if not isinstance(env_raw, dict):
+                raise ParseError(
+                    f"RESOURCES.mcp_servers.{name}.env must be an inline dict, "
+                    f"got {type(env_raw).__name__}",
+                    line, col,
+                )
+            env_pairs: list[tuple[str, str]] = []
+            for k, v in env_raw.items():
+                if not isinstance(v, str):
+                    raise ParseError(
+                        f"RESOURCES.mcp_servers.{name}.env.{k} must be a string "
+                        f"(use \"env:NAME\" to reference the host env)",
+                        line, col,
+                    )
+                env_pairs.append((k, v))
+            return StdioServerSpec(
+                name=name,
+                line=line, col=col,
+                command=command,
+                args=tuple(args_raw),
+                env=tuple(env_pairs),
+            )
+
+        # transport: sse | http
+        forbidden = provided & stdio_keys
+        if forbidden:
+            sample = sorted(forbidden)[0]
+            raise ParseError(
+                f"RESOURCES.mcp_servers.{name} uses transport: {transport} "
+                f"but declares {sample!r} (only valid on stdio)",
+                line, col,
+            )
+        if "url" not in spec:
+            raise ParseError(
+                f"RESOURCES.mcp_servers.{name} (transport: {transport}) is "
+                f"missing required field 'url'",
+                line, col,
+            )
+        url = spec["url"]
+        if not isinstance(url, str) or not url:
+            raise ParseError(
+                f"RESOURCES.mcp_servers.{name}.url must be a non-empty string",
+                line, col,
+            )
+        if not (url.startswith("https://") or url.startswith("http://localhost")
+                or url.startswith("http://127.0.0.1")):
+            raise ParseError(
+                f"RESOURCES.mcp_servers.{name}.url must be https:// "
+                f"(or http:// for localhost / 127.0.0.1), got {url!r}",
+                line, col,
+            )
+        headers_raw = spec.get("headers", {})
+        if not isinstance(headers_raw, dict):
+            raise ParseError(
+                f"RESOURCES.mcp_servers.{name}.headers must be an inline dict, "
+                f"got {type(headers_raw).__name__}",
+                line, col,
+            )
+        header_pairs: list[tuple[str, str]] = []
+        for k, v in headers_raw.items():
+            if not isinstance(v, str):
+                raise ParseError(
+                    f"RESOURCES.mcp_servers.{name}.headers.{k} must be a string "
+                    f"(use \"env:NAME\" for secrets)",
+                    line, col,
+                )
+            header_pairs.append((k, v))
+        cls = SseServerSpec if transport == "sse" else HttpServerSpec
+        return cls(name=name, line=line, col=col, url=url, headers=tuple(header_pairs))
+
+    def _build_mcp_tool_impl(
+        self,
+        fields: dict[str, tuple[object, int, int]],
+        line: int, col: int,
+        mode_line: int, mode_col: int,
+    ) -> McpToolImpl:
+        allowed = {"server", "tool", "args", "timeout", "parse"}
+        unknown = set(fields.keys()) - allowed
+        if "retry" in fields:
+            _, rline, rcol = fields["retry"]
+            raise ParseError(
+                "impl.mcp_tool does not support 'retry:' in v0.10 — "
+                "use a RESCUE handler for retry-then-abort flows "
+                "(see LANGUAGE_SPEC.md §RESCUE handler)",
+                rline, rcol,
+            )
+        if unknown:
+            sample = sorted(unknown)[0]
+            _, fline, fcol = fields[sample]
+            raise ParseError(
+                f"unknown field {sample!r} for impl.mode: mcp_tool "
+                f"(allowed: {sorted(allowed)})",
+                fline, fcol,
+            )
+        if "server" not in fields:
+            raise ParseError(
+                "impl.mcp_tool is missing required field 'server'",
+                mode_line, mode_col,
+            )
+        if "tool" not in fields:
+            raise ParseError(
+                "impl.mcp_tool is missing required field 'tool'",
+                mode_line, mode_col,
+            )
+
+        server, sline, scol = fields["server"]
+        if not isinstance(server, str) or not server:
+            raise ParseError(
+                f"impl.mcp_tool.server must be a non-empty identifier, got {server!r}",
+                sline, scol,
+            )
+        tool, tline, tcol = fields["tool"]
+        if not isinstance(tool, str) or not tool:
+            raise ParseError(
+                f"impl.mcp_tool.tool must be a non-empty identifier, got {tool!r}",
+                tline, tcol,
+            )
+
+        args_pairs: tuple[tuple[str, object], ...] = ()
+        if "args" in fields:
+            av, aline, acol = fields["args"]
+            if not isinstance(av, dict):
+                raise ParseError(
+                    f"impl.mcp_tool.args must be an inline dict, got {type(av).__name__}",
+                    aline, acol,
+                )
+            self._validate_mcp_args(av, "impl.mcp_tool.args", aline, acol)
+            args_pairs = tuple(av.items())
+
+        timeout_seconds = 60
+        if "timeout" in fields:
+            to, toline, tocol = fields["timeout"]
+            if not isinstance(to, int) or to <= 0:
+                raise ParseError(
+                    f"impl.mcp_tool.timeout must be a positive duration "
+                    f"(e.g. 30s, 2m), got {to!r}",
+                    toline, tocol,
+                )
+            timeout_seconds = to
+
+        parse = "json"
+        if "parse" in fields:
+            pv, pline, pcol = fields["parse"]
+            if pv not in ("json", "text"):
+                raise ParseError(
+                    f"impl.mcp_tool.parse must be 'json' or 'text', got {pv!r}",
+                    pline, pcol,
+                )
+            parse = pv
+
+        return McpToolImpl(
+            line=line, col=col,
+            server=server, tool=tool, args=args_pairs,
+            timeout_seconds=timeout_seconds, parse=parse,
+        )
+
+    def _validate_mcp_args(
+        self, value: object, path: str, line: int, col: int,
+    ) -> None:
+        """Recursive walk on tool args. Allowed leaf types: str, int, float,
+        bool, None. Dict and list nodes recurse. No env: substitution check
+        here — that's a runtime-only concept; the spec disallows env: in
+        args but enforcing it statically would block a future relaxation."""
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return
+        if isinstance(value, dict):
+            for k, v in value.items():
+                self._validate_mcp_args(v, f"{path}.{k}", line, col)
+            return
+        if isinstance(value, list):
+            for i, v in enumerate(value):
+                self._validate_mcp_args(v, f"{path}[{i}]", line, col)
+            return
+        raise ParseError(
+            f"{path} contains an unsupported value of type {type(value).__name__} "
+            f"(allowed: str, int, float, bool, null, dict, list)",
+            line, col,
         )
 
     def parse_invoke_block(self, line: int, col: int) -> InvokeBlock:

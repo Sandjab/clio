@@ -20,7 +20,9 @@ Also lifts `FOR EACH <var> IN <collection>:` from spec-only to implemented contr
 | `impl.rest.retry: {...}` (exponential/constant backoff) | ✅ | ✅ | ✅ honored at runtime, respects `Retry-After` | ✅ same | ✅ same |
 | `impl.mode: shell` | ✅ | ✅ | ✅ `subprocess.run([...], shell=False)` | ✅ standalone Python step with `subprocess` | ✅ `subprocess.run([...], shell=False)` |
 | `impl.shell.parse: json` | ✅ | ✅ | ✅ standalone Python step with `subprocess` + `json.loads` | ignored — stdout stored as raw `str` (since v0.5) | ✅ `subprocess.run([...]) + json.loads(stdout)` |
-| `impl.mode: sql` / `mcp_tool` / `binary` | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `impl.mode: sql` / `binary` | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `impl.mode: mcp_tool` (stdio + SSE/HTTP) | ✅ | ✅ | ✅ long-lived client | ✅ per-step bootstrap | ✅ long-lived client |
+| `RESOURCES.mcp_servers` block (named server specs) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `invoke.mode: cli` | ✅ | ✅ | rejected at compile time | (default behavior — `claude -p`) | rejected at compile time |
 | `invoke.mode: api` (`anthropic`) | ✅ | ✅ | ✅ with overrides | (uses RESOURCES.models chain) | rejected at compile time |
 | `invoke.mode: api` (`openai`) | ✅ | ✅ | ✅ — covers LiteLLM / OpenRouter / Ollama / vLLM via OpenAI-compat | rejected | rejected at compile time |
@@ -285,7 +287,10 @@ Bindings use `:name`. Result rows are mapped to the `GIVES` shape.
 
 #### `impl.mode: mcp_tool`
 
-Invocation of a tool exposed by a configured MCP server.
+Invocation of a tool exposed by an MCP (Model Context Protocol) server. The
+server is declared once in the flow's `RESOURCES.mcp_servers` block (see
+below) and referenced by name from the step. The runtime starts a client
+per server, calls the tool over JSON-RPC, and maps the response into `GIVES`.
 
 ```
 STEP search_docs
@@ -294,12 +299,31 @@ STEP search_docs
   GIVES:   results: List<DocChunk>
   impl:
     mode:    mcp_tool
-    server:  internal-docs
-    tool:    search
-    args:    {q: ${query}, top_k: 10}
+    server:  docs                          # ← name from RESOURCES.mcp_servers
+    tool:    search                         # tool name exposed by the server
+    args:    {q: "${query}", top_k: 10}     # arguments passed to the tool call
+    timeout: 30s                            # optional, default 60s
+    parse:   json                           # optional, 'json' (default) or 'text'
 ```
 
-The server is assumed to be configured in the host environment (Claude Code MCP config or equivalent).
+**Field semantics:**
+
+- `server` (required): name of an MCP server declared in `RESOURCES.mcp_servers`. Compile-time error if the name is undeclared.
+- `tool` (required): tool name exposed by that server. Validated at runtime, not at compile time — a typo surfaces as a `tool not found` error from the server.
+- `args` (optional, dict, default `{}`): arguments passed to the tool. **String values** support `${var}` substitution from `TAKES`; **numeric / bool / null** values pass through unchanged; **nested dicts and lists** are walked recursively (string values inside them get the same substitution).
+- `timeout` (optional, default `60s`): wall-clock timeout for the tool call itself (does not include subprocess boot for stdio servers — that's tracked separately and is not user-visible).
+- `parse` (optional, default `json`):
+  - `json`: the first text content block of the response is `json.loads`-ed and validated against `GIVES`. Most MCP tools return JSON-shaped text — this is the natural default.
+  - `text`: the first text content block is returned verbatim as a `str`. Only valid when `GIVES` is `str`. Compile-time error otherwise.
+
+**`${var}` substitution scope:** identical to `impl.rest.body` — only string values inside `args` get rewritten. `env:NAME` is **not supported** in `args` (secrets belong in `RESOURCES.mcp_servers.<server>.env` / `.headers`, not in tool arguments).
+
+**v0.10 limitations:**
+
+- No `retry:` block on `impl.mcp_tool` — parse-time error if `retry:` is present. MCP failures bubble up immediately; wrap the step in a RESCUE handler if you need a retry-then-abort flow.
+- Tool catalog not validated at compile time. A typo in `tool:` is a runtime error.
+- `parse: <path>` (response navigation) not supported. Compose with a small `code` step downstream if you need to extract a sub-tree.
+- The first text content block is the only one consumed. If a tool returns multiple content blocks (rare), only the first is mapped into `GIVES`.
 
 #### `impl.mode: binary`
 
@@ -430,15 +454,63 @@ Execution constraints declared at the flow level.
 
 ```
 RESOURCES
-  budget:     <amount>                          # e.g. 30€/month
-  prefer:     cost | latency | quality
-  models:     [<model>, <model>, ...]
-  strategy:   escalate | round-robin | fixed
-  target:     claude-cli | python | rust | go | node | docker | hybrid
-  lang:       python | rust | go | node | bash | auto
-  impl:       <impl-block>                      # default impl for all exact steps in this flow
-  invoke:     <invoke-block>                    # default invoke for all judgment steps in this flow
+  budget:       <amount>                        # e.g. 30€/month
+  prefer:       cost | latency | quality
+  models:       [<model>, <model>, ...]
+  strategy:     escalate | round-robin | fixed
+  target:       claude-cli | python | rust | go | node | docker | hybrid
+  lang:         python | rust | go | node | bash | auto
+  impl:         <impl-block>                    # default impl for all exact steps in this flow
+  invoke:       <invoke-block>                  # default invoke for all judgment steps in this flow
+  mcp_servers:  {<name>: <server-spec>, ...}    # MCP servers callable from impl.mcp_tool steps
 ```
+
+#### `RESOURCES.mcp_servers`
+
+Declares the MCP (Model Context Protocol) servers a flow can talk to. Each
+entry is a named **server spec** referenced from `impl.mcp_tool` steps via
+`server: <name>`. Server names must be unique within a flow.
+
+```
+RESOURCES
+  mcp_servers:
+    docs:                                       # local stdio server
+      transport: stdio                          # default, can be omitted
+      command:   "mcp-server-docs"
+      args:      ["--config", "./docs.json"]    # subprocess argv after command
+      env:       {INDEX_DIR: "env:DOCS_INDEX"}  # subprocess env; env: refs allowed
+
+    remote:                                     # remote SSE server
+      transport: sse                            # 'sse' or 'http'
+      url:       "https://api.example.com/mcp"
+      headers:   {Authorization: "env:TOKEN"}   # optional; env: refs allowed
+```
+
+**Field semantics by transport:**
+
+| Field       | stdio | sse / http | Notes |
+|-------------|:-:|:-:|---|
+| `transport` | optional, default `stdio` | required | One of `stdio` / `sse` / `http`. |
+| `command`   | required | rejected | Path or PATH-name of the MCP server binary. |
+| `args`      | optional, default `[]` | rejected | Subprocess argv after `command`. |
+| `env`       | optional, default `{}` | rejected | Subprocess env. Values may use `env:NAME` to inherit from the host env at runtime. |
+| `url`       | rejected | required | Server URL. Must be `https://` unless host is `localhost` or `127.0.0.1`. |
+| `headers`   | rejected | optional, default `{}` | HTTP headers. Values may use `env:NAME`. |
+
+Mixing transport-incompatible fields (e.g. `command:` on a `transport: sse` spec) is a parse-time error. Compile errors carry the source line of the offending field.
+
+**Lifecycle (target-dependent):**
+
+- **`python` and `mcp-server` targets — long-lived per-server.** The first `impl.mcp_tool` step that references a server boots the client lazily; subsequent steps in the same flow reuse it. Subprocess clients (stdio) are killed at flow exit via `atexit` / async-shutdown handler; SSE/HTTP sessions close via the underlying client's `__aexit__`. **A `FOR EACH ... PARALLEL` block does not duplicate clients** — all branches share the singleton, and the MCP protocol is concurrency-safe over a single connection (multiple in-flight `id`s).
+- **`claude-cli` target — per-step bootstrap.** Each step is a standalone Python script invoked by the bash orchestrator; the client is started, called, and torn down within that script. SSE/HTTP servers pay only the HTTP-handshake cost; stdio servers pay subprocess-boot per step. This is a deliberate v0.10 trade-off — the bash orchestrator has no place to hold a long-lived client between subprocess invocations.
+
+**Cross-target invariant:** the `args` (tool arguments) passed to a tool call, the `parse` semantics, and the `GIVES`-mapping are identical across the three supported targets — only the client lifecycle and transport handling differ.
+
+**Validation rules:**
+
+- A server referenced by an `impl.mcp_tool` step that is not declared in `RESOURCES.mcp_servers` is a compile-time error.
+- A `RESOURCES.mcp_servers` entry with no referencing step emits a compile-time warning (the server spec is dead code).
+- `command` and `url` are mutually exclusive within one server spec.
 
 #### Override semantics for `impl` and `invoke`
 
