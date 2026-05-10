@@ -609,8 +609,8 @@ STEP detect_churn
 
 FLOW pipeline
   load_csv(path="data.csv")
-    -> detect_churn(rows=load_csv)
-    -> route_alerts(risks=detect_churn)
+    -> detect_churn(rows=rows)
+    -> route_alerts(risks=risks)
 
   RESCUE detect_churn:
     -> notify_slack(channel="#alerts", reason="churn detection failed")

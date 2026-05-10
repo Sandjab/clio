@@ -219,7 +219,7 @@ STEP notify_slack
   MODE:     exact
 
 FLOW pipeline
-  load_csv(path="data.csv") -> detect_churn(rows=load_csv)
+  load_csv(path="data.csv") -> detect_churn(rows=rows)
 
   RESCUE detect_churn:
     -> notify_slack(channel="#alerts", reason="churn detection failed")
