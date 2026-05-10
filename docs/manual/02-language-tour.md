@@ -42,7 +42,9 @@ Available `impl.mode` values today:
 
 - `code` (default) — emits a Python stub you fill in.
 - `shell` — argv-style subprocess. Add `parse: json` to JSON-decode stdout.
-- `rest` — HTTP call (`method`, `url`, `response_path`).
+- `rest` *(extended in v0.9)* — HTTP call (`method`, `url`, `response_path`, `query`/`headers` templating with `${var}` and `env:NAME`, 5 body forms incl. multipart and `@./file`, `retry: { backoff: exponential | constant }` honoring `Retry-After`).
+- `mcp_tool` *(v0.10)* — call a tool exposed by an MCP server declared in `RESOURCES.mcp_servers`. Three transports: `stdio` / `sse` / `http`. Long-lived per-server clients on python + mcp-server; per-step bootstrap on claude-cli. `${var}` substitution in tool args, `parse: json|text`, `timeout`.
+- `sql` *(v0.11)* — parameterized query against a database declared in `RESOURCES.databases` (drivers `sqlite` / `postgres` / `mysql`, lazy-imported). `:name` bindings auto-translated per driver (`(?<!:)` lookbehind preserves PostgreSQL `::cast`); rows auto-mapped onto `GIVES` via `cursor.description`; DML returns `cursor.rowcount`. Multi-line queries use a `|` block scalar. Targets: python + mcp-server (claude-cli + langgraph rejected at compile time).
 
 `judgment` steps optionally take an `invoke:` block describing *which LLM* to call:
 
