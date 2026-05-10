@@ -188,9 +188,20 @@ class WhileBlockIR:
 
 
 @dataclass(frozen=True)
+class RescueBlockIR:
+    """IR mirror of RescueBlock. Bound to a StepIR by name (no direct
+    pointer because StepIR is frozen). The handler runs only if the
+    referenced STEP raises after its ON_FAIL chain (if any) exhausts."""
+    step_name: str
+    body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
+    line: int
+
+
+@dataclass(frozen=True)
 class FlowIR:
     name: str
     chain: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
+    rescues: "tuple[RescueBlockIR, ...]"
     line: int
 
 

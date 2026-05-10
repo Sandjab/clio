@@ -1,6 +1,8 @@
 """Tests for the RESCUE primitive (top-level handler attached to a STEP).
 See docs/superpowers/specs/2026-05-10-rescue-handler-design.md."""
 
+from clio.ir.builder import build_ir
+from clio.ir.graph import RescueBlockIR
 from clio.keywords import Keyword
 from clio.parser.ast_nodes import FlowDecl, RescueBlock, StepCall
 from clio.parser.parser import parse
@@ -46,7 +48,7 @@ STEP detect
 
 FLOW pipeline
   load(path="x.csv")
-    -> detect(data=load)
+    -> detect(data=data)
 
   RESCUE detect:
     -> abort("detection failed")
@@ -121,3 +123,18 @@ def test_rescue_compatible_with_resources():
     res = next(d for d in program.decls if d.__class__.__name__ == "ResourcesDecl")
     assert len(flow.rescues) == 1
     assert res.target == "python"
+
+
+def test_build_ir_single_rescue():
+    """build_ir must produce a RescueBlockIR in flow.rescues."""
+    program = _parse(SINGLE_RESCUE_SRC)
+    graph = build_ir(program)
+    assert graph.flow is not None
+    assert len(graph.flow.rescues) == 1
+    rb = graph.flow.rescues[0]
+    assert isinstance(rb, RescueBlockIR)
+    assert rb.step_name == "detect"
+    assert len(rb.body) == 1
+    call = rb.body[0]
+    assert call.step_name == "abort"
+    assert call.kwargs == (("message", "detection failed"),)

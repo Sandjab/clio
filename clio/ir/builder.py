@@ -18,6 +18,7 @@ from clio.ir.graph import (
     MatchCaseIR,
     OnFailChainIR,
     OnFailStrategyIR,
+    RescueBlockIR,
     ResourcesIR,
     RestImplIR,
     ShellImplIR,
@@ -49,6 +50,7 @@ from clio.parser.ast_nodes import (
     PrimitiveType,
     Program,
     RecordType,
+    RescueBlock,
     ResourcesDecl,
     RestImpl,
     ShellImpl,
@@ -319,7 +321,33 @@ def _build_flow(
 ) -> FlowIR:
     available: dict[str, TypeExpr] = {}
     items = _build_flow_items(decl.chain, steps_by_name, contracts, available)
-    return FlowIR(name=decl.name, chain=tuple(items), line=decl.line)
+    rescues_ir = tuple(
+        _build_rescue(rb, steps_by_name, contracts, available)
+        for rb in decl.rescues
+    )
+    return FlowIR(
+        name=decl.name,
+        chain=tuple(items),
+        rescues=rescues_ir,
+        line=decl.line,
+    )
+
+
+def _build_rescue(
+    decl: RescueBlock,
+    steps_by_name: dict[str, StepIR],
+    contracts: dict[str, ContractIR],
+    outer_available: dict[str, TypeExpr],
+) -> RescueBlockIR:
+    """Build a RescueBlockIR. Validations are added in Task 4 — this
+    helper currently only converts the body to IR shape."""
+    body_scope = dict(outer_available)
+    body_items = _build_flow_items(decl.body, steps_by_name, contracts, body_scope)
+    return RescueBlockIR(
+        step_name=decl.step_name,
+        body=tuple(body_items),
+        line=decl.line,
+    )
 
 
 def _build_flow_items(
@@ -354,6 +382,10 @@ def _build_flow_items(
             continue
         # StepCall path
         out.append(_build_call(item, steps_by_name, contracts, available))
+        # `abort` is a synthetic terminator inside RESCUE bodies — it has no
+        # registered StepIR and produces no state field.
+        if item.name == "abort":
+            continue
         step = steps_by_name[item.name]
         if step.gives is not None:
             available[step.gives.name] = step.gives.type
@@ -366,6 +398,11 @@ def _build_call(
     contracts: dict[str, ContractIR],
     available: dict[str, TypeExpr],
 ) -> CallIR:
+    # `abort` is a synthetic call legal only inside RESCUE bodies. Whether
+    # the surrounding context is actually a rescue body is enforced in
+    # Task 4 (RESCUE validation rules); here we just pass it through as-is.
+    if call.name == "abort":
+        return CallIR(step_name=call.name, kwargs=call.kwargs, line=call.line)
     if call.name not in steps_by_name:
         raise IRBuildError(
             f"line {call.line}:{call.col}: unknown STEP {call.name!r}"

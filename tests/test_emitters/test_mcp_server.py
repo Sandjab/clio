@@ -379,7 +379,7 @@ def test_input_schema_keeps_state_ref_kwarg_in_required(tmp_path):
     )
     graph = FlowGraph(
         steps=(step,),
-        flow=FlowIR(name="hello", chain=(call,), line=5),
+        flow=FlowIR(name="hello", chain=(call,), rescues=(), line=5),
     )
     MCPServerEmitter().emit(graph, tmp_path)
     server_py = (tmp_path / "hello" / "server.py").read_text()
