@@ -278,3 +278,65 @@ def test_execute_mysql_driver_raises_friendly_error_when_missing():
     spec = {"name": "my", "driver": "mysql", "url": "mysql://localhost/x"}
     with pytest.raises(RuntimeError, match="pymysql"):
         execute(spec, "SELECT 1", {}, gives_shape="primitive")
+
+
+# ---- _translate_bindings: Gemini PR #6 review (string/comment safety) ------
+
+
+def test_translate_bindings_skips_single_quoted_string_literal():
+    """A `:name` substring inside a SQL string literal is data, not a
+    binding. Gemini regression: `'time:00'` would silently become
+    `'time:%(00)s'` and raise KeyError at execute time."""
+    q = "SELECT * FROM t WHERE meta = 'time:12:00' AND id = :id"
+    assert _translate_bindings(q, "postgres") == (
+        "SELECT * FROM t WHERE meta = 'time:12:00' AND id = %(id)s"
+    )
+
+
+def test_translate_bindings_handles_escaped_single_quote_in_literal():
+    """SQL `''` inside a single-quoted literal is an escaped quote — the
+    literal continues. The state machine must not split the literal."""
+    q = "SELECT * FROM t WHERE note = 'it''s :fine' AND id = :id"
+    assert _translate_bindings(q, "postgres") == (
+        "SELECT * FROM t WHERE note = 'it''s :fine' AND id = %(id)s"
+    )
+
+
+def test_translate_bindings_skips_double_quoted_identifier():
+    """PostgreSQL double-quoted identifiers can carry colons; never
+    rewrite inside them."""
+    q = 'SELECT "weird:col" FROM t WHERE id = :id'
+    assert _translate_bindings(q, "postgres") == (
+        'SELECT "weird:col" FROM t WHERE id = %(id)s'
+    )
+
+
+def test_translate_bindings_skips_line_comment():
+    q = "SELECT id FROM t -- where id = :ghost\nWHERE id = :id"
+    assert _translate_bindings(q, "postgres") == (
+        "SELECT id FROM t -- where id = :ghost\nWHERE id = %(id)s"
+    )
+
+
+def test_translate_bindings_skips_block_comment():
+    q = "SELECT /* :ignored */ id FROM t WHERE id = :id"
+    assert _translate_bindings(q, "postgres") == (
+        "SELECT /* :ignored */ id FROM t WHERE id = %(id)s"
+    )
+
+
+def test_translate_bindings_unterminated_block_comment_left_alone():
+    """Defensive: an unterminated `/*` runs to end-of-string, no rewrites
+    in that tail. The driver will reject the SQL itself; we just refuse
+    to corrupt it further."""
+    q = "SELECT id FROM t /* :ignored to EOF and :no_rewrite"
+    assert _translate_bindings(q, "postgres") == q
+
+
+def test_translate_bindings_string_with_named_binding_after_it():
+    """Mixed: a string literal followed by a real binding must round-trip
+    correctly — the state machine has to re-enter scan mode after `'`."""
+    q = "INSERT INTO t (name, id) VALUES ('static :literal', :id)"
+    assert _translate_bindings(q, "postgres") == (
+        "INSERT INTO t (name, id) VALUES ('static :literal', %(id)s)"
+    )

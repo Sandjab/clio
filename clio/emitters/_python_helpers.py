@@ -935,8 +935,21 @@ def _database_spec_dict_repr(spec: DatabaseSpecIR) -> str:
 def _sql_gives_shape(gives_type: TypeExpr) -> str:
     """Map a step's GIVES type to one of the shape strings the runtime
     `clio_runtime.sql.execute` understands. ContractRef collapses to
-    'record' — contracts are always pydantic record models in v0."""
+    'record' — contracts are always pydantic record models in v0.
+
+    A `List<T>` GIVES is only meaningful when `T` is a record / ContractRef:
+    the runtime maps each row to a `dict(zip(cols, row))`, so `List<int>`
+    would silently produce `[{'col': 1}, ...]` instead of `[1, ...]`.
+    Reject that at compile time."""
     if isinstance(gives_type, ListType):
+        if not isinstance(gives_type.inner, (RecordType, ContractRef)):
+            inner_name = type(gives_type.inner).__name__
+            raise ValueError(
+                f"impl.sql cannot map GIVES of type List<{inner_name}> — "
+                "only List<{...}> (record) or List<ContractRef> are "
+                "supported for multi-row results. Wrap a primitive column "
+                "in a single-field record (e.g. List<{id: int}>)."
+            )
         return "list_of_records"
     if isinstance(gives_type, (RecordType, ContractRef)):
         return "record"

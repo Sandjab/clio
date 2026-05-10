@@ -30,7 +30,6 @@ from typing import Any
 from urllib.parse import urlparse
 
 _ENV_WHOLE = re.compile(r"^env:([A-Z_][A-Z0-9_]*)$")
-_NAMED_BINDING = re.compile(r"(?<!:):([A-Za-z_][A-Za-z0-9_]*)")
 
 
 def _resolve_env(value: str) -> str:
@@ -127,14 +126,75 @@ def _translate_bindings(query: str, driver: str) -> str:
     """Translate `:name` bindings to the driver's native named-parameter form.
 
     sqlite3 supports `:name` natively, so we leave the query unchanged.
-    psycopg and pymysql expect `%(name)s` (paramstyle='pyformat'). The
-    `(?<!:)` lookbehind in the regex avoids touching `::cast` operators
-    such as `value::int` in PostgreSQL."""
+    psycopg and pymysql expect `%(name)s` (paramstyle='pyformat'). A naive
+    regex would also rewrite `:name` substrings inside string literals
+    (`'time:00'`), inside line / block SQL comments (`-- :note`), and would
+    break PostgreSQL `::cast` operators. We walk the string with a small
+    state machine that skips those regions verbatim and only rewrites bare
+    `:name` tokens."""
     if driver == "sqlite":
         return query
-    if driver in ("postgres", "mysql"):
-        return _NAMED_BINDING.sub(r"%(\1)s", query)
-    raise RuntimeError(f"impl.sql: unknown driver {driver!r}")
+    if driver not in ("postgres", "mysql"):
+        raise RuntimeError(f"impl.sql: unknown driver {driver!r}")
+
+    out: list[str] = []
+    i = 0
+    n = len(query)
+    while i < n:
+        ch = query[i]
+        # Single-quoted string literal — handles SQL '' escape.
+        if ch == "'":
+            j = i + 1
+            while j < n:
+                if query[j] == "'":
+                    if j + 1 < n and query[j + 1] == "'":
+                        j += 2
+                        continue
+                    j += 1
+                    break
+                j += 1
+            out.append(query[i:j])
+            i = j
+            continue
+        # Double-quoted identifier (PostgreSQL / MySQL ANSI mode).
+        if ch == '"':
+            j = i + 1
+            while j < n and query[j] != '"':
+                j += 1
+            j = min(j + 1, n)
+            out.append(query[i:j])
+            i = j
+            continue
+        # Line comment `-- ...` to end of line.
+        if ch == "-" and i + 1 < n and query[i + 1] == "-":
+            j = query.find("\n", i)
+            j = n if j == -1 else j
+            out.append(query[i:j])
+            i = j
+            continue
+        # Block comment `/* ... */`.
+        if ch == "/" and i + 1 < n and query[i + 1] == "*":
+            end = query.find("*/", i + 2)
+            j = n if end == -1 else end + 2
+            out.append(query[i:j])
+            i = j
+            continue
+        # Postgres cast operator `::` — emit verbatim.
+        if ch == ":" and i + 1 < n and query[i + 1] == ":":
+            out.append("::")
+            i += 2
+            continue
+        # Named binding `:name` — rewrite to %(name)s.
+        if ch == ":" and i + 1 < n and (query[i + 1].isalpha() or query[i + 1] == "_"):
+            j = i + 1
+            while j < n and (query[j].isalnum() or query[j] == "_"):
+                j += 1
+            out.append("%(" + query[i + 1:j] + ")s")
+            i = j
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 # ---- public API ------------------------------------------------------------

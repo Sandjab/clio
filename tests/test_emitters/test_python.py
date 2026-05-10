@@ -1916,3 +1916,16 @@ def test_python_emit_sql_preserves_multiline_query(tmp_path):
     body = (tmp_path / "f" / "steps" / "get_orders.py").read_text()
     # The block scalar must round-trip the SQL with internal newlines as `\n`.
     assert "_query = 'SELECT id, status\\nFROM orders\\nWHERE email = :email'" in body
+
+
+def test_python_emit_sql_list_of_primitive_rejected(tmp_path):
+    """Gemini PR #6 review: GIVES: List<int> would silently produce
+    [{'col': 1}, ...] instead of [1, ...]. Reject at emit time with a
+    clear message pointing at the wrap-in-a-record workaround."""
+    import pytest as _pt
+    src = _SQL_PY_SRC.replace(
+        "  GIVES: orders: List<{id: int, status: str}>",
+        "  GIVES: ids: List<int>",
+    )
+    with _pt.raises(ValueError, match="List<PrimitiveType>.*single-field record"):
+        PythonEmitter().emit(build_ir(parse(src)), tmp_path)
