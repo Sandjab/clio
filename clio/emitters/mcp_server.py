@@ -21,6 +21,7 @@ from clio.emitters._python_helpers import (
     emit_mcp_tool_step,
     emit_rest_step,
     emit_shell_step,
+    emit_sql_step,
 )
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import (
@@ -30,6 +31,7 @@ from clio.ir.graph import (
     McpToolImplIR,
     RestImplIR,
     ShellImplIR,
+    SqlImplIR,
 )
 
 
@@ -48,6 +50,7 @@ class MCPServerEmitter(BaseEmitter):
         needs_pydantic = bool(graph.contracts)
         needs_requests = any(isinstance(s.impl, RestImplIR) for s in graph.steps)
         needs_mcp = any(isinstance(s.impl, McpToolImplIR) for s in graph.steps)
+        needs_sql = any(isinstance(s.impl, SqlImplIR) for s in graph.steps)
         (output_dir / "pyproject.toml").write_text(
             _pyproject_for_mcp(pkg_name, needs_pydantic=needs_pydantic, needs_requests=needs_requests)
         )
@@ -76,11 +79,17 @@ class MCPServerEmitter(BaseEmitter):
             (runtime_dir / "mcp_client.py").write_text(
                 (src_dir / "mcp_client.py").read_text()
             )
+        if needs_sql:
+            (runtime_dir / "sql.py").write_text((src_dir / "sql.py").read_text())
 
         contracts_by_name = {c.name: c for c in graph.contracts}
         mcp_servers_by_name = {
             s.name: s
             for s in (graph.resources.mcp_servers if graph.resources is not None else ())
+        }
+        databases_by_name = {
+            d.name: d
+            for d in (graph.resources.databases if graph.resources is not None else ())
         }
         for step in graph.steps:
             if step.mode == "judgment":
@@ -94,6 +103,9 @@ class MCPServerEmitter(BaseEmitter):
                 body = emit_mcp_tool_step(
                     step, contracts_by_name, step.impl, spec, async_call=False,
                 )
+            elif isinstance(step.impl, SqlImplIR):
+                db_spec = databases_by_name[step.impl.db]      # validated upstream
+                body = emit_sql_step(step, contracts_by_name, step.impl, db_spec)
             else:
                 body = emit_default_exact_step(step, contracts_by_name)
             (steps_dir / f"{step.name}.py").write_text(body)

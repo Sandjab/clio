@@ -241,3 +241,25 @@ def test_langgraph_rejects_rescue(tmp_path):
     )
     with pytest.raises(ValueError, match="RESCUE.*not supported.*langgraph"):
         LangGraphEmitter().emit(build_ir(parse(src)), tmp_path)
+
+
+def test_reject_sql(tmp_path):
+    src = (
+        "STEP get\n"
+        "  TAKES: email: str\n"
+        "  GIVES: orders: List<{id: int}>\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:  sql\n"
+        "    db:    crm\n"
+        '    query: "SELECT id FROM orders WHERE email = :email"\n'
+        "FLOW f\n"
+        '  get(email="x")\n'
+        "RESOURCES\n"
+        "  target: langgraph\n"
+        "  databases:\n"
+        "    crm:\n"
+        "      driver: sqlite\n"
+        '      url:    ":memory:"\n'
+    )
+    _expect_reject(src, ["impl.mode: sql", "langgraph", "python"], tmp_path)

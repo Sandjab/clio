@@ -13,6 +13,7 @@ from clio.ir.graph import (
     CallIR,
     CliInvokeIR,
     ContractIR,
+    DatabaseSpecIR,
     FileBodyIR,
     ForEachIR,
     FormBodyIR,
@@ -25,6 +26,7 @@ from clio.ir.graph import (
     RawBodyIR,
     RestImplIR,
     ShellImplIR,
+    SqlImplIR,
     SseServerSpecIR,
     StdioServerSpecIR,
     StepIR,
@@ -911,6 +913,126 @@ def emit_mcp_tool_step(
         f'import time\n\n'
         f'from ..clio_runtime import logging as _log\n'
         f'from ..clio_runtime import mcp_client as _mcp\n'
+        f'{contracts_import}'
+        f'\n\n'
+        + "\n".join(body_lines) + "\n"
+    )
+
+
+def _database_spec_dict_repr(spec: DatabaseSpecIR) -> str:
+    """Render a `DatabaseSpecIR` as a Python dict literal. The runtime
+    helper `clio_runtime.sql._open_connection` reads this dict and
+    resolves `env:NAME` URLs at runtime."""
+    return (
+        "{"
+        f"'name': {spec.name!r}, "
+        f"'driver': {spec.driver!r}, "
+        f"'url': {spec.url!r}"
+        "}"
+    )
+
+
+def _sql_gives_shape(gives_type: TypeExpr) -> str:
+    """Map a step's GIVES type to one of the shape strings the runtime
+    `clio_runtime.sql.execute` understands. ContractRef collapses to
+    'record' — contracts are always pydantic record models in v0.
+
+    A `List<T>` GIVES is only meaningful when `T` is a record / ContractRef:
+    the runtime maps each row to a `dict(zip(cols, row))`, so `List<int>`
+    would silently produce `[{'col': 1}, ...]` instead of `[1, ...]`.
+    Reject that at compile time."""
+    if isinstance(gives_type, ListType):
+        if not isinstance(gives_type.inner, (RecordType, ContractRef)):
+            inner_name = type(gives_type.inner).__name__
+            raise ValueError(
+                f"impl.sql cannot map GIVES of type List<{inner_name}> — "
+                "only List<{...}> (record) or List<ContractRef> are "
+                "supported for multi-row results. Wrap a primitive column "
+                "in a single-field record (e.g. List<{id: int}>)."
+            )
+        return "list_of_records"
+    if isinstance(gives_type, (RecordType, ContractRef)):
+        return "record"
+    if isinstance(gives_type, PrimitiveType):
+        return "primitive"
+    raise ValueError(
+        f"impl.sql cannot map GIVES of type {type(gives_type).__name__} "
+        "(allowed: List<{...}>, {...} record, primitive, or ContractRef)"
+    )
+
+
+def emit_sql_step(
+    step: StepIR,
+    contracts_by_name: dict[str, ContractIR],
+    impl: SqlImplIR,
+    database_spec: DatabaseSpecIR,
+) -> str:
+    """Emit a sql-impl exact step. Same body for python and mcp-server
+    targets — the runtime (`clio_runtime.sql`) is sync; the mcp-server
+    async tool handler calls it directly (the query blocks the event
+    loop while it runs, an accepted v0.11 trade-off)."""
+    params = _step_signature(step, contracts_by_name)
+    ret_type = (
+        _type_to_python(step.gives.type, contracts_by_name)
+        if step.gives is not None else "None"
+    )
+    takes_doc = (
+        "\n    ".join(f"{t.name}: {_render_type_short(t.type)}" for t in step.takes)
+        if step.takes else "(no TAKES)"
+    )
+    gives_doc = (
+        f"{step.gives.name}: {_render_type_short(step.gives.type)}"
+        if step.gives is not None else "(no GIVES)"
+    )
+
+    takes_dict_lines = (
+        ["    _params = {"]
+        + [f"        {t.name!r}: {_to_field_name(t.name)}," for t in step.takes]
+        + ["    }"]
+        if step.takes else ["    _params: dict = {}"]
+    )
+
+    db_spec_line = f"    _db_spec = {_database_spec_dict_repr(database_spec)}"
+    query_line = f"    _query = {impl.query!r}"
+
+    assert step.gives is not None  # IR validator enforces
+    gives_shape = _sql_gives_shape(step.gives.type)
+    call_line = (
+        f"    _result = _sql.execute(_db_spec, _query, _params, "
+        f"gives_shape={gives_shape!r})"
+    )
+
+    contracts_import = (
+        "from .. import contracts\n" if _uses_contract_refs(step) else ""
+    )
+
+    body_lines = [
+        f"def {step.name}({params}) -> {ret_type}:",
+        '    _t0 = time.monotonic()',
+        f'    _log.emit("step_start", step={step.name!r}, mode="exact")',
+        *takes_dict_lines,
+        db_spec_line,
+        query_line,
+        call_line,
+        f'    _log.emit("step_end", step={step.name!r}, mode="exact",',
+        "              duration_ms=int((time.monotonic() - _t0) * 1000), success=True)",
+        "    return _result",
+    ]
+
+    return (
+        f'"""STEP {step.name} (exact, impl: sql)\n'
+        f'TAKES:\n'
+        f'    {takes_doc}\n'
+        f'GIVES:\n'
+        f'    {gives_doc}\n\n'
+        f'Auto-generated from `impl: mode: sql`. Calls the database declared\n'
+        f'in RESOURCES.databases.{impl.db!r} (driver: {database_spec.driver}).\n'
+        f'See LANGUAGE_SPEC.md §impl.mode: sql.\n'
+        f'"""\n'
+        f'from __future__ import annotations\n\n'
+        f'import time\n\n'
+        f'from ..clio_runtime import logging as _log\n'
+        f'from ..clio_runtime import sql as _sql\n'
         f'{contracts_import}'
         f'\n\n'
         + "\n".join(body_lines) + "\n"

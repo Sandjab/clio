@@ -9,6 +9,7 @@ from clio.ir.graph import (
     CodeImplIR,
     ConditionIR,
     ContractIR,
+    DatabaseSpecIR,
     FieldIR,
     FileBodyIR,
     FlowGraph,
@@ -34,6 +35,7 @@ from clio.ir.graph import (
     RestImplIR,
     RetryPolicyIR,
     ShellImplIR,
+    SqlImplIR,
     SseServerSpecIR,
     StdioServerSpecIR,
     StepIR,
@@ -48,6 +50,7 @@ from clio.parser.ast_nodes import (
     ConstrainedType,
     ContractDecl,
     ContractRef,
+    DatabaseSpec,
     EnumType,
     FieldRefExpr,
     FileBody,
@@ -77,6 +80,7 @@ from clio.parser.ast_nodes import (
     RestImpl,
     RetryPolicy,
     ShellImpl,
+    SqlImpl,
     SseServerSpec,
     StdioServerSpec,
     StepCall,
@@ -145,6 +149,7 @@ def build_ir(program: Program) -> FlowGraph:
                 target=d.target,
                 models=d.models,
                 mcp_servers=tuple(_build_mcp_server_spec(s) for s in d.mcp_servers),
+                databases=tuple(_build_database_spec(s) for s in d.databases),
             )
 
     graph = FlowGraph(
@@ -155,6 +160,7 @@ def build_ir(program: Program) -> FlowGraph:
     )
     _validate_parallel_for_each(graph)
     _validate_mcp_tool_servers(graph)
+    _validate_sql_databases(graph)
     return graph
 
 
@@ -317,6 +323,8 @@ def _build_impl(decl: ImplBlock) -> ImplIR:
             timeout_seconds=decl.timeout_seconds,
             parse=decl.parse,
         )
+    if isinstance(decl, SqlImpl):
+        return SqlImplIR(db=decl.db, query=decl.query)
     raise IRBuildError(f"unknown ImplBlock subtype: {type(decl).__name__}")
 
 
@@ -333,6 +341,10 @@ def _build_mcp_server_spec(decl: McpServerSpec) -> McpServerSpecIR:
     if isinstance(decl, HttpServerSpec):
         return HttpServerSpecIR(name=decl.name, url=decl.url, headers=decl.headers)
     raise IRBuildError(f"unknown McpServerSpec subtype: {type(decl).__name__}")
+
+
+def _build_database_spec(decl: DatabaseSpec) -> DatabaseSpecIR:
+    return DatabaseSpecIR(name=decl.name, driver=decl.driver, url=decl.url)
 
 
 def _build_rest_body(decl: RestBody) -> RestBodyIR:
@@ -1090,6 +1102,53 @@ def _validate_mcp_tool_servers(graph: FlowGraph) -> None:
         print(
             f"warning: RESOURCES.mcp_servers.{name} is declared but never "
             f"referenced by any impl.mcp_tool step (dead spec)",
+            file=sys.stderr,
+        )
+
+
+def _validate_sql_databases(graph: FlowGraph) -> None:
+    """Cross-validate impl.sql steps against RESOURCES.databases.
+
+    Checks:
+      1. Every `impl.sql.db` references a name declared in
+         `RESOURCES.databases` (compile-time error otherwise).
+      2. Every impl.sql STEP must declare a `GIVES` (the runtime cannot
+         do anything useful with a SELECT result that has no target shape).
+      3. Database specs declared but never referenced trigger a `stderr`
+         warning ('dead spec' lint, mirroring `mcp_servers`).
+    """
+    sql_steps = [s for s in graph.steps if isinstance(s.impl, SqlImplIR)]
+    declared: dict[str, DatabaseSpecIR] = {}
+    if graph.resources is not None:
+        declared = {d.name: d for d in graph.resources.databases}
+
+    referenced: set[str] = set()
+    for step in sql_steps:
+        impl = step.impl
+        assert isinstance(impl, SqlImplIR)
+        if impl.db not in declared:
+            available = sorted(declared.keys())
+            hint = (
+                f" (available: {available})"
+                if available
+                else " (RESOURCES.databases is empty or absent)"
+            )
+            raise IRBuildError(
+                f"STEP {step.name!r}: impl.sql.db {impl.db!r} is not declared "
+                f"in RESOURCES.databases{hint}"
+            )
+        referenced.add(impl.db)
+        if step.gives is None:
+            raise IRBuildError(
+                f"STEP {step.name!r}: impl.sql requires a GIVES declaration "
+                f"(the runtime maps query rows onto the GIVES shape)"
+            )
+
+    unused = sorted(set(declared) - referenced)
+    for name in unused:
+        print(
+            f"warning: RESOURCES.databases.{name} is declared but never "
+            f"referenced by any impl.sql step (dead spec)",
             file=sys.stderr,
         )
 

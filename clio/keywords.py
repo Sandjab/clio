@@ -83,3 +83,5 @@ class Keyword(StrEnum):
     STDIO = "stdio"
     SSE = "sse"
     HTTP = "http"
+    SQL = "sql"
+    DATABASES = "databases"

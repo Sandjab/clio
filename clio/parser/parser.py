@@ -9,6 +9,7 @@ from clio.parser.ast_nodes import (
     ConstrainedType,
     ContractDecl,
     ContractRef,
+    DatabaseSpec,
     EnumType,
     Field,
     FieldRefExpr,
@@ -42,6 +43,7 @@ from clio.parser.ast_nodes import (
     RestImpl,
     RetryPolicy,
     ShellImpl,
+    SqlImpl,
     SseServerSpec,
     StdioServerSpec,
     StepCall,
@@ -64,8 +66,9 @@ class ParseError(Exception):
 _PRIMITIVE_TYPES = {"int", "float", "str", "bool"}
 _VALID_MODES = {"exact", "judgment"}
 _VALID_LANGS = {"python", "rust", "go", "node", "bash", "auto"}
-_VALID_IMPL_MODES = {"code", "rest", "shell", "mcp_tool"}
+_VALID_IMPL_MODES = {"code", "rest", "shell", "mcp_tool", "sql"}
 _VALID_MCP_TRANSPORTS = {"stdio", "sse", "http"}
+_VALID_SQL_DRIVERS = {"sqlite", "postgres", "mysql"}
 _VALID_HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 _VALID_INVOKE_MODES = {"cli", "api"}
 _VALID_PROTOCOLS = {"anthropic", "openai", "bedrock", "vertex"}
@@ -125,6 +128,7 @@ class _Parser:
         target: str | None = None
         models: tuple[str, ...] = ()
         mcp_servers: tuple[McpServerSpec, ...] = ()
+        databases: tuple[DatabaseSpec, ...] = ()
         while self.peek().type != TokenType.DEDENT:
             t = self.peek()
             if t.type == TokenType.KEYWORD and t.value == "target":
@@ -155,6 +159,10 @@ class _Parser:
                 self.advance()
                 self.expect(TokenType.COLON)
                 mcp_servers = self._parse_mcp_servers_block()
+            elif t.type == TokenType.KEYWORD and t.value == "databases":
+                self.advance()
+                self.expect(TokenType.COLON)
+                databases = self._parse_databases_block()
             elif t.type == TokenType.KEYWORD and t.value in {"budget", "prefer", "strategy"}:
                 raise ParseError(
                     f"RESOURCES field {t.value!r} is not supported in v0.1 "
@@ -184,6 +192,7 @@ class _Parser:
             target=target,
             models=models,
             mcp_servers=mcp_servers,
+            databases=databases,
             line=kw.line,
             col=kw.col,
         )
@@ -422,15 +431,21 @@ class _Parser:
             return self._build_shell_impl(fields, line, col, mode_line, mode_col)
         if mode_value == "mcp_tool":
             return self._build_mcp_tool_impl(fields, line, col, mode_line, mode_col)
+        if mode_value == "sql":
+            return self._build_sql_impl(fields, line, col, mode_line, mode_col)
         # unreachable: mode validation happened above
         raise ParseError(f"impl.mode {mode_value!r} not yet implemented", mode_line, mode_col)
 
     def _parse_impl_field_value(self) -> object:
-        """Top-level impl field value: scalar (string-preserving) or inline
-        dict/list. Bareword identifiers like `parse: none` keep their string
-        value here; bool/null literals are only resolved inside inline
-        dicts/lists, where JSON-style typing is expected."""
+        """Top-level impl field value: scalar (string-preserving), inline
+        dict/list, or a `|` block scalar (multi-line raw text, used for
+        `impl.sql.query`). Bareword identifiers like `parse: none` keep
+        their string value here; bool/null literals are only resolved
+        inside inline dicts/lists, where JSON-style typing is expected."""
         t = self.peek()
+        if t.type == TokenType.BLOCK_SCALAR:
+            self.advance()
+            return t.value
         if t.type == TokenType.LBRACE:
             return self._parse_inline_dict()
         if t.type == TokenType.LBRACKET:
@@ -1200,6 +1215,162 @@ class _Parser:
             server=server, tool=tool, args=args_pairs,
             timeout_seconds=timeout_seconds, parse=parse,
         )
+
+    # ---- sql / databases builders ------------------------------------------
+
+    def _parse_databases_block(self) -> tuple[DatabaseSpec, ...]:
+        """Parse the indented `databases:` block. Each entry is a `<name>:`
+        header followed by an indented `driver:` / `url:` block. Mirrors
+        `_parse_mcp_servers_block` (same surface, simpler shape — there are
+        no per-driver field variations)."""
+        self.expect(TokenType.NEWLINE)
+        self.expect(TokenType.INDENT)
+        out: list[DatabaseSpec] = []
+        seen: set[str] = set()
+        while self.peek().type != TokenType.DEDENT:
+            name_tok = self.peek()
+            if name_tok.type not in (TokenType.IDENT, TokenType.KEYWORD):
+                raise ParseError(
+                    f"expected database name, got {name_tok.type.value} "
+                    f"{name_tok.value!r}",
+                    name_tok.line, name_tok.col,
+                )
+            if name_tok.value in seen:
+                raise ParseError(
+                    f"RESOURCES.databases has duplicate database name "
+                    f"{name_tok.value!r}",
+                    name_tok.line, name_tok.col,
+                )
+            seen.add(name_tok.value)
+            self.advance()
+            self.expect(TokenType.COLON)
+            self.expect(TokenType.NEWLINE)
+            self.expect(TokenType.INDENT)
+            spec_fields: dict[str, object] = {}
+            while self.peek().type != TokenType.DEDENT:
+                field_tok = self.peek()
+                if field_tok.type not in (TokenType.IDENT, TokenType.KEYWORD):
+                    raise ParseError(
+                        f"expected database spec field, got "
+                        f"{field_tok.type.value} {field_tok.value!r}",
+                        field_tok.line, field_tok.col,
+                    )
+                field_name = field_tok.value
+                if field_name in spec_fields:
+                    raise ParseError(
+                        f"RESOURCES.databases.{name_tok.value} has duplicate "
+                        f"field {field_name!r}",
+                        field_tok.line, field_tok.col,
+                    )
+                self.advance()
+                self.expect(TokenType.COLON)
+                spec_fields[field_name] = self._parse_impl_field_value()
+                self.expect(TokenType.NEWLINE)
+            self.expect(TokenType.DEDENT)
+            out.append(self._build_database_spec(
+                name_tok.value, spec_fields, name_tok.line, name_tok.col,
+            ))
+        self.expect(TokenType.DEDENT)
+        return tuple(out)
+
+    def _build_database_spec(
+        self, name: str, spec: dict[str, object], line: int, col: int,
+    ) -> DatabaseSpec:
+        allowed = {"driver", "url"}
+        unknown = set(spec.keys()) - allowed
+        if unknown:
+            sample = sorted(unknown)[0]
+            raise ParseError(
+                f"RESOURCES.databases.{name} has unknown field {sample!r} "
+                f"(allowed: {sorted(allowed)})",
+                line, col,
+            )
+        if "driver" not in spec:
+            raise ParseError(
+                f"RESOURCES.databases.{name} is missing required field 'driver' "
+                f"(one of {sorted(_VALID_SQL_DRIVERS)})",
+                line, col,
+            )
+        if "url" not in spec:
+            raise ParseError(
+                f"RESOURCES.databases.{name} is missing required field 'url'",
+                line, col,
+            )
+        driver = spec["driver"]
+        if not isinstance(driver, str) or driver not in _VALID_SQL_DRIVERS:
+            raise ParseError(
+                f"RESOURCES.databases.{name}.driver must be one of "
+                f"{sorted(_VALID_SQL_DRIVERS)}, got {driver!r}",
+                line, col,
+            )
+        url = spec["url"]
+        if not isinstance(url, str) or not url:
+            raise ParseError(
+                f"RESOURCES.databases.{name}.url must be a non-empty string",
+                line, col,
+            )
+        return DatabaseSpec(name=name, driver=driver, url=url, line=line, col=col)
+
+    def _build_sql_impl(
+        self,
+        fields: dict[str, tuple[object, int, int]],
+        line: int, col: int,
+        mode_line: int, mode_col: int,
+    ) -> SqlImpl:
+        allowed = {"db", "query"}
+        if "retry" in fields:
+            _, rline, rcol = fields["retry"]
+            raise ParseError(
+                "impl.sql does not support 'retry:' in v0.11 — "
+                "use a RESCUE handler for retry-then-abort flows "
+                "(see LANGUAGE_SPEC.md §RESCUE handler)",
+                rline, rcol,
+            )
+        unknown = set(fields.keys()) - allowed
+        if unknown:
+            sample = sorted(unknown)[0]
+            _, fline, fcol = fields[sample]
+            raise ParseError(
+                f"unknown field {sample!r} for impl.mode: sql "
+                f"(allowed: {sorted(allowed)})",
+                fline, fcol,
+            )
+        if "db" not in fields:
+            raise ParseError(
+                "impl.sql is missing required field 'db'",
+                mode_line, mode_col,
+            )
+        if "query" not in fields:
+            raise ParseError(
+                "impl.sql is missing required field 'query'",
+                mode_line, mode_col,
+            )
+
+        db, dline, dcol = fields["db"]
+        if not isinstance(db, str) or not db:
+            raise ParseError(
+                f"impl.sql.db must be a non-empty identifier, got {db!r}",
+                dline, dcol,
+            )
+        query, qline, qcol = fields["query"]
+        if not isinstance(query, str) or not query.strip():
+            raise ParseError(
+                "impl.sql.query must be a non-empty SQL string "
+                "(use a `|` block scalar for multi-line queries)",
+                qline, qcol,
+            )
+        # env: in the query body would be an SQL-injection vector if the
+        # env var ever contained untrusted text. Reject at parse time;
+        # secrets belong in RESOURCES.databases.<name>.url.
+        if "env:" in query:
+            raise ParseError(
+                "impl.sql.query may not contain 'env:NAME' substitutions — "
+                "secrets belong in RESOURCES.databases.<name>.url, not in "
+                "query bodies (see LANGUAGE_SPEC.md §impl.mode: sql)",
+                qline, qcol,
+            )
+
+        return SqlImpl(line=line, col=col, db=db, query=query)
 
     def _validate_mcp_args(
         self, value: object, path: str, line: int, col: int,

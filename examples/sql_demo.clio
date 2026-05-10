@@ -1,0 +1,39 @@
+CONTRACT OrderRow
+  SHAPE: {id: int, status: str, total_cents: int}
+
+STEP get_customer_orders
+  TAKES: email: str
+  GIVES: orders: List<OrderRow>
+  MODE:  exact
+  impl:
+    mode:  sql
+    db:    crm
+    query: |
+      SELECT id, status, total_cents
+      FROM orders
+      WHERE customer_email = :email
+      ORDER BY id
+
+STEP count_premium_orders
+  TAKES: email: str
+  GIVES: count: int
+  MODE:  exact
+  impl:
+    mode:  sql
+    db:    crm
+    query: |
+      SELECT COUNT(*)
+      FROM orders
+      WHERE customer_email = :email
+        AND total_cents >= 10000
+
+FLOW customer_summary
+  get_customer_orders(email="alice@example.com")
+    -> count_premium_orders(email="alice@example.com")
+
+RESOURCES
+  target: python
+  databases:
+    crm:
+      driver: sqlite
+      url:    "./data/crm.sqlite"

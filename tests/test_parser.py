@@ -1,10 +1,12 @@
 import pytest
 
 from clio.parser.ast_nodes import (
+    DatabaseSpec,
     HttpServerSpec,
     McpToolImpl,
     ResourcesDecl,
     ShellImpl,
+    SqlImpl,
     SseServerSpec,
     StdioServerSpec,
 )
@@ -1564,3 +1566,256 @@ def test_parse_mcp_tool_args_with_nested_dict_and_list():
     args = dict(step.impl.args)
     assert args["filters"] == {"kind": "${q}", "limit": 10}
     assert args["ids"] == [1, 2, 3]
+
+
+# --- impl.mode: sql + RESOURCES.databases (v0.11) ---------------------------
+
+_SQL_FLOW_PROLOG = (
+    "STEP get_orders\n"
+    "  TAKES: email: str\n"
+    "  GIVES: orders: List<{id: int, status: str}>\n"
+    "  MODE:  exact\n"
+    "  impl:\n"
+    "    mode:  sql\n"
+    "    db:    crm\n"
+    "    query: |\n"
+    "      SELECT id, status\n"
+    "      FROM orders\n"
+    "      WHERE email = :email\n"
+    "FLOW f\n"
+    '  get_orders(email="x@y")\n'
+)
+
+
+def test_parse_sql_impl_basic():
+    src = (
+        _SQL_FLOW_PROLOG
+        + "RESOURCES\n"
+        + "  target: python\n"
+        + "  databases:\n"
+        + "    crm:\n"
+        + "      driver: sqlite\n"
+        + '      url:    "./crm.sqlite"\n'
+    )
+    prog = parse(src)
+    step = next(d for d in prog.decls if hasattr(d, "name") and d.name == "get_orders")
+    assert isinstance(step.impl, SqlImpl)
+    assert step.impl.db == "crm"
+    assert "SELECT id, status" in step.impl.query
+    assert "WHERE email = :email" in step.impl.query
+
+
+def test_parse_sql_impl_retry_rejected():
+    src = (
+        "STEP get_orders\n"
+        "  TAKES: email: str\n"
+        "  GIVES: orders: List<{id: int, status: str}>\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:  sql\n"
+        "    db:    crm\n"
+        '    query: "SELECT 1"\n'
+        "    retry: {attempts: 3}\n"
+        "FLOW f\n"
+        '  get_orders(email="x")\n'
+    )
+    with pytest.raises(ParseError, match="impl.sql does not support 'retry:'"):
+        parse(src)
+
+
+def test_parse_sql_impl_env_in_query_rejected():
+    src = (
+        "STEP get_orders\n"
+        "  TAKES: email: str\n"
+        "  GIVES: orders: List<{id: int}>\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:  sql\n"
+        "    db:    crm\n"
+        '    query: "SELECT * FROM t WHERE token = env:TOKEN"\n'
+        "FLOW f\n"
+        '  get_orders(email="x")\n'
+    )
+    with pytest.raises(ParseError, match="may not contain 'env:NAME'"):
+        parse(src)
+
+
+def test_parse_sql_impl_missing_db_rejected():
+    src = (
+        "STEP s\n"
+        "  TAKES: email: str\n"
+        "  GIVES: x: int\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:  sql\n"
+        '    query: "SELECT 1"\n'
+        "FLOW f\n"
+        '  s(email="x")\n'
+    )
+    with pytest.raises(ParseError, match="missing required field 'db'"):
+        parse(src)
+
+
+def test_parse_sql_impl_missing_query_rejected():
+    src = (
+        "STEP s\n"
+        "  TAKES: email: str\n"
+        "  GIVES: x: int\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:  sql\n"
+        "    db:    crm\n"
+        "FLOW f\n"
+        '  s(email="x")\n'
+    )
+    with pytest.raises(ParseError, match="missing required field 'query'"):
+        parse(src)
+
+
+def test_parse_sql_impl_unknown_field_rejected():
+    src = (
+        "STEP s\n"
+        "  TAKES: email: str\n"
+        "  GIVES: x: int\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:    sql\n"
+        "    db:      crm\n"
+        '    query:   "SELECT 1"\n'
+        "    timeout: 30s\n"
+        "FLOW f\n"
+        '  s(email="x")\n'
+    )
+    with pytest.raises(ParseError, match="unknown field 'timeout' for impl.mode: sql"):
+        parse(src)
+
+
+def test_parse_databases_block_three_drivers():
+    src = (
+        "STEP s\n"
+        "  TAKES: email: str\n"
+        "  GIVES: x: int\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:  sql\n"
+        "    db:    crm\n"
+        '    query: "SELECT 1"\n'
+        "FLOW f\n"
+        '  s(email="x")\n'
+        "RESOURCES\n"
+        "  target: python\n"
+        "  databases:\n"
+        "    crm:\n"
+        "      driver: sqlite\n"
+        '      url:    ":memory:"\n'
+        "    pg:\n"
+        "      driver: postgres\n"
+        '      url:    "env:PG_URL"\n'
+        "    legacy:\n"
+        "      driver: mysql\n"
+        '      url:    "mysql://user:pass@h:3306/db"\n'
+    )
+    prog = parse(src)
+    res = next(d for d in prog.decls if isinstance(d, ResourcesDecl))
+    by_name = {d.name: d for d in res.databases}
+    assert isinstance(by_name["crm"], DatabaseSpec)
+    assert by_name["crm"].driver == "sqlite"
+    assert by_name["crm"].url == ":memory:"
+    assert by_name["pg"].driver == "postgres"
+    assert by_name["pg"].url == "env:PG_URL"
+    assert by_name["legacy"].driver == "mysql"
+
+
+def test_parse_databases_duplicate_name_rejected():
+    src = (
+        "STEP s\n"
+        "  TAKES: email: str\n"
+        "  GIVES: x: int\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:  sql\n"
+        "    db:    crm\n"
+        '    query: "SELECT 1"\n'
+        "FLOW f\n"
+        '  s(email="x")\n'
+        "RESOURCES\n"
+        "  target: python\n"
+        "  databases:\n"
+        "    crm:\n"
+        "      driver: sqlite\n"
+        '      url:    ":memory:"\n'
+        "    crm:\n"
+        "      driver: postgres\n"
+        '      url:    "postgresql://h/db"\n'
+    )
+    with pytest.raises(ParseError, match="duplicate database name 'crm'"):
+        parse(src)
+
+
+def test_parse_databases_unknown_driver_rejected():
+    src = (
+        "STEP s\n"
+        "  TAKES: email: str\n"
+        "  GIVES: x: int\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:  sql\n"
+        "    db:    crm\n"
+        '    query: "SELECT 1"\n'
+        "FLOW f\n"
+        '  s(email="x")\n'
+        "RESOURCES\n"
+        "  target: python\n"
+        "  databases:\n"
+        "    crm:\n"
+        "      driver: duckdb\n"
+        '      url:    ":memory:"\n'
+    )
+    with pytest.raises(ParseError, match=r"driver must be one of"):
+        parse(src)
+
+
+def test_parse_databases_missing_url_rejected():
+    src = (
+        "STEP s\n"
+        "  TAKES: email: str\n"
+        "  GIVES: x: int\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:  sql\n"
+        "    db:    crm\n"
+        '    query: "SELECT 1"\n'
+        "FLOW f\n"
+        '  s(email="x")\n'
+        "RESOURCES\n"
+        "  target: python\n"
+        "  databases:\n"
+        "    crm:\n"
+        "      driver: sqlite\n"
+    )
+    with pytest.raises(ParseError, match="missing required field 'url'"):
+        parse(src)
+
+
+def test_parse_databases_unknown_field_rejected():
+    src = (
+        "STEP s\n"
+        "  TAKES: email: str\n"
+        "  GIVES: x: int\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:  sql\n"
+        "    db:    crm\n"
+        '    query: "SELECT 1"\n'
+        "FLOW f\n"
+        '  s(email="x")\n'
+        "RESOURCES\n"
+        "  target: python\n"
+        "  databases:\n"
+        "    crm:\n"
+        "      driver: sqlite\n"
+        '      url:    ":memory:"\n'
+        "      port:   5432\n"
+    )
+    with pytest.raises(ParseError, match=r"unknown field 'port'"):
+        parse(src)

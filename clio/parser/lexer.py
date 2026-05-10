@@ -32,10 +32,14 @@ def lex(source: str) -> list[Token]:
     indent_stack: list[int] = [0]
     lines = source.splitlines(keepends=False)
 
-    for lineno, raw_line in enumerate(lines, start=1):
+    idx = 0
+    while idx < len(lines):
+        lineno = idx + 1
+        raw_line = lines[idx]
         line = _strip_comment(raw_line)
         stripped = line.lstrip(" ")
         if stripped == "":
+            idx += 1
             continue
 
         indent = len(line) - len(stripped)
@@ -132,7 +136,20 @@ def lex(source: str) -> list[Token]:
                 continue
             raise LexError(f"unexpected character {ch!r}", lineno, col)
 
+        # Literal block scalar (YAML-style `key: |`): if the last token on this
+        # line is PIPE, treat the following more-indented lines as raw text and
+        # emit a single BLOCK_SCALAR token. Used for `impl.sql.query` bodies.
+        if tokens and tokens[-1].type == TokenType.PIPE:
+            pipe_tok = tokens.pop()
+            body_lines, consumed = _consume_block_body(lines, idx + 1, indent)
+            content = _strip_common_indent(body_lines)
+            tokens.append(Token(TokenType.BLOCK_SCALAR, content, pipe_tok.line, pipe_tok.col))
+            tokens.append(Token(TokenType.NEWLINE, "\n", lineno, col))
+            idx += 1 + consumed
+            continue
+
         tokens.append(Token(TokenType.NEWLINE, "\n", lineno, col))
+        idx += 1
 
     while len(indent_stack) > 1:
         indent_stack.pop()
@@ -163,3 +180,51 @@ def _emit_indent_changes(
         tokens.append(Token(TokenType.DEDENT, "", lineno, 1))
     if indent != stack[-1]:
         raise LexError("inconsistent indentation", lineno, 1)
+
+
+def _consume_block_body(lines: list[str], start: int, base_indent: int) -> tuple[list[str], int]:
+    """Aspirate consecutive lines that belong to a `|` block scalar.
+
+    A line is part of the body when it is empty/whitespace-only OR strictly
+    more indented than `base_indent` (the indent of the line carrying the
+    `|`). Returns `(body_lines_raw, consumed_count)` where `body_lines_raw`
+    keeps each line in its original form (so the common-indent strip can
+    operate on the true leading spaces, not the comment-stripped version).
+    """
+    body: list[str] = []
+    j = start
+    while j < len(lines):
+        line = lines[j]
+        if line.strip() == "":
+            body.append("")
+            j += 1
+            continue
+        lstripped = line.lstrip(" ")
+        lindent = len(line) - len(lstripped)
+        if lindent > base_indent:
+            body.append(line)
+            j += 1
+            continue
+        break
+    return body, j - start
+
+
+def _strip_common_indent(body: list[str]) -> str:
+    """Remove the longest leading-space prefix common to every non-empty line.
+
+    Mirrors the YAML literal-block scalar (`|`) semantics: empty lines are
+    preserved as empty inside the scalar, the common indentation is removed,
+    and trailing empty lines are trimmed (clip-mode default)."""
+    min_indent: int | None = None
+    for bl in body:
+        if bl.strip() == "":
+            continue
+        bli = len(bl) - len(bl.lstrip(" "))
+        if min_indent is None or bli < min_indent:
+            min_indent = bli
+    if min_indent is None:
+        min_indent = 0
+    out = [bl[min_indent:] if bl.strip() else "" for bl in body]
+    while out and out[-1] == "":
+        out.pop()
+    return "\n".join(out)

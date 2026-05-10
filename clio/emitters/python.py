@@ -26,12 +26,14 @@ from clio.emitters._python_helpers import (
     emit_parallel_for_each_python,
     emit_rest_step,
     emit_shell_step,
+    emit_sql_step,
 )
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import (
     ApiInvokeIR,
     CallIR,
     ContractIR,
+    DatabaseSpecIR,
     FlowGraph,
     ForEachIR,
     IfBlockIR,
@@ -40,6 +42,7 @@ from clio.ir.graph import (
     McpToolImplIR,
     RestImplIR,
     ShellImplIR,
+    SqlImplIR,
     StepIR,
     WhileBlockIR,
 )
@@ -67,9 +70,15 @@ class PythonEmitter(BaseEmitter):
             s.name: s
             for s in (graph.resources.mcp_servers if graph.resources is not None else ())
         }
+        databases_by_name = {
+            d.name: d
+            for d in (graph.resources.databases if graph.resources is not None else ())
+        }
         for step in graph.steps:
             if step.mode == "exact":
-                body = self._emit_exact_step(step, contracts_by_name, mcp_servers_by_name)
+                body = self._emit_exact_step(
+                    step, contracts_by_name, mcp_servers_by_name, databases_by_name,
+                )
             else:
                 body = self._emit_judgment_step(step, graph, contracts_by_name)
             (steps_dir / f"{step.name}.py").write_text(body)
@@ -79,6 +88,9 @@ class PythonEmitter(BaseEmitter):
         )
         needs_mcp = any(
             isinstance(s.impl, McpToolImplIR) for s in graph.steps
+        )
+        needs_sql = any(
+            isinstance(s.impl, SqlImplIR) for s in graph.steps
         )
         needs_openai = any(
             isinstance(s.invoke, ApiInvokeIR) and s.invoke.protocol == "openai"
@@ -119,6 +131,8 @@ class PythonEmitter(BaseEmitter):
             (runtime_dir / "mcp_client.py").write_text(
                 (src_dir / "mcp_client.py").read_text()
             )
+        if needs_sql:
+            (runtime_dir / "sql.py").write_text((src_dir / "sql.py").read_text())
 
     def _emit_contracts(self, graph: FlowGraph) -> str:
         return emit_contracts(graph)
@@ -128,6 +142,7 @@ class PythonEmitter(BaseEmitter):
         step: StepIR,
         contracts_by_name: dict[str, "ContractIR"],
         mcp_servers_by_name: dict[str, "McpServerSpecIR"],
+        databases_by_name: dict[str, "DatabaseSpecIR"],
     ) -> str:
         if isinstance(step.impl, RestImplIR):
             return self._emit_rest_step(step, contracts_by_name, step.impl)
@@ -138,6 +153,9 @@ class PythonEmitter(BaseEmitter):
             return emit_mcp_tool_step(
                 step, contracts_by_name, step.impl, spec, async_call=False,
             )
+        if isinstance(step.impl, SqlImplIR):
+            db_spec = databases_by_name[step.impl.db]      # validated upstream by IR
+            return emit_sql_step(step, contracts_by_name, step.impl, db_spec)
 
         # default branch (no impl, or impl.mode: code)
         return emit_default_exact_step(step, contracts_by_name)
