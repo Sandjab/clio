@@ -1,7 +1,6 @@
 from clio.keywords import Keyword
 from clio.parser.tokens import Token, TokenType
 
-
 _KEYWORD_VALUES = {k.value for k in Keyword}
 
 _SINGLE_CHAR_TOKENS = {

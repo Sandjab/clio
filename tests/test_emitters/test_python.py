@@ -7,7 +7,6 @@ from clio.emitters.python import PythonEmitter
 from clio.ir.builder import build_ir
 from clio.parser.parser import parse
 
-
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
 
@@ -351,7 +350,8 @@ def test_emit_examples_classify_corpus_python(tmp_path):
 def test_emit_judgment_cache_hit_skips_sdk(tmp_path, monkeypatch):
     src = (FIXTURES / "mvp_v03_cache.clio").read_text()
     PythonEmitter().emit(build_ir(parse(src)), tmp_path)
-    import sys, json
+    import json
+    import sys
     sys.path.insert(0, str(tmp_path))
     try:
         cache_dir = tmp_path / ".cache"
@@ -455,7 +455,8 @@ def test_emit_judgment_cache_stale_falls_through_to_sdk(tmp_path, monkeypatch):
     """Latent #4: a cached payload that no longer matches the current schema
     (e.g. user edited the .clio between runs) must be treated as a cache
     miss and trigger a fresh SDK call, not crash with ValidationError."""
-    import sys, json
+    import json
+    import sys
     src = (FIXTURES / "mvp_v03_cache.clio").read_text()
     PythonEmitter().emit(build_ir(parse(src)), tmp_path)
     sys.path.insert(0, str(tmp_path))
@@ -1350,8 +1351,8 @@ def _stub_step(file_path, step_name, ret_value):
 
 def _import_and_run(tmp_path, pkg_name, **run_kwargs):
     """Add tmp_path to sys.path, import <pkg>.flow, call run(**kwargs), clean up."""
-    import sys
     import importlib
+    import sys
     sys.path.insert(0, str(tmp_path))
     try:
         # Reload in case sys.modules has a stale entry from a previous test
@@ -1579,8 +1580,8 @@ def test_python_runtime_rescue_aborts(tmp_path):
         '    raise RuntimeError("synthetic failure")\n'
     )
 
-    import sys
     import importlib
+    import sys
     sys.path.insert(0, str(tmp_path))
     try:
         for k in list(sys.modules):

@@ -1,9 +1,9 @@
 import json
-import pytest
-from pathlib import Path
 
-from clio.runtime import validate as validate_mod
+import pytest
+
 from clio.runtime import substitute as substitute_mod
+from clio.runtime import validate as validate_mod
 
 
 def test_validate_accepts_valid_instance(tmp_path):

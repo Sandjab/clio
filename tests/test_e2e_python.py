@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pytest
 
-
 pytestmark = pytest.mark.skipif(
     os.environ.get("CLIO_E2E") != "1",
     reason="CLIO_E2E=1 not set",

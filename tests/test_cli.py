@@ -37,8 +37,8 @@ def test_cli_compile_python_target(tmp_path):
 
 
 def test_gen_inline_argument_writes_to_stdout(tmp_path, monkeypatch, capsys):
-    from clio.cli import main
     from clio import nl_to_clio
+    from clio.cli import main
 
     captured: dict[str, str] = {}
 
@@ -59,8 +59,8 @@ def test_gen_inline_argument_writes_to_stdout(tmp_path, monkeypatch, capsys):
 
 
 def test_gen_writes_to_output_file(tmp_path, monkeypatch):
-    from clio.cli import main
     from clio import nl_to_clio
+    from clio.cli import main
 
     monkeypatch.setattr(
         nl_to_clio,
@@ -76,8 +76,8 @@ def test_gen_writes_to_output_file(tmp_path, monkeypatch):
 
 
 def test_gen_passes_custom_model(tmp_path, monkeypatch):
-    from clio.cli import main
     from clio import nl_to_clio
+    from clio.cli import main
 
     captured: dict[str, str] = {}
 
@@ -96,8 +96,9 @@ def test_gen_passes_custom_model(tmp_path, monkeypatch):
 def test_gen_from_stdin(tmp_path, monkeypatch, capsys):
     import io
     import sys
-    from clio.cli import main
+
     from clio import nl_to_clio
+    from clio.cli import main
 
     captured: dict[str, str] = {}
 
@@ -115,8 +116,8 @@ def test_gen_from_stdin(tmp_path, monkeypatch, capsys):
 
 
 def test_gen_from_file(tmp_path, monkeypatch, capsys):
-    from clio.cli import main
     from clio import nl_to_clio
+    from clio.cli import main
 
     captured: dict[str, str] = {}
 
@@ -146,6 +147,7 @@ def test_gen_missing_api_key(monkeypatch, capsys):
 def test_gen_empty_description_returns_2(monkeypatch, capsys):
     import io
     import sys
+
     from clio.cli import main
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
@@ -156,8 +158,8 @@ def test_gen_empty_description_returns_2(monkeypatch, capsys):
 
 
 def test_gen_generation_error_prints_last_attempt_commented(monkeypatch, capsys):
-    from clio.cli import main
     from clio import nl_to_clio
+    from clio.cli import main
 
     def boom(description, *, model, client=None):
         raise nl_to_clio.GenerationError(

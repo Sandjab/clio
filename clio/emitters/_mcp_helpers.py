@@ -354,6 +354,7 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
             if item.parallel:
                 chain_lines.append(emit_parallel_for_each_mcp(item, steps_by_name, indent))
                 inner = item.body[0]
+                assert isinstance(inner, CallIR)  # IR builder enforces
                 if inner.step_name not in imported_steps:
                     imported_steps.append(inner.step_name)
                 return
@@ -506,12 +507,13 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
 
 
 def emit_parallel_for_each_mcp(
-    elem: "ForEachIR",
+    elem: ForEachIR,
     steps_by_name: dict,
     indent: str,
 ) -> str:
     """Emit an asyncio.gather block for a parallel FOR EACH (mcp-server target)."""
     inner = elem.body[0]
+    assert isinstance(inner, CallIR)  # IR builder enforces
     step = steps_by_name[inner.step_name]
     is_judgment = step.mode == "judgment"
 

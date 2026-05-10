@@ -1,8 +1,8 @@
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class TokenType(str, Enum):
+class TokenType(StrEnum):
     KEYWORD = "KEYWORD"
     IDENT = "IDENT"
     NUMBER = "NUMBER"

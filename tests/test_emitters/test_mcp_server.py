@@ -1,9 +1,10 @@
 import ast
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from clio.emitters.mcp_server import MCPServerEmitter
 from clio.ir.builder import build_ir
@@ -31,9 +32,6 @@ def test_emit_creates_expected_file_tree(tmp_path):
     assert (tmp_path / "hello" / "flow.py").exists()
     assert (tmp_path / "hello" / "steps" / "greet.py").exists()
     assert (tmp_path / "hello" / "steps" / "__init__.py").exists()
-
-
-import pytest
 
 
 def test_emit_rejects_anthropic_protocol(tmp_path):

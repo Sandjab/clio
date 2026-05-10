@@ -42,7 +42,6 @@ from clio.ir.graph import (
     MatchBlockIR,
     RestImplIR,
     ShellImplIR,
-    StepIR,
     WhileBlockIR,
 )
 

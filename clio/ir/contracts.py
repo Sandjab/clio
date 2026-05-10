@@ -8,7 +8,6 @@ from clio.parser.ast_nodes import (
     TypeExpr,
 )
 
-
 _PRIMITIVE_JSON_TYPES = {
     "int": "integer",
     "float": "number",

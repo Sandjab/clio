@@ -6,7 +6,6 @@ import pytest
 from clio.ir.builder import IRBuildError, build_ir
 from clio.parser.parser import ParseError, parse
 
-
 _BASE_DECLS = (
     "CONTRACT classification\n"
     "  SHAPE: {category: enum(spam|support|sales), confidence: float}\n"

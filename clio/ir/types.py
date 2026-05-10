@@ -25,7 +25,7 @@ def types_equal(a: TypeExpr, b: TypeExpr, contracts: dict) -> bool:
             return False
         return all(
             an == bn and types_equal(at, bt, contracts)
-            for (an, at), (bn, bt) in zip(a.fields, b.fields)
+            for (an, at), (bn, bt) in zip(a.fields, b.fields, strict=True)
         )
     if isinstance(a, EnumType) and isinstance(b, EnumType):
         return a.values == b.values

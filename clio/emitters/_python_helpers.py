@@ -10,8 +10,10 @@ import keyword
 
 from clio.ir.graph import (
     ApiInvokeIR,
+    CallIR,
     CliInvokeIR,
     ContractIR,
+    ForEachIR,
     InvokeIR,
     RestImplIR,
     ShellImplIR,
@@ -26,7 +28,6 @@ from clio.parser.ast_nodes import (
     RecordType,
     TypeExpr,
 )
-
 
 _PYTHON_PRIMITIVES = {"int": "int", "float": "float", "str": "str", "bool": "bool"}
 
@@ -379,7 +380,7 @@ def _attempt_anthropic_block(
         "    try:",
         f"        client = anthropic.Anthropic({client_args})",
         "        msg = client.messages.create(",
-    ] + create_args + [
+        *create_args,
         "        )",
         "        if hasattr(msg, 'usage') and msg.usage is not None:",
         "            _last_usage = {",
@@ -441,7 +442,7 @@ def _attempt_openai_block(
         "    try:",
         f"        client = openai.OpenAI({client_args})",
         "        msg = client.chat.completions.create(",
-    ] + create_args + [
+        *create_args,
         "        )",
         "        if hasattr(msg, 'usage') and msg.usage is not None:",
         "            _last_usage = {",
@@ -701,7 +702,7 @@ def emit_shell_step(
 
 
 def emit_parallel_for_each_python(
-    elem: "ForEachIR",
+    elem: ForEachIR,
     steps_by_name: dict,
     indent: str,
 ) -> str:
@@ -723,6 +724,7 @@ def emit_parallel_for_each_python(
     success.
     """
     inner = elem.body[0]
+    assert isinstance(inner, CallIR)  # IR builder enforces
     step = steps_by_name[inner.step_name]
 
     # Render kwargs using the @-prefix disambiguation. Loop var is in scope.

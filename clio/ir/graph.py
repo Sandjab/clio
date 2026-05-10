@@ -127,7 +127,7 @@ class ForEachIR:
     each item, and results are collected into `state[<collector>]` as a list."""
     loop_var: str
     collection: str
-    body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR, ...]"
+    body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
     line: int
     parallel: bool = False
     collector: str | None = None
@@ -150,8 +150,8 @@ class IfBlockIR:
     """IR mirror of IfBlock. `else_body` is `()` when no ELSE branch was
     declared in the source."""
     condition: ConditionIR
-    then_body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR, ...]"
-    else_body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR, ...]"
+    then_body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
+    else_body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
     line: int
 
 
@@ -160,7 +160,7 @@ class MatchCaseIR:
     """One CASE / DEFAULT arm of a MATCH block. `value` is None for DEFAULT,
     otherwise the literal string the runtime compares the scrutinee against."""
     value: str | None
-    body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR, ...]"
+    body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
     line: int
 
 

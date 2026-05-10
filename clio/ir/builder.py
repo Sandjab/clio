@@ -46,7 +46,6 @@ from clio.parser.ast_nodes import (
     InvokeBlock,
     ListType,
     MatchBlock,
-    MatchCase,
     PrimitiveType,
     Program,
     RecordType,
@@ -179,7 +178,7 @@ def _check_fallback_compat(
             f"line {main.line}:0: ON_FAIL fallback {fb.name!r} has incompatible TAKES "
             f"(arity mismatch)"
         )
-    for mt, ft in zip(main.takes, fb.takes):
+    for mt, ft in zip(main.takes, fb.takes, strict=True):
         if mt.name != ft.name or not (
             types_equal(mt.type, ft.type, contracts) or names_equal(mt.type, ft.type)
         ):
@@ -214,7 +213,7 @@ def _detect_fallback_cycles(steps_by_name: dict[str, StepIR]) -> None:
         if color[name] == GRAY:
             raise IRBuildError(
                 f"line {steps_by_name[name].line}:0: ON_FAIL fallback creates a cycle: "
-                + " -> ".join(path + [name])
+                + " -> ".join([*path, name])
             )
         if color[name] == BLACK:
             return
@@ -223,7 +222,7 @@ def _detect_fallback_cycles(steps_by_name: dict[str, StepIR]) -> None:
         if step.on_fail is not None:
             for s in step.on_fail.strategies:
                 if s.kind == "fallback" and s.fallback_step is not None:
-                    visit(s.fallback_step.name, path + [name])
+                    visit(s.fallback_step.name, [*path, name])
         color[name] = BLACK
 
     for n in steps_by_name:
@@ -463,7 +462,7 @@ def _build_rescue(
 
 
 def _build_flow_items(
-    chain: "tuple[StepCall | ForEachBlock | IfBlock, ...]",
+    chain: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock, ...]",
     steps_by_name: dict[str, StepIR],
     contracts: dict[str, ContractIR],
     available: dict[str, TypeExpr],

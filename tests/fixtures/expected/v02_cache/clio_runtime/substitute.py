@@ -14,7 +14,6 @@ import re
 import sys
 from pathlib import Path
 
-
 _PLACEHOLDER = re.compile(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 
 

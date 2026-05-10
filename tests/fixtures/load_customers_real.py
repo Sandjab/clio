@@ -1,8 +1,7 @@
+import argparse
 import csv
 import json
-import argparse
 from pathlib import Path
-
 
 STATE_FILE = Path(__file__).resolve().parent.parent / "state.json"
 

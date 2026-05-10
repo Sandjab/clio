@@ -8,10 +8,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from clio.emitters.python import PythonEmitter
 from clio.ir.builder import build_ir
 from clio.parser.parser import parse
-from clio.emitters.python import PythonEmitter
-
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 

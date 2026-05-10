@@ -1,9 +1,9 @@
 import pytest
 
-from clio.parser.parser import parse
 from clio.ir.builder import build_ir
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import ShellImplIR
+from clio.parser.parser import parse
 
 
 def test_build_ir_from_minimal_step():
@@ -323,6 +323,7 @@ def test_build_ir_impl_shell_preserves_quoted_argv_token():
 
 def test_build_ir_impl_shell_empty_cmd_raises():
     import pytest
+
     from clio.ir.builder import IRBuildError
     src = (
         "STEP foo\n"
@@ -581,7 +582,7 @@ def test_ir_rejects_parallel_collector_shadowing_state_field():
 
 def test_ir_rejects_nested_parallel():
     """Two nested PARALLEL blocks (transitive) are rejected in v1."""
-    from clio.ir.graph import ForEachIR, CallIR, FlowIR, FlowGraph, StepIR, FieldIR
+    from clio.ir.graph import CallIR, FieldIR, FlowGraph, FlowIR, ForEachIR, StepIR
     from clio.parser.ast_nodes import PrimitiveType
 
     inner = ForEachIR(

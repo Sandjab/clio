@@ -27,6 +27,7 @@ from clio.parser.ast_nodes import (
     Program,
     RecordType,
     RescueBlock,
+    ResourcesDecl,
     RestImpl,
     ShellImpl,
     StepCall,
@@ -101,8 +102,7 @@ class _Parser:
             self.skip_newlines()
         return Program(tuple(decls))
 
-    def parse_resources(self) -> "ResourcesDecl":
-        from clio.parser.ast_nodes import ResourcesDecl
+    def parse_resources(self) -> ResourcesDecl:
         kw = self.expect(TokenType.KEYWORD, "RESOURCES")
         self.expect(TokenType.NEWLINE)
         self.expect(TokenType.INDENT)
@@ -941,11 +941,11 @@ class _Parser:
         num_tok = self.expect(TokenType.NUMBER)
         try:
             value = int(num_tok.value)
-        except ValueError:
+        except ValueError as err:
             raise ParseError(
                 f"`max` requires an integer, got {num_tok.value!r}",
                 num_tok.line, num_tok.col,
-            )
+            ) from err
         return (name_tok.value, value)
 
     def parse_list_type(self) -> ListType:
@@ -1085,7 +1085,7 @@ class _Parser:
             as_tok = self.peek()
             if not (as_tok.type == TokenType.KEYWORD and as_tok.value == "AS"):
                 raise ParseError(
-                    f"PARALLEL requires an AS <name> binding",
+                    "PARALLEL requires an AS <name> binding",
                     next_tok.line, next_tok.col,
                 )
             self.advance()
@@ -1094,7 +1094,7 @@ class _Parser:
             collector = collector_tok.value
         elif next_tok.type == TokenType.KEYWORD and next_tok.value == "AS":
             raise ParseError(
-                f"AS binding is only valid with PARALLEL — sequential FOR EACH discards results",
+                "AS binding is only valid with PARALLEL — sequential FOR EACH discards results",
                 next_tok.line, next_tok.col,
             )
 
@@ -1364,6 +1364,7 @@ class _Parser:
         op = op_map[op_tok.type]
 
         rhs_tok = self.peek()
+        right: StrExpr | FloatExpr | IntExpr | IdentExpr
         if rhs_tok.type == TokenType.STRING:
             self.advance()
             right = StrExpr(value=rhs_tok.value)

@@ -76,7 +76,7 @@ def test_lex_number_and_string():
     types = [t.type for t in extra]
     assert TokenType.NUMBER in types
     assert TokenType.STRING in types
-    string_tok = [t for t in extra if t.type == TokenType.STRING][0]
+    string_tok = next(t for t in extra if t.type == TokenType.STRING)
     assert string_tok.value == "hello world"
 
 

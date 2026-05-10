@@ -11,11 +11,9 @@ from pathlib import Path
 from clio.emitters._claude_cli_helpers import (
     _CLAUDE_MD,
     _EXACT_STEP_TEMPLATE,
-    _JUDGMENT_PROMPT_TEMPLATE,
     _REST_STEP_TEMPLATE,
     _SHELL_STEP_TEMPLATE,
     _STEP_NO_FIELDS,
-    _chain_has_for_each,
     _field_doc,
     _flatten_calls,
     _inline_schema,
@@ -27,9 +25,7 @@ from clio.emitters._claude_cli_helpers import (
 from clio.emitters.base import BaseEmitter
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
-    CallIR,
     ContractIR,
-    FieldIR,
     FlowGraph,
     ForEachIR,
     RestImplIR,
@@ -115,6 +111,7 @@ class ClaudeCLIEmitter(BaseEmitter):
         raise KeyError(call.step_name)
 
     def _emit_run_sh(self, graph: FlowGraph, output_dir: Path) -> None:
+        assert graph.flow is not None  # caller (_emit_run_sh) checks
         lines: list[str] = [
             "#!/usr/bin/env bash",
             "set -euo pipefail",
@@ -125,7 +122,11 @@ class ClaudeCLIEmitter(BaseEmitter):
             'if [ -z "$PYTHON" ]; then',
             "    for candidate in python3.12 python3.13 python3.14 python3 python; do",
             '        if command -v "$candidate" >/dev/null 2>&1 \\',
-            "           && \"$candidate\" -c 'import sys; sys.exit(0 if sys.version_info >= (3,12) else 1)' >/dev/null 2>&1; then",
+            (
+                "           && \"$candidate\" -c "
+                "'import sys; sys.exit(0 if sys.version_info >= (3,12) else 1)' "
+                ">/dev/null 2>&1; then"
+            ),
             '            PYTHON="$candidate"',
             "            break",
             "        fi",
@@ -140,10 +141,16 @@ class ClaudeCLIEmitter(BaseEmitter):
             "# Prints the cleaned response on success, nothing on failure. Exit 0 on success, 1 on failure.",
             "_clio_run_attempt() {",
             "    local model=\"$1\" prompt=\"$2\" schema_path=\"$3\" raw clean",
-            "    raw=\"$(printf %s \"$prompt\" | claude -p --model \"$model\" --output-format text 2>/dev/null || true)\"",
+            (
+                "    raw=\"$(printf %s \"$prompt\" | claude -p --model \"$model\" "
+                "--output-format text 2>/dev/null || true)\""
+            ),
             "    [ -n \"$raw\" ] || return 1",
             "    clean=\"$(printf %s \"$raw\" | awk '!/^```/')\"",
-            "    printf %s \"$clean\" | \"$PYTHON\" -m clio_runtime.validate \"$schema_path\" - >/dev/null 2>&1 || return 1",
+            (
+                "    printf %s \"$clean\" | \"$PYTHON\" -m clio_runtime.validate "
+                "\"$schema_path\" - >/dev/null 2>&1 || return 1"
+            ),
             "    printf %s \"$clean\"",
             "    return 0",
             "}",
@@ -197,11 +204,6 @@ class ClaudeCLIEmitter(BaseEmitter):
         def _emit_for_each(item: ForEachIR, indent: str, local_scope: dict) -> None:
             if item.collection in local_scope:
                 inner_type = _resolve_iter_inner_type(local_scope[item.collection])
-                source_expr = (
-                    f'"${item.collection}"'
-                    if _is_primitive_type(local_scope[item.collection])
-                    else f'"${item.collection}"'
-                )
                 # Iterating a loop-local list is rare but allowed; same shape.
                 primitive = _is_primitive_type(inner_type) if inner_type is not None else True
                 jq_flag = "-r" if primitive else "-c"
@@ -379,6 +381,7 @@ class ClaudeCLIEmitter(BaseEmitter):
                 # script reads its TAKES from state.json and writes its GIVES
                 # back, exactly the same way as a regular exact step would.
                 fb_step = s.fallback_step
+                assert fb_step is not None  # IR builder enforces for kind=fallback
                 # We need to know the index of the fallback step in graph.steps
                 # to construct its filename. The emitter is stateless re: this,
                 # so we look it up via the helper.

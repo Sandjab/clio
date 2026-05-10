@@ -2,6 +2,13 @@
 
 **Compiled Language for Intent Orchestration**
 
+[![CI](https://github.com/Sandjab/clio/actions/workflows/ci.yml/badge.svg)](https://github.com/Sandjab/clio/actions/workflows/ci.yml)
+[![Last commit](https://img.shields.io/github/last-commit/Sandjab/clio)](https://github.com/Sandjab/clio/commits/main)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-%E2%89%A53.12-blue.svg)](https://www.python.org)
+[![Version](https://img.shields.io/badge/Version-v0.8.0-green.svg)](https://github.com/Sandjab/clio/releases/tag/v0.8.0)
+[![Visitors](https://komarev.com/ghpvc/?username=sandjab-clio&label=Visitors&color=0e75b6&style=flat)](https://github.com/Sandjab/clio)
+
 CLIO is a declarative language that compiles hybrid LLM/code programs into executable projects. You describe *what* you want — the compiler decides *what runs as code and what runs as an LLM*, then emits a project you can run directly.
 
 ```

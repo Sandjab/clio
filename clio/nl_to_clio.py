@@ -3,7 +3,7 @@ loop: the model emits .clio, parse + build_ir validate it, and on failure
 the model gets one shot at correction before GenerationError is raised."""
 from __future__ import annotations
 
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 
 from clio.ir.builder import IRBuildError, build_ir
@@ -69,7 +69,7 @@ _OUTPUT_RULES = """# Output rules
 - Output ONLY a valid .clio source. No markdown fences. No prose. No commentary.
 - Use the smallest set of features that solves the user's request.
 - Step names are lowercase_with_underscores. Contract names are lowercase_with_underscores too.
-- If the request is too vague to disambiguate, respond with a single line starting with "ERROR:" explaining what's missing.
+- If the request is too vague to disambiguate, respond with one line starting with "ERROR:" stating what's missing.
 - Do not invent features that do not appear in the language specification.
 """
 
@@ -128,7 +128,8 @@ def generate(
             break
 
         # Append assistant turn (the bad attempt) and a user correction.
-        messages = messages + [
+        messages = [
+            *messages,
             {"role": "assistant", "content": candidate},
             {
                 "role": "user",
@@ -151,7 +152,7 @@ def _retry_message(previous_attempt: str, error: str) -> str:
     )
 
 
-@lru_cache(maxsize=None)
+@cache
 def _build_system_prompt() -> str:
     """Build the system prompt for NL→.clio generation.
 

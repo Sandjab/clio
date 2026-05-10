@@ -4,7 +4,6 @@ from clio.emitters.claude_cli import ClaudeCLIEmitter
 from clio.ir.builder import build_ir
 from clio.parser.parser import parse
 
-
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
 
@@ -134,6 +133,7 @@ def test_emit_abort_message_is_shell_quoted():
         "  s()\n"
     )
     import tempfile
+
     from clio.emitters.claude_cli import ClaudeCLIEmitter
     from clio.ir.builder import build_ir
     from clio.parser.parser import parse
@@ -166,6 +166,7 @@ def test_emit_fallback_does_not_cache_under_main_key(tmp_path):
         "  main(x=1)\n"
     )
     import tempfile
+
     from clio.emitters.claude_cli import ClaudeCLIEmitter
     from clio.ir.builder import build_ir
     from clio.parser.parser import parse
@@ -195,6 +196,7 @@ def test_emit_escalate_recomputes_cache_key(tmp_path):
         "  models: [haiku, sonnet]\n"
     )
     import tempfile
+
     from clio.emitters.claude_cli import ClaudeCLIEmitter
     from clio.ir.builder import build_ir
     from clio.parser.parser import parse

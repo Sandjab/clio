@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class Keyword(str, Enum):
+class Keyword(StrEnum):
     """Closed enum of every keyword recognized by the lexer."""
     STEP = "STEP"
     MODE = "MODE"

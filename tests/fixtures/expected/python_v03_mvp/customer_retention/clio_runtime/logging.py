@@ -21,7 +21,7 @@ import contextvars
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import IO
 
 _current_flow: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -42,7 +42,7 @@ def _enabled() -> bool:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
 def _destination() -> IO:

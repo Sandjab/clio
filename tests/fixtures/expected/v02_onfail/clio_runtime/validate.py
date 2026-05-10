@@ -44,7 +44,9 @@ def _build_registry(base_dir: Path) -> Registry:
             path = base_dir / uri
         contents = json.loads(path.read_text())
         return Resource.from_contents(contents, default_specification=DRAFT202012)
-    return Registry(retrieve=retrieve)
+    # `retrieve` is the public attrs alias for the `_retrieve` field; mypy sees
+    # only the field name, so the kwarg looks unknown.
+    return Registry(retrieve=retrieve)  # type: ignore[call-arg]
 
 
 def _check_assert(schema: dict, instance: object, base_dir: Path) -> None:
@@ -87,7 +89,9 @@ def _walk(node: dict, item: dict) -> object:
         if len(node["args"]) != 1:
             raise ValueError("len() expects exactly one argument")
         arg_value = _walk(node["args"][0], item)
-        return len(arg_value)
+        # `_walk` returns `object`; mypy can't see that arg_value is always a
+        # str/list/dict here (the AST forbids reducing `len(...)` to non-sized).
+        return len(arg_value)  # type: ignore[arg-type]
     if kind == "compare":
         left = _walk(node["left"], item)
         right = _walk(node["right"], item)

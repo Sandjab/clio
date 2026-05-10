@@ -12,7 +12,6 @@ import pytest
 
 from clio.runtime import logging as L
 
-
 _TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+00:00$")
 
 

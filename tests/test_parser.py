@@ -1,6 +1,7 @@
 import pytest
-from clio.parser.parser import parse, ParseError
+
 from clio.parser.ast_nodes import ShellImpl
+from clio.parser.parser import ParseError, parse
 
 
 def test_parse_minimal_step():
@@ -153,7 +154,7 @@ def test_parse_step_referencing_contract():
         "  MODE:  judgment\n"
     )
     program = parse(src)
-    step = [d for d in program.decls if d.__class__.__name__ == "StepDecl"][0]
+    step = next(d for d in program.decls if d.__class__.__name__ == "StepDecl")
     list_t = step.gives.type
     assert list_t.__class__.__name__ == "ListType"
     inner = list_t.inner

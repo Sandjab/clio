@@ -38,7 +38,6 @@ from clio.parser.ast_nodes import (
     TypeExpr,
 )
 
-
 _MERMAID_CLASSDEFS = (
     "    classDef judgment fill:#e3f2fd,stroke:#1976d2,color:#0d47a1",
     "    classDef exact fill:#fff3e0,stroke:#f57c00,color:#bf360c",
@@ -755,14 +754,16 @@ def _contract_to_dict(c: ContractIR) -> dict:
     }
 
 
-_HTML_TEMPLATE = """<!DOCTYPE html>
+_HTML_TEMPLATE = (
+    """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <title>CLIO graph &mdash; __TITLE__</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700"""
+    """&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root { color-scheme: light; }
 * { box-sizing: border-box; }
@@ -818,7 +819,10 @@ body {
   padding: 12px 28px;
   display: flex; align-items: center; gap: 10px;
 }
-.viewer .v-toolbar .title { font-weight: 600; font-size: 16px; letter-spacing: -0.02em; color: var(--ink); margin-right: 6px; }
+.viewer .v-toolbar .title {
+  font-weight: 600; font-size: 16px; letter-spacing: -0.02em;
+  color: var(--ink); margin-right: 6px;
+}
 .viewer .v-toolbar .pill {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 10px; font-size: 12px; font-weight: 500;
@@ -829,7 +833,10 @@ body {
 }
 .viewer .v-toolbar .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--neutral-med); }
 .viewer .v-toolbar .spacer { flex: 1; }
-.viewer .v-toolbar .credit { font-family: 'Geist Mono', monospace; font-size: 11px; color: var(--neutral-med); letter-spacing: 0.02em; }
+.viewer .v-toolbar .credit {
+  font-family: 'Geist Mono', monospace; font-size: 11px;
+  color: var(--neutral-med); letter-spacing: 0.02em;
+}
 
 .viewer .layout { display: grid; grid-template-columns: 1fr 380px; }
 @media (max-width: 1100px) { .viewer .layout { grid-template-columns: 1fr; } }
@@ -855,7 +862,9 @@ body {
 
 /* Mermaid wrappers — collapse padding/margin around HTML labels */
 .viewer .mermaid svg { background: transparent !important; max-width: 100%; overflow: visible !important; }
-.viewer .mermaid svg .node rect, .viewer .mermaid svg .node polygon { fill: transparent !important; stroke: transparent !important; }
+.viewer .mermaid svg .node rect, .viewer .mermaid svg .node polygon {
+  fill: transparent !important; stroke: transparent !important;
+}
 .viewer .mermaid svg foreignObject { overflow: visible !important; }
 .viewer .mermaid svg foreignObject > div,
 .viewer .mermaid svg foreignObject .label,
@@ -916,7 +925,10 @@ g.node:focus-visible .node-card {
   fill: none !important;
   stroke: currentColor !important;
 }
-.node-card .head .name { font-weight: 600; font-size: 14px; letter-spacing: -0.015em; color: var(--ink); white-space: nowrap; }
+.node-card .head .name {
+  font-weight: 600; font-size: 14px; letter-spacing: -0.015em;
+  color: var(--ink); white-space: nowrap;
+}
 .node-card .head .kicker {
   margin-left: auto;
   font-family: 'Geist Mono', monospace;
@@ -934,14 +946,25 @@ g.node:focus-visible .node-card {
   color: var(--muted);
 }
 .node-card .meta .row { display: inline-flex; gap: 8px; align-items: baseline; }
-.node-card .meta .key { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; min-width: 38px; opacity: 0.85; }
+.node-card .meta .key {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  min-width: 38px; opacity: 0.85;
+}
 .node-card .meta .val { color: var(--ink-soft); font-weight: 500; }
 .node-card .meta:empty { display: none; }
 
-.node-card.judgment    { --accent-strong: var(--jdg-strong); --accent-tint: var(--jdg-tint); --accent-icon: var(--jdg-icon); }
-.node-card.exact-shell { --accent-strong: var(--shl-strong); --accent-tint: var(--shl-tint); --accent-icon: var(--shl-icon); }
-.node-card.exact-rest  { --accent-strong: var(--rst-strong); --accent-tint: var(--rst-tint); --accent-icon: var(--rst-icon); }
-.node-card.exact-code  { --accent-strong: var(--cod-strong); --accent-tint: var(--cod-tint); --accent-icon: var(--cod-icon); }
+.node-card.judgment {
+  --accent-strong: var(--jdg-strong); --accent-tint: var(--jdg-tint); --accent-icon: var(--jdg-icon);
+}
+.node-card.exact-shell {
+  --accent-strong: var(--shl-strong); --accent-tint: var(--shl-tint); --accent-icon: var(--shl-icon);
+}
+.node-card.exact-rest {
+  --accent-strong: var(--rst-strong); --accent-tint: var(--rst-tint); --accent-icon: var(--rst-icon);
+}
+.node-card.exact-code {
+  --accent-strong: var(--cod-strong); --accent-tint: var(--cod-tint); --accent-icon: var(--cod-icon);
+}
 
 /* ============== FOR EACH PARALLEL cluster (variant C: soft fill + chip pill) ============ */
 .viewer .mermaid svg .cluster rect {
@@ -1088,7 +1111,9 @@ g.node:focus-visible .node-card {
   color: var(--muted);
   min-width: 92px; flex-shrink: 0;
 }
-.viewer .v-panel .pair .v { color: var(--ink); font-family: 'Geist Mono', monospace; font-size: 12px; font-weight: 500; }
+.viewer .v-panel .pair .v {
+  color: var(--ink); font-family: 'Geist Mono', monospace; font-size: 12px; font-weight: 500;
+}
 .viewer .v-panel details { margin: 6px 0; }
 .viewer .v-panel details + details { border-top: 1px dashed var(--rule-soft); padding-top: 8px; }
 .viewer .v-panel details > summary {
@@ -1105,7 +1130,7 @@ g.node:focus-visible .node-card {
   width: 12px;
   display: inline-block;
 }
-.viewer .v-panel details[open] > summary::before { content: '−'; }
+.viewer .v-panel details[open] > summary::before { content: '\2212'; }
 .viewer .v-panel details > summary code { color: var(--ink); background: none; padding: 0; }
 .viewer .v-panel details .asserts {
   font-family: 'Geist Mono', monospace;
@@ -1171,7 +1196,9 @@ g.node:focus-visible .node-card {
 </div>
 <template id="banner-foreach">
   <div class="par-banner">
-    <span class="par-icon"><svg viewBox="0 0 24 24"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg></span>
+    <span class="par-icon"><svg viewBox="0 0 24 24"><line x1="6" y1="3" x2="6" y2="15"></line>"""
+    """<circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle>"""
+    """<path d="M18 9a9 9 0 0 1-9 9"></path></svg></span>
     <span class="par-text"></span>
     <span class="par-kicker"></span>
   </div>
@@ -1444,6 +1471,7 @@ window.addEventListener('load', () => {
 </body>
 </html>
 """
+)
 
 
 def to_html(graph: FlowGraph) -> str:

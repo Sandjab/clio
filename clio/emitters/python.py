@@ -12,24 +12,16 @@ import json
 from pathlib import Path
 
 from clio.emitters._python_helpers import (
-    _PYDANTIC_RESERVED_FIELDS,
-    _ast_to_python,
-    _collect_idents,
     _emit_attempt_block,
-    _field_from_schema,
-    _first_ident,
     _gives_validator_expr,
+    _has_parallel,
     _model_id,
-    _render_type_short,
-    _shape_from_schema,
+    _python_condition_expr,
     _step_signature,
-    _to_class_name,
     _to_field_name,
     _type_to_python,
     emit_contracts,
     emit_default_exact_step,
-    _has_parallel,
-    _python_condition_expr,
     emit_parallel_for_each_python,
     emit_rest_step,
     emit_shell_step,
@@ -38,9 +30,7 @@ from clio.emitters.base import BaseEmitter
 from clio.ir.graph import (
     ApiInvokeIR,
     CallIR,
-    ConditionIR,
     ContractIR,
-    FieldIR,
     FlowGraph,
     ForEachIR,
     IfBlockIR,
@@ -145,8 +135,9 @@ class PythonEmitter(BaseEmitter):
         graph: FlowGraph,
         contracts_by_name: dict[str, "ContractIR"],
     ) -> str:
-        from clio.emitters._claude_cli_helpers import _inline_schema, _render_prompt
         import json as _json
+
+        from clio.emitters._claude_cli_helpers import _inline_schema, _render_prompt
 
         params = _step_signature(step, contracts_by_name)
         ret_type = (
@@ -163,6 +154,8 @@ class PythonEmitter(BaseEmitter):
         # invoke.model overrides RESOURCES.models when set; otherwise the
         # RESOURCES.models list drives the escalate chain as before.
         invoke = step.invoke
+        models: tuple[str, ...]
+        models_full: tuple[str, ...]
         if isinstance(invoke, ApiInvokeIR):
             models = (invoke.model,)
             models_full = (invoke.model,)  # invoke.model is the raw provider ID
@@ -204,9 +197,9 @@ class PythonEmitter(BaseEmitter):
 
         header = [
             f'"""STEP {step.name} (judgment).',
-            f'',
-            f'Auto-generated. Do not edit; regenerate via `clio compile`.',
-            f'"""',
+            '',
+            'Auto-generated. Do not edit; regenerate via `clio compile`.',
+            '"""',
             "from __future__ import annotations",
             "",
             "import json",
@@ -217,11 +210,7 @@ class PythonEmitter(BaseEmitter):
             header += ["import os"]
         if cache_active:
             header += ["from pathlib import Path"]
-        header += [
-            "",
-        ] + provider_imports + [
-            "",
-        ]
+        header += ["", *provider_imports, ""]
         header += ["from ..clio_runtime import logging as _log", ""]
         if cache_active:
             header += ["from ..clio_runtime import cache as _cache", ""]
@@ -246,7 +235,11 @@ class PythonEmitter(BaseEmitter):
                 "def _serialize(response):",
                 '    """Re-serialize a validated response for cache storage."""',
                 "    if isinstance(response, list):",
-                "        return json.dumps([(item.model_dump() if hasattr(item, 'model_dump') else item) for item in response])",
+                (
+                    "        return json.dumps("
+                    "[(item.model_dump() if hasattr(item, 'model_dump') else item) for item in response]"
+                    ")"
+                ),
                 "    if hasattr(response, 'model_dump'):",
                 "        return json.dumps(response.model_dump())",
                 "    return json.dumps(response)",
@@ -316,8 +309,14 @@ class PythonEmitter(BaseEmitter):
                     chain_lines += [
                         "    if response is None and model_idx < len(_MODELS) - 1:",
                         "        model_idx += 1",
-                        f"        esc_key = _cache.cache_key('{step.name}', _MODELS[model_idx], prompt, _INLINED_SCHEMA)",
-                        f"        esc_hit = _cache.cache_lookup(cache_dir, '{step.name}', esc_key, {ttl_repr})",
+                        (
+                            f"        esc_key = _cache.cache_key('{step.name}', "
+                            f"_MODELS[model_idx], prompt, _INLINED_SCHEMA)"
+                        ),
+                        (
+                            f"        esc_hit = _cache.cache_lookup("
+                            f"cache_dir, '{step.name}', esc_key, {ttl_repr})"
+                        ),
                         "        if esc_hit is not None:",
                         "            try:",
                         f"                _ret = {result_class}(json.loads(esc_hit))",
@@ -330,7 +329,10 @@ class PythonEmitter(BaseEmitter):
                         "                pass  # stale escalate cache: fall through",
                         "        response = _attempt(_MODELS[model_idx], prompt)",
                         "        if response is not None:",
-                        f"            _cache.cache_store(cache_dir, '{step.name}', esc_key, _MODELS[model_idx], _serialize(response))",
+                        (
+                            f"            _cache.cache_store(cache_dir, '{step.name}', "
+                            f"esc_key, _MODELS[model_idx], _serialize(response))"
+                        ),
                         "",
                     ]
                 else:
@@ -341,13 +343,18 @@ class PythonEmitter(BaseEmitter):
                         "",
                     ]
             elif s.kind == "fallback":
+                assert s.fallback_step is not None
                 fb_name = s.fallback_step.name
                 kw_str = ", ".join(f"{t.name}={_to_field_name(t.name)}" for t in step.takes)
                 chain_lines += [
                     "    if response is None:",
                     f"        from . import {fb_name} as _{fb_name}_mod",
                     f"        fb_response = _{fb_name}_mod.{fb_name}({kw_str})",
-                    f"        response = {result_class}(fb_response if not isinstance(fb_response, str) else json.loads(fb_response))",
+                    (
+                        f"        response = {result_class}("
+                        f"fb_response if not isinstance(fb_response, str) "
+                        f"else json.loads(fb_response))"
+                    ),
                     "        fallback_used = True",
                     "",
                 ]
@@ -391,7 +398,7 @@ class PythonEmitter(BaseEmitter):
         chain_lines += [
             f'    _log.emit("step_end", step={step.name!r}, mode="judgment",',
             "              duration_ms=int((time.monotonic() - _t0) * 1000),",
-            f"              cache_hit=False, model=_MODELS[model_idx],",
+            "              cache_hit=False, model=_MODELS[model_idx],",
             f"              {fb_field}, success=True, **_last_usage)",
             "    return response",
         ]
@@ -458,7 +465,11 @@ class PythonEmitter(BaseEmitter):
             else:
                 _current.append(f"{indent}{call_line}")
 
-        def _emit_item(item, indent: str, scope_local: set[str]) -> None:
+        def _emit_item(
+            item: CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR,
+            indent: str,
+            scope_local: set[str],
+        ) -> None:
             # `abort("msg")` is a synthetic CallIR injected by the IR builder
             # only inside RESCUE bodies. It compiles to `raise FlowAborted(msg)`
             # regardless of context (rescue body root, or nested IF/MATCH/
@@ -474,6 +485,7 @@ class PythonEmitter(BaseEmitter):
                 if item.parallel:
                     _current.append(emit_parallel_for_each_python(item, steps_by_name, indent))
                     inner = item.body[0]
+                    assert isinstance(inner, CallIR)  # IR builder enforces
                     if inner.step_name not in imported_steps:
                         imported_steps.append(inner.step_name)
                     return
@@ -489,8 +501,8 @@ class PythonEmitter(BaseEmitter):
                 inner_indent = indent + "    "
                 if not item.body:
                     _current.append(f"{inner_indent}pass")
-                for sub in item.body:
-                    _emit_item(sub, inner_indent, inner_scope)
+                for child in item.body:
+                    _emit_item(child, inner_indent, inner_scope)
                 return
             if isinstance(item, IfBlockIR):
                 cond_expr = _python_condition_expr(item.condition, scope_local)
@@ -578,8 +590,8 @@ class PythonEmitter(BaseEmitter):
         for idx, group in enumerate(chain_groups, start=1):
             chain_body_parts.append(f"        if start_at < {idx}:")
             for line in group:
-                for sub in line.split("\n"):
-                    chain_body_parts.append("        " + sub)
+                for line_part in line.split("\n"):
+                    chain_body_parts.append("        " + line_part)
             chain_body_parts.append(f"            _persist_state({idx}, state)")
         chain_body = "\n".join(chain_body_parts)
         # FlowAborted is defined locally in the emitted flow module when at
@@ -637,15 +649,21 @@ class PythonEmitter(BaseEmitter):
             f'    if start_at > 0:\n'
             f'        path = os.environ.get("CLIO_STATE_FILE", "state.json")\n'
             f'        if not os.path.exists(path):\n'
-            f'            print(f\'[clio] resume requested (start_at={{start_at}}) but {{path}} missing\', file=sys.stderr)\n'
+            f'            print('
+            f'f\'[clio] resume requested (start_at={{start_at}}) but {{path}} missing\', '
+            f'file=sys.stderr)\n'
             f'            raise SystemExit(2)\n'
             f'        with open(path) as f:\n'
             f'            payload = json.load(f)\n'
             f'        if payload.get("flow") != {flow_name_lit}:\n'
-            f'            print(f\'[clio] state.json flow mismatch: expected {flow_name_lit}, got {{payload.get("flow")!r}}\', file=sys.stderr)\n'
+            f'            print('
+            f'f\'[clio] state.json flow mismatch: expected {flow_name_lit}, '
+            f'got {{payload.get("flow")!r}}\', file=sys.stderr)\n'
             f'            raise SystemExit(2)\n'
             f'        if payload.get("step_index", 0) < start_at:\n'
-            f'            print(f\'[clio] state.json only reached step {{payload.get("step_index", 0)}}, cannot resume from {{start_at}}\', file=sys.stderr)\n'
+            f'            print('
+            f'f\'[clio] state.json only reached step {{payload.get("step_index", 0)}}, '
+            f'cannot resume from {{start_at}}\', file=sys.stderr)\n'
             f'            raise SystemExit(2)\n'
             f'        if start_at >= TOTAL_STEPS:\n'
             f'            print(f\'[clio] start_at={{start_at}} >= total steps={{TOTAL_STEPS}}\', file=sys.stderr)\n'

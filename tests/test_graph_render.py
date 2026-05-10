@@ -1,11 +1,9 @@
 import json
 import re
-from pathlib import Path
 
 from clio.graph_render import to_dot, to_html, to_mermaid
 from clio.ir.builder import build_ir
 from clio.parser.parser import parse
-
 
 _FLOW_SRC = (
     "STEP detect_topic\n"

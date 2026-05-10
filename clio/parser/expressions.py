@@ -10,7 +10,6 @@ from clio.parser.ast_nodes import (
 )
 from clio.parser.tokens import Token, TokenType
 
-
 _ALLOWED_FUNCS = {"len"}
 _OP_TYPES = {
     TokenType.OP_EQ: "==",

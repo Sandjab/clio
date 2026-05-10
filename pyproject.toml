@@ -16,7 +16,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "anthropic>=0.40"]
+dev = [
+    "pytest>=7.0",
+    "anthropic>=0.40",
+    "ruff>=0.6",
+    "mypy>=1.10",
+]
 gen = ["anthropic>=0.40"]
 
 [project.scripts]
@@ -28,3 +33,19 @@ include = ["clio*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["tests/fixtures/expected"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["RUF043", "B017", "F841", "E501"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["clio"]
+ignore_missing_imports = true

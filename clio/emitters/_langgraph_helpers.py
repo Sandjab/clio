@@ -347,7 +347,7 @@ def emit_flow_module(
         "    return dict(result)",
     ])
 
-    sections = imports + [state_block, "", ""] + ["\n\n".join(node_wrappers)]
+    sections = [*imports, state_block, "", "", "\n\n".join(node_wrappers)]
     if router_funcs:
         sections += ["", "", "\n\n".join(router_funcs)]
     sections += ["", "", "\n".join(graph_lines), "", "", run_block, ""]

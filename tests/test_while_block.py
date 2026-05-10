@@ -11,7 +11,6 @@ import pytest
 from clio.ir.builder import IRBuildError, build_ir
 from clio.parser.parser import ParseError, parse
 
-
 _BASE_DECLS = (
     "CONTRACT draft_score\n"
     "  SHAPE: {text: str(max=2000), score: float}\n"
