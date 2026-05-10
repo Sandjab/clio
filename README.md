@@ -154,7 +154,7 @@ RESOURCES
 
 The compiler reads this and emits a runnable project with: a typed `CustomerRisk` Pydantic model with the `len(reason) > 0` assertion, a `detect_churn` step that calls the LLM with the inlined JSON Schema and a 24-hour cache, and a resilience chain — three retry attempts on Haiku, escalation to Sonnet (one attempt), fallback to the deterministic `detect_churn_naive` step, and finally `abort` with an explicit message. None of that wiring is hand-written.
 
-See [`examples/`](examples/) for the full set: `mvp.clio` (above), `entities.clio` (NER + summary, nested record types), `classify_corpus.clio` (FOR EACH + OpenAI-compat via LiteLLM / Gemini), `parallel_classify.clio` (FOR EACH PARALLEL), `ticket_routing.clio` (IF / MATCH branches), `critical_pipeline.clio` (ON_FAIL × RESCUE), `rest_advanced.clio` (auth, multipart, retries), `mcp_tool.clio` (MCP server consumer), `sql_demo.clio` (sqlite + auto-mapped GIVES), `rag_basic.clio` and `rag_selfcontained.clio`.
+See [`examples/`](examples/) for the full set: `mvp.clio` (above), `entities.clio` (NER + summary, nested record types), `classify_corpus.clio` (FOR EACH + OpenAI-compat via LiteLLM / Gemini), `parallel_classify.clio` (FOR EACH PARALLEL), `ticket_routing.clio` (IF / MATCH branches), `feedback_routing.clio` (moderation + nested IF / MATCH dispatch), `critical_pipeline.clio` (ON_FAIL × RESCUE), `rest_advanced.clio` (auth, multipart, retries), `mcp_tool.clio` (MCP server consumer), `sql_demo.clio` (sqlite + auto-mapped GIVES), `rag_basic.clio` and `rag_selfcontained.clio`.
 
 ## Project structure
 
