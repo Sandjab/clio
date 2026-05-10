@@ -50,8 +50,8 @@
 
 ### Tests
 
-- ~22 new tests covering parser, IR, emitters, and viewer for RESCUE.
-- Suite total: ~479 (up from 457 at v0.7).
+- 24 new tests covering parser, IR, emitters, and viewer for RESCUE.
+- Suite total: 481 (up from 457 at v0.7).
 
 ## v0.7.0 — 2026-05-10
 

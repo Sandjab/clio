@@ -597,6 +597,10 @@ flow.
   (`step_name.error` is reserved for v0.9+).
 - No `RESUME` keyword for fall-through; `abort` is the only legal
   terminator.
+- The standalone `clio graph --format mermaid` (and `--format dot`)
+  outputs intentionally omit the rescue cluster — only the rich
+  `--format html` viewer renders it. Use HTML when you need the
+  visual; standalone mermaid stays minimal for GitHub embedding.
 
 ### Worked example
 
