@@ -796,6 +796,13 @@ def test_emit_rest_body_multipart_routes_at_files_to_files(tmp_path):
     assert "_form: dict = {}" in body
     assert "if isinstance(_v, str) and _v.startswith('@'):" in body
     assert "_rest.content_type_for_path(_path)" in body
+    # File handle is closed via context manager (no fd leak across loop iterations).
+    assert "with open(_path, 'rb') as _f:" in body
+    # Cross-platform basename (Path(...).name handles `\` on Windows).
+    assert "Path(_path).name" in body
+    assert "_f.read()" in body
+    # The pathlib import is added on demand only when the body is multipart.
+    assert "from pathlib import Path" in body
 
 
 _SHELL_SRC = (

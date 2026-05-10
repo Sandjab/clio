@@ -419,7 +419,7 @@ class _Parser:
             return t.value
         if t.type == TokenType.NUMBER:
             self.advance()
-            return int(t.value) if "." not in t.value else float(t.value)
+            return float(t.value) if "." in t.value or "e" in t.value.lower() else int(t.value)
         if t.type == TokenType.DURATION:
             self.advance()
             return _duration_to_seconds(t.value)
@@ -444,7 +444,7 @@ class _Parser:
             return t.value
         if t.type == TokenType.NUMBER:
             self.advance()
-            return int(t.value) if "." not in t.value else float(t.value)
+            return float(t.value) if "." in t.value or "e" in t.value.lower() else int(t.value)
         if t.type == TokenType.DURATION:
             self.advance()
             return _duration_to_seconds(t.value)

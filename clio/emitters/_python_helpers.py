@@ -603,10 +603,11 @@ def emit_rest_step(
             )
             kwargs_lines.append("        if isinstance(_v, str) and _v.startswith('@'):")
             kwargs_lines.append("            _path = _v[1:]")
+            kwargs_lines.append("            with open(_path, 'rb') as _f:")
             kwargs_lines.append(
-                "            _files[_k] = ("
-                "_path.rsplit('/', 1)[-1], "
-                "open(_path, 'rb'), "
+                "                _files[_k] = ("
+                "Path(_path).name, "
+                "_f.read(), "
                 "_rest.content_type_for_path(_path))"
             )
             kwargs_lines.append("        else:")
@@ -674,6 +675,9 @@ def emit_rest_step(
             "    return response.json()",
         ]
         extra_imports = ""
+
+    if isinstance(impl.body, MultipartBodyIR):
+        extra_imports += "from pathlib import Path\n"
 
     contracts_import = (
         "from .. import contracts\n" if _uses_contract_refs(step) else ""

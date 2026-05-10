@@ -345,6 +345,38 @@ def test_claude_cli_emit_rest_step_full_parses_as_python(tmp_path):
     ast.parse(body)
 
 
+_CLI_REST_MULTIPART_SRC = (
+    "STEP upload\n"
+    "  TAKES: lab: str\n"
+    "  GIVES: r: str\n"
+    "  MODE:  exact\n"
+    "  impl:\n"
+    "    mode: rest\n"
+    "    method: POST\n"
+    '    url: "https://example.com/upload"\n'
+    '    body: {multipart: {label: "${lab}", file: "@./blob.bin"}}\n'
+    '    response_path: "x"\n'
+    "FLOW f\n"
+    '  upload(lab="cv")\n'
+)
+
+
+def test_claude_cli_emit_rest_multipart_uses_context_manager_and_pathlib(tmp_path):
+    import ast
+    ClaudeCLIEmitter().emit(build_ir(parse(_CLI_REST_MULTIPART_SRC)), tmp_path)
+    body = (tmp_path / "steps" / "01_upload.py").read_text()
+    # File handle is closed via context manager (no fd leak across loop iterations).
+    assert "with open(_path, 'rb') as _f:" in body
+    # Cross-platform basename — `Path` is already imported in the emitted script header.
+    assert "Path(_path).name" in body
+    assert "_f.read()" in body
+    # The legacy non-portable form must not survive.
+    assert "_path.rsplit('/', 1)[-1]" not in body
+    assert "open(_path, 'rb'), _rest.content_type_for_path" not in body
+    # And the file is still syntactically valid Python.
+    ast.parse(body)
+
+
 # --- impl: mode: shell emission --------------------------------------------
 
 _SHELL_SRC = (

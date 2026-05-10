@@ -191,9 +191,10 @@ def emit_rest_step_cli(step, impl, io_doc: str) -> str:
                 f"    for _k, _v in {tuple(impl.body.fields)!r}:",
                 "        if isinstance(_v, str) and _v.startswith('@'):",
                 "            _path = _v[1:]",
+                "            with open(_path, 'rb') as _f:",
                 (
-                    "            _files[_k] = (_path.rsplit('/', 1)[-1], "
-                    "open(_path, 'rb'), _rest.content_type_for_path(_path))"
+                    "                _files[_k] = (Path(_path).name, "
+                    "_f.read(), _rest.content_type_for_path(_path))"
                 ),
                 "        else:",
                 (
