@@ -23,7 +23,6 @@ from clio.ir.graph import (
     InvokeIR,
     MatchBlockIR,
     OnFailChainIR,
-    RescueBlockIR,
     RestImplIR,
     ShellImplIR,
     StepIR,
