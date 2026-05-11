@@ -4,7 +4,7 @@ Aujourd'hui, un système qui mêle code et LLM ressemble presque toujours à la 
 
 Chaque outil grand public résout une part du problème. DSPy optimise les prompts. LangGraph orchestre des agents. Outlines contraint les sorties. Prefect gère les flux. Aucun n'unifie code déterministe et raisonnement LLM dans **une seule abstraction lisible**.
 
-J'ai passé quelques mois sur une autre piste : et si on écrivait le pipeline dans un fichier source, et qu'un compilateur en émettait le projet exécutable ?
+Et si on écrivait le pipeline dans un fichier source, et qu'un compilateur en émettait le projet exécutable ?
 
 ## L'idée
 
