@@ -10,6 +10,7 @@ Each target is an emitter module that transforms the IR graph into a runnable pr
 | `python` | Implemented | Python package (Anthropic SDK + Pydantic v2) | Production-grade Python deployment | — |
 | `local` | Future | Same as `python`, with Ollama/vLLM | Offline / data-privacy constraints | High (Outlines/Guidance) |
 | `rust` | Future | Cargo async project | Performance-critical `exact` steps | High |
+| `go` | Future | Go module with goroutines + `net/http` | Concurrent `exact` steps, single static binary | Medium |
 | `docker` | Future | Multi-stage Dockerfile + compose | Mixed-language flows | Medium |
 | `hybrid` | Future | Claude CLI + precompiled binaries for `exact` | Heavy `exact` within CLI orchestration | Medium |
 | `mcp-server` | Implemented | MCP server, each FLOW exposed as a tool with sampling-based judgment | Native Anthropic ecosystem integration; turn a `.clio` into a structured MCP tool | — |
@@ -210,6 +211,16 @@ This is the only justified dependency on these libraries. Not day 1.
 **What it emits**: a Cargo project with async runtime.
 
 Steps marked `LANG: rust` or `LANG: auto` for large data compile to native Rust. Judgment steps compile to functions calling the Anthropic API via `reqwest`. Contracts compile to Rust structs with `serde` derive macros.
+
+---
+
+## `target: go` (Future)
+
+**What it emits**: a Go module with `go.mod`, an orchestrator `main.go`, and one package per step.
+
+Steps marked `LANG: go` or `LANG: auto` compile to native Go, with goroutines + channels for `parallel`/`foreach` blocks. Judgment steps compile to functions calling the Anthropic API via `net/http`. Contracts compile to Go structs with `json` tags, validated through generated JSON Schema checkers.
+
+Distribution sweet spot: a single static binary, no runtime to install — useful for CLI tools and side-cars where the `python` target's interpreter footprint is unwelcome.
 
 ---
 
