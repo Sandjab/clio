@@ -39,6 +39,7 @@ from clio.parser.ast_nodes import (
     TypeExpr,
 )
 
+
 def _format_condition_label(cond) -> str:
     """Render an IR condition (`ConditionIR` leaf or `BoolOpIR`) as a
     human-readable string for the Mermaid decision-diamond / subgraph

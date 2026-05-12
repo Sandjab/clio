@@ -49,7 +49,6 @@ from clio.parser.ast_nodes import (
     BoolOrExpr,
     CliInvoke,
     CodeImpl,
-    CompareExpr,
     ConstrainedType,
     ContractDecl,
     ContractRef,
