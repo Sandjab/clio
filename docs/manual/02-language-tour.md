@@ -132,9 +132,9 @@ FLOW ticket_routing
 - **`->`** — sequential: the right-hand step starts when the left-hand finishes, and may reference its outputs.
 - **`FOR EACH x IN xs:`** — sequential iteration. Today does not accumulate per-iteration results into state.
 - **`FOR EACH x IN xs PARALLEL AS results:`** — fan a step across the collection in parallel, collect typed results into `state[results]`. Default cap = 10 concurrent. Single body step in v0.
-- **`IF report.confidence < 0.7: ... ELSE: ...`** *(v0.7)* — conditional branching on a contract sub-field. Single comparison, no `and`/`or`. ELSE optional on python/mcp-server, required on langgraph.
+- **`IF report.confidence < 0.7: ... ELSE: ...`** *(v0.7, composed in v0.12)* — conditional branching on a contract sub-field. Since v0.12 multiple comparisons combine with the lowercase keywords `and` / `or` (Python precedence: `and` > `or`; parentheses override). No `not` yet — flip the comparator instead. ELSE optional on python/mcp-server, required on langgraph.
 - **`MATCH classification.category: CASE bug: ... DEFAULT: ...`** *(v0.7)* — multi-way dispatch on an enum sub-field. CASE values must match enum variants; DEFAULT optional (recommended; required on langgraph).
-- **`WHILE draft.score < 0.85 MAX 3: refine_draft(draft=draft)`** *(v0.7)* — bounded loop. MAX is mandatory; the loop exits when the condition turns false or after MAX iterations. Compiles to python/mcp-server only — langgraph rejects it (cyclic edges + state reducers planned for v0.8).
+- **`WHILE draft.score < 0.85 MAX 3: refine_draft(draft=draft)`** *(v0.7, composed in v0.12)* — bounded loop. MAX is mandatory; the loop exits when the condition turns false or after MAX iterations. Shares the IF grammar, so `and` / `or` work here too. Compiles to python/mcp-server only — langgraph rejects it (cyclic edges + state reducers planned for v0.8).
 
 ### Step calls
 

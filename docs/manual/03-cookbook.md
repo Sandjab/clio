@@ -185,6 +185,23 @@ Key idea: `IF <state_field>.<sub_field> <op> <literal>` reads a contract sub-fie
 
 `true` / `false` are recognised as bool literals on the right-hand side of a comparison.
 
+Need to combine two comparisons? Since v0.12 IF and WHILE accept the
+lowercase keywords `and` / `or` with optional parentheses. `and` binds
+tighter than `or`, so:
+
+```
+IF (report.confidence < 0.7 or report.confidence > 0.9)
+   and report.category == "bug":
+    human_review(report)
+ELSE:
+    auto_route(report)
+```
+
+triggers a human review when the classifier is *certain* of a bug
+**or** very *uncertain*, and falls through to the auto-routing path
+otherwise. There is no `not` keyword yet — flip the operator instead
+(`==` ↔ `!=`, `<` ↔ `>=`).
+
 ## 9. Bounded refine loop with WHILE MAX
 
 **Pattern:** generate a draft, iteratively refine it until a quality threshold is reached or a max iteration count is hit.
@@ -480,7 +497,11 @@ rejected at compile time in v0.11.
 ## What's not in the cookbook (yet)
 
 - **Multi-field ASSERT** — accept `a > b` between two fields. Specced, planned.
-- **Boolean `and`/`or` keywords in ASSERT and conditions** — natural extension of the chained-comparator desugaring.
+- **Boolean `and`/`or` keywords in ASSERT** — `and`/`or` already work
+  in IF / WHILE conditions since v0.12 (see recipe #8); the same
+  composition for ASSERT bodies is still planned.
+- **`not` keyword in conditions** — for now invert by flipping the
+  operator (`==` ↔ `!=`, `<` ↔ `>=`).
 - **`auto` MODE routing** — parsed, runtime decision not yet implemented.
 - **`.FAILS` postfix in IF conditions** — specced for failure-aware branching; for a multi-step failure handler today, see [recipe #10](#10-critical-llm-pipeline-with-on_fail--rescue).
 

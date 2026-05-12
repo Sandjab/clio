@@ -10,6 +10,7 @@ import keyword
 
 from clio.ir.graph import (
     ApiInvokeIR,
+    BoolOpIR,
     CallIR,
     CliInvokeIR,
     ContractIR,
@@ -1138,11 +1139,18 @@ def _has_parallel(chain) -> bool:
 
 
 def _python_condition_expr(condition, scope_local: set[str]) -> str:
-    """Render an IF/WHILE ConditionIR as a Python boolean expression.
+    """Render an IF/WHILE condition as a Python boolean expression.
 
-    Reads the contract field via attribute access (Pydantic models): if the
-    state field is in `scope_local` (e.g. inside a FOR EACH body) it's a bare
-    name, otherwise it's `state[<name>]`."""
+    Leaf comparisons (`ConditionIR`) read the contract field via attribute
+    access (Pydantic models); the base is a bare name when the state field
+    is in `scope_local` (e.g. inside a FOR EACH body), otherwise it's
+    `state[<name>]`. `BoolOpIR` nodes render as `(<left>) and/or (<right>)`
+    — the parentheses are unconditional so the emitted Python preserves
+    the IR's precedence regardless of nesting."""
+    if isinstance(condition, BoolOpIR):
+        left = _python_condition_expr(condition.left, scope_local)
+        right = _python_condition_expr(condition.right, scope_local)
+        return f"({left}) {condition.op} ({right})"
     base = (
         condition.step_name
         if condition.step_name in scope_local

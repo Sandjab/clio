@@ -72,6 +72,8 @@ class Keyword(StrEnum):
     AS = "AS"
     IF = "IF"
     ELSE = "ELSE"
+    AND = "and"
+    OR = "or"
     MATCH = "MATCH"
     CASE = "CASE"
     DEFAULT = "DEFAULT"

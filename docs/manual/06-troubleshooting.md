@@ -44,7 +44,16 @@ The `claude-cli` emitter explicitly rejects `FOR EACH ... PARALLEL AS` because b
 
 ### `IRBuildError: IF/WHILE condition reads X.Y but X is not a CONTRACT`
 
-You wrote `IF moderation.safe == true:` but `moderation` is a primitive (e.g. `bool`) — it has no nested fields to drill into. CLIO's IF/WHILE/MATCH conditions always read a contract sub-field, never a bare primitive.
+You wrote `IF moderation.safe == true:` but `moderation` is a primitive (e.g. `bool`) — it has no nested fields to drill into. CLIO's IF/WHILE/MATCH conditions always read a contract sub-field, never a bare primitive. The same rule applies to each leaf of a composed condition (`A and B or C` — every leaf is validated independently).
+
+### `ParseError: expected COLON, got KEYWORD 'and'` (or `'or'`)
+
+Two common shapes trigger this on an IF / WHILE line:
+
+- a missing right-hand operand: `IF report.confidence < 0.7 and:` — `and` must be followed by another comparison.
+- an unbalanced parenthesis: `IF (report.confidence < 0.7 and report.category == "bug":` swallows the closing `)`.
+
+**Fix:** make sure each `and` / `or` joins two complete comparisons and that opening parentheses are closed before the `:` terminator. Remember the precedence rule — `and` binds tighter than `or`, so `a or b and c` already means `a or (b and c)`; explicit parens are only needed when you want the opposite grouping.
 
 **Fix:** wrap the value in a CONTRACT (`CONTRACT moderation_check SHAPE: {safe: bool, ...}`) and reference it as `state_field.sub_field`.
 

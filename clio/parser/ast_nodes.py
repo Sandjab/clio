@@ -105,11 +105,11 @@ class IfBlock:
        ELSE:
            <else_body>      # optional
 
-    The condition is a single comparison `<step_name>.<field> <op> <literal>`
-    (no boolean conjunction in v0.7 — the chained-comparator desugaring of
-    ASSERT also stops at single comparisons here). `else_body` is `()` when
-    no ELSE branch is provided."""
-    condition: "CompareExpr"
+    Since v0.12 the condition may compose multiple comparisons with
+    `and` / `or` and optional parentheses; the AST is a `CompareExpr`,
+    a `BoolAndExpr`, or a `BoolOrExpr`. `else_body` is `()` when no ELSE
+    branch is provided."""
+    condition: "ExprNode"
     then_body: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock, ...]"
     else_body: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock, ...]"
     line: int
@@ -149,8 +149,10 @@ class WhileBlock:
 
     Bounded loop: re-evaluates <condition> after each body iteration; stops
     when the condition becomes false OR after MAX iterations (whichever
-    comes first). MAX is mandatory — unbounded loops are forbidden."""
-    condition: "CompareExpr"
+    comes first). MAX is mandatory — unbounded loops are forbidden. Since
+    v0.12 the condition shares the IF grammar (`and` / `or` with optional
+    parentheses)."""
+    condition: "ExprNode"
     max_iters: int
     body: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock, ...]"
     line: int
@@ -234,10 +236,18 @@ class CompareExpr(ExprNode):
 
 @dataclass(frozen=True)
 class BoolAndExpr(ExprNode):
-    """Conjunction of two boolean (compare) sub-expressions. Currently
-    produced only by chained comparator desugaring (`a <= b <= c` →
-    `(a <= b) and (b <= c)`); a future extension may parse explicit
-    `and` keywords."""
+    """Conjunction of two boolean sub-expressions. Produced by
+    chained-comparator desugaring inside ASSERT (`a <= b <= c` →
+    `(a <= b) and (b <= c)`) and by the explicit `and` keyword in
+    IF/WHILE conditions (v0.12+)."""
+    left: "ExprNode"
+    right: "ExprNode"
+
+
+@dataclass(frozen=True)
+class BoolOrExpr(ExprNode):
+    """Disjunction of two boolean sub-expressions. Produced by the
+    explicit `or` keyword in IF/WHILE conditions (v0.12+)."""
     left: "ExprNode"
     right: "ExprNode"
 

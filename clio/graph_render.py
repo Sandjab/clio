@@ -11,6 +11,7 @@ import json
 
 from clio.ir.graph import (
     ApiInvokeIR,
+    BoolOpIR,
     CacheConfigIR,
     CallIR,
     CliInvokeIR,
@@ -37,6 +38,54 @@ from clio.parser.ast_nodes import (
     RecordType,
     TypeExpr,
 )
+
+def _format_condition_label(cond) -> str:
+    """Render an IR condition (`ConditionIR` leaf or `BoolOpIR`) as a
+    human-readable string for the Mermaid decision-diamond / subgraph
+    label. Composite nodes always parenthesise their children so the
+    label is unambiguous regardless of IR nesting."""
+    if isinstance(cond, BoolOpIR):
+        left = _format_condition_label(cond.left)
+        right = _format_condition_label(cond.right)
+        return f"({left}) {cond.op} ({right})"
+    lit_repr = repr(cond.literal_value)
+    return f"{cond.step_name}.{cond.field} {cond.op} {lit_repr}"
+
+
+def _condition_to_meta(cond) -> dict:
+    """Serialise an IR condition to a plain dict consumed by the HTML
+    panel JS. Leaf comparisons expose the flat keys the existing viewer
+    already understands; composite (`BoolOpIR`) conditions expose an
+    `expr_tree` containing the recursive AST."""
+    if isinstance(cond, BoolOpIR):
+        return {"expr_tree": _condition_tree(cond)}
+    return {
+        "state_field": cond.step_name,
+        "sub_field": cond.field,
+        "op": cond.op,
+        "literal": cond.literal_value,
+        "literal_kind": cond.literal_kind,
+    }
+
+
+def _condition_tree(cond) -> dict:
+    """Recursive JSON-friendly serialisation used inside `expr_tree`. Each
+    leaf carries the same flat keys as a leaf `if_meta`, so the viewer
+    can render leaves uniformly whether they sit at the root or nested."""
+    if isinstance(cond, BoolOpIR):
+        return {
+            "op": cond.op,
+            "left": _condition_tree(cond.left),
+            "right": _condition_tree(cond.right),
+        }
+    return {
+        "state_field": cond.step_name,
+        "sub_field": cond.field,
+        "op": cond.op,
+        "literal": cond.literal_value,
+        "literal_kind": cond.literal_kind,
+    }
+
 
 _MERMAID_CLASSDEFS = (
     "    classDef judgment fill:#e3f2fd,stroke:#1976d2,color:#0d47a1",
@@ -565,20 +614,11 @@ def _to_mermaid_rich_labels(
                 state["if_idx"] += 1
                 dec_id = f"if_{state['if_idx']}"
                 cond = elem.condition
-                if_meta[dec_id] = {
-                    "state_field": cond.step_name,
-                    "sub_field": cond.field,
-                    "op": cond.op,
-                    "literal": cond.literal_value,
-                    "literal_kind": cond.literal_kind,
-                }
+                if_meta[dec_id] = _condition_to_meta(cond)
                 # Decision node — diamond shape via {{...}} (hexagon-ish)
                 # Mermaid renders it without a foreignObject; the viewer's
                 # JS swaps in a small chip-pill via if_meta.
-                lit_repr = repr(cond.literal_value)
-                cond_label = (
-                    f"{cond.step_name}.{cond.field} {cond.op} {lit_repr}"
-                )
+                cond_label = _format_condition_label(cond)
                 lines.append(f'{indent}{dec_id}{{"IF {cond_label}"}}')
                 for p in prev_ids:
                     lines.append(f"{indent}{p} --> {dec_id}")
@@ -603,19 +643,11 @@ def _to_mermaid_rich_labels(
                 state["while_idx"] += 1
                 w_id = f"while_{state['while_idx']}"
                 cond = elem.condition
-                while_meta[w_id] = {
-                    "state_field": cond.step_name,
-                    "sub_field": cond.field,
-                    "op": cond.op,
-                    "literal": cond.literal_value,
-                    "literal_kind": cond.literal_kind,
-                    "max_iters": elem.max_iters,
-                }
-                lit_repr = repr(cond.literal_value)
-                label = (
-                    f"WHILE {cond.step_name}.{cond.field} {cond.op} {lit_repr} "
-                    f"MAX {elem.max_iters}"
-                )
+                meta = _condition_to_meta(cond)
+                meta["max_iters"] = elem.max_iters
+                while_meta[w_id] = meta
+                cond_label = _format_condition_label(cond)
+                label = f"WHILE {cond_label} MAX {elem.max_iters}"
                 lines.append(f'{indent}subgraph {w_id}["{label}"]')
                 walk(elem.body, indent + "    ", [])
                 lines.append(f"{indent}end")

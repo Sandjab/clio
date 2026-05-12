@@ -120,6 +120,16 @@ def test_lex_new_keywords():
         assert k in keyword_values, f"missing keyword {k!r}"
 
 
+def test_lex_and_or_keywords():
+    """`and` and `or` are lowercase keywords used to compose IF/WHILE
+    conditions. They must lex as KEYWORD (not IDENT) so the parser can
+    distinguish them from contract / step identifiers."""
+    tokens = lex("a.x == 1 and b.y > 2 or c.z != 3\n")
+    keyword_values = [t.value for t in tokens if t.type == TokenType.KEYWORD]
+    assert "and" in keyword_values
+    assert "or" in keyword_values
+
+
 # ---- block scalar (`|` literal) — added for impl.sql.query ----------------
 
 
