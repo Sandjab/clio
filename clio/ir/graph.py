@@ -261,7 +261,7 @@ class ForEachIR:
 @dataclass(frozen=True)
 class ConditionIR:
     """A single comparison `<step_name>.<field> <op> <literal_value>` used as
-    the condition of an IF / WHILE block. The literal_kind tags the runtime
+    the leaf of an IF / WHILE condition. The literal_kind tags the runtime
     type of `literal_value` so emitters can format it correctly."""
     step_name: str
     field: str
@@ -271,10 +271,22 @@ class ConditionIR:
 
 
 @dataclass(frozen=True)
+class BoolOpIR:
+    """Boolean composition (`and` / `or`) of two condition sub-expressions
+    (each itself a `ConditionIR` or another `BoolOpIR`). Introduced in
+    v0.12; emitters render it recursively into the target language's
+    boolean operators."""
+    op: str                            # "and" | "or"
+    left: "ConditionIR | BoolOpIR"
+    right: "ConditionIR | BoolOpIR"
+
+
+@dataclass(frozen=True)
 class IfBlockIR:
     """IR mirror of IfBlock. `else_body` is `()` when no ELSE branch was
-    declared in the source."""
-    condition: ConditionIR
+    declared in the source. `condition` is a `ConditionIR` (single
+    comparison) or a `BoolOpIR` (composed with `and`/`or`, v0.12+)."""
+    condition: "ConditionIR | BoolOpIR"
     then_body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
     else_body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
     line: int
@@ -305,8 +317,9 @@ class MatchBlockIR:
 class WhileBlockIR:
     """IR mirror of WhileBlock. `max_iters` is the mandatory MAX bound; the
     runtime stops the loop when EITHER the condition turns false OR the body
-    has executed `max_iters` times."""
-    condition: ConditionIR
+    has executed `max_iters` times. `condition` shares the IF grammar (a
+    single `ConditionIR` or a `BoolOpIR` composing `and`/`or`)."""
+    condition: "ConditionIR | BoolOpIR"
     max_iters: int
     body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
     line: int

@@ -42,7 +42,7 @@ Where the table says *rejected at compile time*, the emitter raises a clear `Val
 v0 limitations carried forward, to be lifted in v0.3+:
 
 - `impl.shell` invokes argv-style (no shell pipes/redirections); the `cmd` string is `shlex.split` at compile time. Stdout is returned as a `str` unless `parse: json` is set (since v0.5). To use a pipeline (`cmd1 | cmd2`), wrap in a script and call that script.
-- `ASSERT` expressions support a single comparator clause or a **chained comparator** (`0.0 <= score <= 1.0`), which desugars to a left-associative `(a <= b) and (b <= c) and ...` per Python semantics. Boolean conjunction with explicit `and`/`or` keywords is not yet parsed (planned for v0.7). All chained sub-expressions must reference the same single field — multi-field asserts (e.g. `a > b`) remain rejected at emit time.
+- `ASSERT` expressions support a single comparator clause or a **chained comparator** (`0.0 <= score <= 1.0`), which desugars to a left-associative `(a <= b) and (b <= c) and ...` per Python semantics. Explicit `and`/`or` keywords land in **IF/WHILE** conditions in v0.12; ASSERT keeps the chained-comparator form only. All chained sub-expressions must reference the same single field — multi-field asserts (e.g. `a > b`) remain rejected at emit time.
 - `FOR EACH` body call results are not accumulated into state — the step is invoked for side effects only.
 - `invoke.api` requires single-model overrides (no escalate chain when `invoke.model` is set).
 
@@ -659,30 +659,49 @@ FOR EACH <loop_var> IN <collection> PARALLEL AS <collector>:
 - python target → `concurrent.futures.ThreadPoolExecutor(max_workers=10)` + `as_completed` (preserves order via indexed write).
 - mcp-server target → `asyncio.gather` + `asyncio.Semaphore(10)`. Judgment-mode body steps thread `_session=_session` per task.
 
-### IF / ELSE (v0.7)
+### IF / ELSE (v0.7, composed in v0.12)
 
-Conditional branching. The condition is a single comparison
+Conditional branching. A condition is a comparison
 `<state_field>.<sub_field> <op> <literal>` where `<op>` is one of
 `== != < <= > >=`, and `<literal>` is a string, number, bare-ident
 (enum value), or the bool literals `true` / `false`. The state_field must be
 a CONTRACT (so it has nested sub-fields exposed to the comparator). ELSE
-is optional. No boolean conjunction (`and`/`or`) in v0.7. For
-failure-aware branching (`.FAILS` shorthand), see RESCUE handlers (v0.8)
-below.
+is optional.
+
+Since v0.12 multiple comparisons can be combined with the lowercase
+keywords **`and`** / **`or`** and optional parentheses. Precedence
+follows Python: `and` binds tighter than `or`, so
 
 ```
-IF report.confidence < 0.7:
+IF report.confidence < 0.7 or report.confidence > 0.9 and report.category == "bug":
+```
+
+parses as `a or (b and c)`. Use parentheses to override:
+
+```
+IF (report.confidence < 0.7 or report.confidence > 0.9) and report.category == "bug":
     human_review(report)
 ELSE:
     auto_route(report)
 ```
+
+There is no `not` keyword yet — invert a single comparison by flipping
+its operator (`==` ↔ `!=`, `<` ↔ `>=`, …). Each leaf comparison is
+validated independently: an unknown state field or sub-field anywhere in
+the expression is rejected at IR-build time with the IF block's source
+line. For failure-aware branching (`.FAILS` shorthand), see RESCUE
+handlers (v0.8) below.
 
 Both branches see the same outer state; fields produced inside a branch
 do not "narrow" the type for downstream chain items (no implicit type
 narrowing in v0.7).
 
 Targets: python, mcp-server, langgraph (langgraph requires ELSE and
-exactly one step call per branch in v0.7).
+exactly one step call per branch in v0.7). The composed-condition form
+in v0.12 changes nothing about those branch-shape constraints — only
+the condition expression is richer; emitters render it as parenthesised
+`(left) and/or (right)` in Python (`add_conditional_edges`' router on
+LangGraph evaluates the same expression).
 
 ### MATCH / CASE / DEFAULT (v0.7)
 
@@ -704,7 +723,7 @@ come last; duplicate CASE values are rejected at IR build time.
 Targets: python (Python 3.10+ `match: case` natively), mcp-server (same,
 async), langgraph (each arm = exactly one step call; DEFAULT mandatory).
 
-### WHILE (v0.7)
+### WHILE (v0.7, composed in v0.12)
 
 Bounded conditional loop. The body re-evaluates the condition before each
 iteration; the loop exits when the condition turns false **or** after MAX
@@ -716,9 +735,17 @@ WHILE draft.score < 0.85 MAX 3:
     refine_draft(draft=draft)
 ```
 
-Body steps are expected to update the state field referenced by the
+Since v0.12 WHILE shares the IF condition grammar — `and` / `or` and
+parentheses compose multiple comparisons, e.g.
+
+```
+WHILE draft.score < 0.9 and draft.score > 0.1 MAX 5:
+    refine_draft(draft=draft)
+```
+
+Body steps are expected to update the state field(s) referenced by the
 condition for the loop to make progress (caller-side invariant; not
-validated in v0.7).
+validated by the compiler).
 
 Targets: python (`for _i in range(MAX): if not cond: break; body`),
 mcp-server (same, async). LangGraph **rejects WHILE** at compile time in

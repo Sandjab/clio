@@ -3,6 +3,7 @@ import sys
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
     ApiInvokeIR,
+    BoolOpIR,
     CacheConfigIR,
     CallIR,
     CliInvokeIR,
@@ -44,9 +45,10 @@ from clio.ir.graph import (
 from clio.ir.types import names_equal, types_equal
 from clio.parser.ast_nodes import (
     ApiInvoke,
+    BoolAndExpr,
+    BoolOrExpr,
     CliInvoke,
     CodeImpl,
-    CompareExpr,
     ConstrainedType,
     ContractDecl,
     ContractRef,
@@ -703,18 +705,26 @@ def _build_if_block(
 
 
 def _build_condition(
-    cond: CompareExpr,
+    cond,
     contracts: dict[str, ContractIR],
     available: dict[str, TypeExpr],
     line: int,
     col: int,
-) -> ConditionIR:
-    """Validate a CompareExpr representing an IF/WHILE condition.
+):
+    """Validate an IF/WHILE condition AST and return its IR equivalent.
 
-    Left must be a `FieldRefExpr` (`<state_field>.<sub_field>`); right must
-    be a literal node (StrExpr / IntExpr / FloatExpr / IdentExpr — the latter
-    treated as a bare-ident enum value).
+    The AST is either a `CompareExpr` (leaf) or a `BoolAndExpr` /
+    `BoolOrExpr` composing two sub-conditions. Composition is recursive
+    so each leaf still goes through the same validation (state field
+    exists, sub-field exists, RHS is a literal of a known kind).
+    Returns a `ConditionIR` for a leaf or a `BoolOpIR` for a composition.
     """
+    if isinstance(cond, (BoolAndExpr, BoolOrExpr)):
+        op = "and" if isinstance(cond, BoolAndExpr) else "or"
+        left_ir = _build_condition(cond.left, contracts, available, line, col)
+        right_ir = _build_condition(cond.right, contracts, available, line, col)
+        return BoolOpIR(op=op, left=left_ir, right=right_ir)
+
     if not isinstance(cond.left, FieldRefExpr):
         raise IRBuildError(
             f"line {line}:{col}: IF/WHILE condition must start with "

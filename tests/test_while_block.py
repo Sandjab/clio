@@ -87,6 +87,22 @@ def test_parser_while_rejects_float_max():
         parse(bad)
 
 
+def test_parser_while_supports_and_in_condition():
+    """v0.12: WHILE reuses the IF condition grammar, so `and` / `or`
+    compose comparisons here too."""
+    src = (
+        _BASE_DECLS
+        + 'FLOW main\n'
+        '    draft_initial(brief="x")\n'
+        '    -> WHILE draft.score < 0.9 and draft.score > 0.1 MAX 3:\n'
+        '        refine_draft(draft=draft)\n'
+    )
+    program = parse(src)
+    flow = next(d for d in program.decls if d.__class__.__name__ == "FlowDecl")
+    wblock = flow.chain[1]
+    assert wblock.condition.__class__.__name__ == "BoolAndExpr"
+
+
 # ----- IR builder ------------------------------------------------------------
 
 

@@ -1,5 +1,65 @@
 # Changelog
 
+## v0.12.0 — 2026-05-12
+
+### Language
+
+- **Boolean composition in IF / WHILE conditions**
+  (`docs/LANGUAGE_SPEC.md` §IF / ELSE, §WHILE): two new lowercase
+  keywords `and` and `or` compose comparisons inside an IF or WHILE
+  guard. Precedence follows Python — `and` binds tighter than `or`,
+  parentheses override. Up to v0.11 the guard was restricted to a
+  single comparison; the new grammar is a strict superset, so every
+  existing flow keeps parsing unchanged.
+
+  ```clio
+  IF (report.confidence < 0.7 or report.confidence > 0.9)
+     and report.category == "bug":
+      human_review(report)
+  ELSE:
+      auto_route(report)
+  ```
+
+  Each leaf comparison is still validated independently (unknown
+  state-field / sub-field rejected at IR-build time with the source
+  line of the IF / WHILE block). `not` is **not** introduced in this
+  release — invert a comparison by flipping its operator (`==` ↔
+  `!=`, `<` ↔ `>=`, …).
+
+### Parser
+
+- `parse_condition` is now a recursive-descent expression parser with
+  three levels: `or` < `and` < primary (`(...)` or atomic comparison).
+  WHILE reuses the same entry point, so the two control-flow blocks
+  stay in lock-step.
+
+### IR
+
+- New IR node `BoolOpIR(op, left, right)` (`op` ∈ `"and"` | `"or"`).
+  `IfBlockIR.condition` and `WhileBlockIR.condition` now accept
+  `ConditionIR | BoolOpIR`. Leaf `ConditionIR` is unchanged, so all
+  existing IR consumers that read flat keys (`step_name`, `field`,
+  `op`, `literal_value`, `literal_kind`) still work on single
+  comparisons.
+
+### Emitters
+
+- `_python_helpers._python_condition_expr` walks the new IR tree
+  recursively and renders boolean composition as parenthesised
+  `(left) and (right)` / `(left) or (right)`, so the python /
+  mcp-server / langgraph targets all emit valid Python whatever the
+  IR nesting. LangGraph's router function evaluates the same
+  expression and routes to the matching branch label.
+
+### Graph viewer
+
+- The Mermaid decision diamond (IF) and subgraph label (WHILE) now
+  carry the full composed expression, parenthesised. `if_meta` /
+  `while_meta` continue to expose flat keys for leaf comparisons
+  (backward-compatible with the existing panel JS); composite
+  conditions are serialised under a new `expr_tree` key (recursive
+  dict) the viewer can render however it likes.
+
 ## v0.11.0 — 2026-05-10
 
 ### Language

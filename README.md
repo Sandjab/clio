@@ -6,7 +6,7 @@
 [![Last commit](https://img.shields.io/github/last-commit/Sandjab/clio)](https://github.com/Sandjab/clio/commits/main)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-%E2%89%A53.12-blue.svg)](https://www.python.org)
-[![Version](https://img.shields.io/badge/Version-v0.11.0-green.svg)](https://github.com/Sandjab/clio/releases/tag/v0.11.0)
+[![Version](https://img.shields.io/badge/Version-v0.12.0-green.svg)](https://github.com/Sandjab/clio/releases/tag/v0.12.0)
 [![Visitors](https://komarev.com/ghpvc/?username=sandjab-clio&label=Visitors&color=0e75b6&style=flat)](https://github.com/Sandjab/clio)
 
 CLIO is a declarative language that compiles hybrid LLM/code programs into executable projects. You describe *what* you want — the compiler decides *what runs as code and what runs as an LLM*, then emits a project you can run directly.
@@ -184,10 +184,10 @@ docs/
 
 ## Current status
 
-**v0.11.0 (current)**: **4 compilation targets** (`claude-cli`, `python`, `mcp-server`, `langgraph`). **651 unit tests + 13 gated e2e.**
+**v0.12.0 (current)**: **4 compilation targets** (`claude-cli`, `python`, `mcp-server`, `langgraph`). **669 unit tests + 13 gated e2e.**
 
 What's in the language today:
-- **Control flow**: sequential chains, `FOR EACH`, `FOR EACH ... PARALLEL AS <name>`, `IF/ELSE`, `MATCH/CASE/DEFAULT`, `WHILE ... MAX N`.
+- **Control flow**: sequential chains, `FOR EACH`, `FOR EACH ... PARALLEL AS <name>`, `IF/ELSE` (with `and` / `or` composition since v0.12), `MATCH/CASE/DEFAULT`, `WHILE ... MAX N` (composed conditions in v0.12 too).
 - **Resilience**: `CACHE: ttl(...)`, `ON_FAIL: retry(N) then escalate then fallback(...) then abort(...)`, multi-step `RESCUE` handlers (v0.8).
 - **EXACT implementations** (`impl:` block):
   - `impl.mode: rest` — full HTTP (5 body forms: JSON / raw / `@file` / form-urlencoded / multipart, `query`/`headers` templating, `env:NAME` auth, `retry: { backoff: exponential | constant }` with `Retry-After` honored, `response_path` JSONPath).

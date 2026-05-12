@@ -2,6 +2,8 @@ from urllib.parse import urlparse
 
 from clio.parser.ast_nodes import (
     ApiInvoke,
+    BoolAndExpr,
+    BoolOrExpr,
     CacheConfig,
     CliInvoke,
     CodeImpl,
@@ -2162,7 +2164,39 @@ class _Parser:
         self.expect(TokenType.INDENT)
         return self._parse_block_chain()
 
-    def parse_condition(self) -> CompareExpr:
+    def parse_condition(self):
+        """Top-level IF/WHILE condition. Since v0.12 the grammar supports
+        explicit `and` / `or` keywords with Python-like precedence (`and`
+        binds tighter than `or`) and optional parentheses. The returned
+        node is one of: CompareExpr, BoolAndExpr, BoolOrExpr."""
+        return self._parse_cond_or()
+
+    def _parse_cond_or(self):
+        left = self._parse_cond_and()
+        while self.peek().type == TokenType.KEYWORD and self.peek().value == "or":
+            self.advance()
+            right = self._parse_cond_and()
+            left = BoolOrExpr(left=left, right=right)
+        return left
+
+    def _parse_cond_and(self):
+        left = self._parse_cond_primary()
+        while self.peek().type == TokenType.KEYWORD and self.peek().value == "and":
+            self.advance()
+            right = self._parse_cond_primary()
+            left = BoolAndExpr(left=left, right=right)
+        return left
+
+    def _parse_cond_primary(self):
+        """Parenthesised sub-expression or an atomic comparison."""
+        if self.peek().type == TokenType.LPAREN:
+            self.advance()
+            inner = self._parse_cond_or()
+            self.expect(TokenType.RPAREN)
+            return inner
+        return self._parse_atomic_compare()
+
+    def _parse_atomic_compare(self) -> CompareExpr:
         """`<step_name>.<field> <op> <literal>`. <op> ∈ {==, !=, >, >=, <, <=}.
         <literal> ∈ string | int | float | bare-ident (treated as enum value)."""
         step_tok = self.expect(TokenType.IDENT)
