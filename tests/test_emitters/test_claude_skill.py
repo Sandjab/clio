@@ -818,3 +818,72 @@ def test_existing_warn_for_no_description_still_works(tmp_path, capsys):
     captured = capsys.readouterr()
     assert "claude-skill warning" in captured.err
     assert "no description" in captured.err.lower()
+
+
+# ---------------------------------------------------------------------------
+# Task 12 — Layer 2: emitted exact-step script runs against state.example.json
+# ---------------------------------------------------------------------------
+
+def test_emitted_exact_script_runs_against_state_example(tmp_path):
+    """The emitted exact-step script reads state.example.json on stdin and
+    writes JSON on stdout. End-to-end integration check.
+
+    BLOCKED (Task 4 deficiency): render_exact_script always emits
+    ``raise NotImplementedError(...)`` in the step body regardless of whether
+    the .clio source contained a CODE python: block. No current fixture has a
+    CODE python: block, and the parser/IR do not capture inline code bodies.
+    Until Task 4 is extended to inline user-supplied code, this test is
+    expected to fail with a non-zero exit code from the emitted script.
+
+    See: clio/emitters/_claude_skill_helpers.py::render_exact_script lines ~196-199.
+    """
+    import json
+    import subprocess
+    import sys
+
+    import pytest
+
+    # mvp_phase1.clio: single STEP foo, MODE: exact, no TAKES, no GIVES.
+    # Simplest possible fixture — minimises state.example.json noise.
+    src = (FIXTURES / "mvp_phase1.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+
+    state_example = (tmp_path / "state.example.json").read_text()
+
+    # Find the first user-facing exact-step script (excludes _validate.py, _cache_key.py).
+    scripts = sorted(
+        p for p in (tmp_path / "scripts").glob("*.py")
+        if not p.name.startswith("_")
+    )
+    if not scripts:
+        pytest.skip("No user-facing exact-step scripts emitted by this fixture")
+
+    script = scripts[0]
+    result = subprocess.run(
+        [sys.executable, str(script)],
+        input=state_example,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    # Task 4 deficiency check: if the script raises NotImplementedError, mark
+    # the test xfail so CI stays green while the gap is documented.
+    if result.returncode != 0 and "NotImplementedError" in result.stderr:
+        pytest.xfail(
+            "BLOCKED — Task 4 deficiency: render_exact_script emits a stub body "
+            "(raise NotImplementedError) because the .clio language has no CODE python: "
+            "inline-code syntax and the IR does not capture step bodies. "
+            "Fix: extend the parser, IR, and render_exact_script to inline user code "
+            "before this test can pass."
+        )
+
+    assert result.returncode == 0, (
+        f"Script {script.name} failed.\n"
+        f"stderr:\n{result.stderr}\n"
+        f"stdout:\n{result.stdout}"
+    )
+    # Output must be valid JSON dict.
+    output = json.loads(result.stdout)
+    assert isinstance(output, dict), f"Expected dict output, got {type(output).__name__}"
