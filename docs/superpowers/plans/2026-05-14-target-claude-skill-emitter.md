@@ -647,6 +647,225 @@ git commit -am "feat(claude-skill): emit exact-step Python scripts + SKILL.md se
 
 ---
 
+## Task 4b: Bundle runtime helpers `_validate.py` and `_cache_key.py`
+
+These bundled helpers keep the emitted skill self-contained (no PyPI dep at runtime) and make cache-key generation deterministic (no LLM-hashing-in-prose). Added in response to Gemini PR #11 review comments #3 and #4.
+
+**Files:**
+- Modify: `clio/emitters/_claude_skill_helpers.py` (add `render_bundled_validate_script`, `render_bundled_cache_key_script`)
+- Modify: `clio/emitters/claude_skill.py` (write both scripts to `scripts/` in `emit`)
+- Test: `tests/test_emitters/test_claude_skill.py`
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+def test_validate_helper_is_bundled(tmp_path):
+    src = (FIXTURES / "mvp_phase1.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    validate_py = tmp_path / "scripts" / "_validate.py"
+    assert validate_py.exists()
+    body = validate_py.read_text()
+    assert "import json" in body
+    assert "import sys" in body
+    # Must not blow up if jsonschema is missing — stdlib fallback
+    assert "try:" in body and "jsonschema" in body
+
+
+def test_cache_key_helper_is_bundled(tmp_path):
+    src = (FIXTURES / "mvp_phase1.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    key_py = tmp_path / "scripts" / "_cache_key.py"
+    assert key_py.exists()
+    body = key_py.read_text()
+    assert "hashlib" in body
+    assert "sha256" in body
+
+
+def test_validate_helper_runs_against_real_schema(tmp_path):
+    """Layer 2 check: the bundled validator must actually work."""
+    import subprocess
+    src = (FIXTURES / "mvp_phase2.clio").read_text()  # has at least one schema
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    schema_path = next((tmp_path / "schemas").glob("*.output.json"))
+    schema = json.loads(schema_path.read_text())
+    # Build a trivially-valid instance from the schema's properties:
+    instance = {k: _zero_value_for(s) for k, s in schema.get("properties", {}).items()}
+    (tmp_path / "out.json").write_text(json.dumps(instance))
+    result = subprocess.run(
+        ["python", str(tmp_path / "scripts" / "_validate.py"),
+         str(tmp_path / "out.json"), str(schema_path)],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, f"validator failed: {result.stderr}"
+
+
+def _zero_value_for(schema):
+    t = schema.get("type")
+    return {"string": "", "integer": 0, "number": 0.0, "boolean": False,
+            "array": [], "object": {}}.get(t, None)
+```
+
+- [ ] **Step 2: Run, verify red**
+
+- [ ] **Step 3: Implement `render_bundled_validate_script`**
+
+In `_claude_skill_helpers.py`:
+
+```python
+BUNDLED_VALIDATE_PY = '''\
+#!/usr/bin/env python3
+"""Bundled JSON Schema validator for CLIO-emitted skills.
+
+Usage: python _validate.py <instance.json> <schema.json>
+Exits 0 if valid, non-zero with a human-readable message otherwise.
+
+Prefers the `jsonschema` PyPI package when available; falls back to a
+minimal stdlib check (type + required + property types) so the skill
+remains usable on bare Python installs.
+"""
+from __future__ import annotations
+import json
+import sys
+from pathlib import Path
+
+
+def _stdlib_validate(instance, schema, path="$"):
+    t = schema.get("type")
+    if t == "object":
+        if not isinstance(instance, dict):
+            raise ValueError(f"{path}: expected object, got {type(instance).__name__}")
+        for req in schema.get("required", []):
+            if req not in instance:
+                raise ValueError(f"{path}: missing required field '{req}'")
+        for k, sub in schema.get("properties", {}).items():
+            if k in instance:
+                _stdlib_validate(instance[k], sub, f"{path}.{k}")
+    elif t == "array":
+        if not isinstance(instance, list):
+            raise ValueError(f"{path}: expected array, got {type(instance).__name__}")
+        items_schema = schema.get("items")
+        if items_schema:
+            for i, item in enumerate(instance):
+                _stdlib_validate(item, items_schema, f"{path}[{i}]")
+    elif t == "string":
+        if not isinstance(instance, str):
+            raise ValueError(f"{path}: expected string")
+    elif t == "integer":
+        if not isinstance(instance, int) or isinstance(instance, bool):
+            raise ValueError(f"{path}: expected integer")
+    elif t == "number":
+        if not isinstance(instance, (int, float)) or isinstance(instance, bool):
+            raise ValueError(f"{path}: expected number")
+    elif t == "boolean":
+        if not isinstance(instance, bool):
+            raise ValueError(f"{path}: expected boolean")
+
+
+def main() -> int:
+    if len(sys.argv) != 3:
+        print("usage: _validate.py <instance.json> <schema.json>", file=sys.stderr)
+        return 2
+    instance = json.loads(Path(sys.argv[1]).read_text())
+    schema = json.loads(Path(sys.argv[2]).read_text())
+    try:
+        import jsonschema  # type: ignore
+        jsonschema.validate(instance, schema)
+    except ImportError:
+        try:
+            _stdlib_validate(instance, schema)
+        except ValueError as e:
+            print(f"validation error: {e}", file=sys.stderr)
+            return 1
+    except Exception as e:
+        print(f"validation error: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+
+
+def render_bundled_validate_script() -> str:
+    return BUNDLED_VALIDATE_PY
+```
+
+- [ ] **Step 4: Implement `render_bundled_cache_key_script`**
+
+```python
+BUNDLED_CACHE_KEY_PY = '''\
+#!/usr/bin/env python3
+"""Bundled deterministic cache-key generator for CLIO-emitted skills.
+
+Usage: python _cache_key.py <state.json> <step_name> <key_fields_json>
+Emits SHA256 hex on stdout.
+
+`key_fields_json` is a JSON array of dotted paths into <state.json>
+(e.g. '["customer.id", "order.items"]'). Missing paths are treated as
+null, which deterministically participates in the hash.
+"""
+from __future__ import annotations
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+
+def _get(state, dotted_path):
+    cur = state
+    for part in dotted_path.split("."):
+        if isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        else:
+            return None
+    return cur
+
+
+def main() -> int:
+    if len(sys.argv) != 4:
+        print("usage: _cache_key.py <state.json> <step_name> <key_fields_json>", file=sys.stderr)
+        return 2
+    state = json.loads(Path(sys.argv[1]).read_text())
+    step_name = sys.argv[2]
+    key_fields = json.loads(sys.argv[3])
+    payload = {"step": step_name, "inputs": {p: _get(state, p) for p in key_fields}}
+    canon = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    print(hashlib.sha256(canon).hexdigest())
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+
+
+def render_bundled_cache_key_script() -> str:
+    return BUNDLED_CACHE_KEY_PY
+```
+
+- [ ] **Step 5: Wire in `emit` (write both helpers to `scripts/`)**
+
+In `claude_skill.py`'s `emit`, after `(output_dir / "scripts").mkdir(exist_ok=True)`:
+
+```python
+        (output_dir / "scripts" / "_validate.py").write_text(render_bundled_validate_script())
+        (output_dir / "scripts" / "_cache_key.py").write_text(render_bundled_cache_key_script())
+```
+
+- [ ] **Step 6: Run, verify green**
+
+- [ ] **Step 7: Commit**
+
+```bash
+git commit -am "feat(claude-skill): bundle _validate.py and _cache_key.py runtime helpers"
+```
+
+---
+
 ## Task 5: STEP `judgment` — prompt template + output schema + SKILL.md section
 
 **Files:**
@@ -743,11 +962,11 @@ def render_judgment_step_section(step, idx: int, lang: str = "en") -> str:
         f"Steps:\n"
         f"1. Read `prompts/{idx:02d}_{step.name}.md`, substitute `{{{{state.x}}}}` "
         f"placeholders from `state.json`.\n"
-        f"2. Generate an output as the assistant.\n"
-        f"3. Write the generated output to `out.json`, then validate:\n\n"
-        f"        python -m jsonschema -i out.json schemas/{idx:02d}_{step.name}.output.json\n\n"
-        f"4. If valid: merge into `state.json` under `state.{step.name}`.\n"
-        f"5. If invalid: see RESCUE/RETRY section below if present, "
+        f"2. Generate an output as the assistant, save verbatim to `out.json`.\n"
+        f"3. Validate using the bundled helper:\n\n"
+        f"        python scripts/_validate.py out.json schemas/{idx:02d}_{step.name}.output.json\n\n"
+        f"4. If exit 0 (valid): merge into `state.json` under `state.{step.name}`.\n"
+        f"5. If exit ≠ 0 (invalid): see RESCUE/RETRY section below if present, "
         f"otherwise stop.\n\n"
         "Tick the corresponding TodoWrite todo.\n\n"
     )
@@ -1047,14 +1266,20 @@ Three small string-renderers. Each must:
 Code sketch (use the same pattern as the previous renderers):
 
 ```python
-def render_cache_block(step) -> str:
+def render_cache_block(step, lang: str = "en") -> str:
     if not step.cache:
         return ""
+    label = {"en": "Cache", "fr": "Mise en cache"}[lang]
+    # Serialize the cache-key fields as JSON for the bundled helper invocation.
+    import json as _json
+    key_fields_json = _json.dumps(step.cache.key_fields)  # adapt attr name to actual IR
     return (
-        "**Cache**: before executing, check `.cache/{slug}.json`. "
-        "If present and the cache key formula `{formula}` matches the current state, "
-        "skip execution and merge the cached output into `state.json`.\n\n"
-    ).format(slug=step.name, formula=step.cache.key)
+        f"**{label}**: before executing, compute the cache key:\n\n"
+        f"    KEY=$(python scripts/_cache_key.py state.json '{step.name}' '{key_fields_json}')\n\n"
+        f"If `.cache/{step.name}_${{KEY}}.json` exists, skip execution and merge its "
+        f"contents into `state.json` under `state.{step.name}`. Otherwise run normally "
+        f"and write the output to `.cache/{step.name}_${{KEY}}.json` after success.\n\n"
+    )
 ```
 
 - [ ] **Step 4: Wire into the step renderers** (append the CACHE/RETRY blocks at the end of each step section if present).
@@ -1439,7 +1664,8 @@ The following list captures spec items vs tasks. If any row is unchecked, add a 
 | `state.example.json` | Task 3 |
 | `README.md` | Task 3 |
 | STEP exact → `scripts/NN_<name>.py` + SKILL.md section | Task 4 |
-| STEP judgment → `prompts/NN_<name>.md` + `schemas/NN_<name>.output.json` + SKILL.md section | Task 5 |
+| Bundled runtime helpers `_validate.py` + `_cache_key.py` (Gemini #3 + #4) | Task 4b |
+| STEP judgment → `prompts/NN_<name>.md` + `schemas/NN_<name>.output.json` + SKILL.md section (validation via `scripts/_validate.py`) | Task 5 |
 | Contract input schemas (TAKES) | Task 6 |
 | Contract output schemas (GIVES) | Task 5 |
 | Control structures IF / MATCH | Task 7 |
@@ -1450,6 +1676,6 @@ The following list captures spec items vs tasks. If any row is unchecked, add a 
 | Layer 2 test (exec exact script) | Task 12 |
 | Docs (COMPILATION_TARGETS, cookbook, troubleshooting, CHANGELOG, manual) | Task 13 |
 | E2E goldens on 3 representative fixtures including v0.13 regression | Task 14 |
-| FR/EN language heuristic | Task 4 (Step 5) |
+| FR/EN language heuristic (incl. "Cache" → "Mise en cache", Gemini #2) | Task 4 (Step 5), Task 9 (Step 3) |
 | Targeted duplication of `_python_helpers.py` (no import across emitters) | Task 4 / Task 5 |
 | No edits to `parser/`, `ir/`, other emitters | Verified at each commit via `git diff --stat` |
