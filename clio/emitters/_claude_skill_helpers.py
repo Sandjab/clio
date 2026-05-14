@@ -826,7 +826,7 @@ def render_state_example(graph: FlowGraph) -> str:
     Format: {"step01": {}, "step02": {}, ...} — keyed by top-level step name,
     in source order.
     """
-    state = {step.name: {} for step in graph.steps}
+    state: dict[str, dict] = {step.name: {} for step in graph.steps}
     return json.dumps(state, indent=2) + "\n"
 
 
