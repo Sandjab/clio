@@ -162,8 +162,18 @@ def _shape_from_schema(schema: dict) -> list[tuple[str, dict]]:
 def _field_from_schema(name: str, schema: dict) -> str:
     py_name = _to_field_name(name)
     py_type = _json_type_to_python(schema)
+    # Build a list of Field(...) kwargs so we can compose alias + max_length
+    # uniformly. Pydantic v2 needs `alias=` (and `validation_alias=`) so the
+    # original CLIO field name still parses from JSON input when py_name was
+    # renamed to avoid a Python-keyword collision.
+    field_kwargs: list[str] = []
+    if py_name != name:
+        field_kwargs.append(f"alias={name!r}")
+        field_kwargs.append(f"validation_alias={name!r}")
     if schema.get("type") == "string" and "maxLength" in schema:
-        return f"{py_name}: {py_type} = Field(max_length={schema['maxLength']})"
+        field_kwargs.append(f"max_length={schema['maxLength']}")
+    if field_kwargs:
+        return f"{py_name}: {py_type} = Field({', '.join(field_kwargs)})"
     return f"{py_name}: {py_type}"
 
 

@@ -78,8 +78,10 @@ def test_field_from_schema_simple():
 
 
 def test_field_from_schema_keyword_name():
+    # Renamed field carries an alias back to the original CLIO name so the
+    # LLM-emitted JSON (which uses the source name `class`) still parses.
     result = _field_from_schema("class", {"type": "string"})
-    assert result == "class_: str"
+    assert result == "class_: str = Field(alias='class', validation_alias='class')"
 
 
 def test_field_from_schema_max_length():

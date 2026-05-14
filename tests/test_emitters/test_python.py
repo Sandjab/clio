@@ -432,6 +432,41 @@ def test_emit_chained_assert_validates_at_runtime(tmp_path):
         Scored.model_validate({"score": 1.1})
 
 
+def test_emit_field_validator_handles_python_keyword_field_name(tmp_path):
+    """A CONTRACT field whose CLIO name is a Python keyword (`class`,
+    `return`, …) gets renamed to `<name>_` by `_to_field_name`. The
+    emitted @field_validator must target the renamed Python name, not
+    the raw CLIO name, otherwise Pydantic raises PydanticUserError at
+    import time because the targeted field doesn't exist on the model.
+    """
+    src = (
+        "CONTRACT row\n"
+        "  SHAPE:  {return: int}\n"
+        "  ASSERT: return > 0\n"
+        "STEP load\n"
+        "  GIVES: r: List<row>\n"
+        "  MODE:  exact\n"
+        "FLOW f\n"
+        "  load()\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    contracts_path = tmp_path / "f" / "contracts.py"
+    body = contracts_path.read_text()
+    # The decorator must target the renamed Python field name.
+    assert "@field_validator('return_')" in body
+    # And the validator body's local must use the renamed name too.
+    assert "return_ = v" in body
+
+    # End-to-end: importing the module must not raise PydanticUserError,
+    # and the validator must actually fire on out-of-range values.
+    mod = _load_module("clio_kw_field_test", contracts_path)
+    Row = mod.Row
+    assert Row.model_validate({"return": 5}).return_ == 5
+    import pydantic
+    with pytest.raises(pydantic.ValidationError):
+        Row.model_validate({"return": 0})
+
+
 def test_emit_rejects_multifield_assert(tmp_path):
     """Latent #2: ASSERT referencing more than one field would generate a
     @field_validator whose body references idents not in scope at runtime

@@ -85,7 +85,11 @@ def _ast_to_python(node: dict) -> str:
     """
     kind = node.get("kind")
     if kind == "ident":
-        return node["name"]
+        # Names emitted as Python identifiers must be renamed if they
+        # collide with a Python keyword (the CONTRACT field has been
+        # renamed to <name>_ by _to_field_name, and the validator body
+        # references it as a local variable initialised from `v`).
+        return _to_field_name(node["name"])
     if kind == "int":
         return repr(node["value"])
     if kind == "float":
@@ -397,13 +401,14 @@ def emit_contracts(graph) -> str:
                     f"single-field ASSERTs in v0.3"
                 )
             target_field = _first_ident(c.assert_json_ast)
+            py_field = _to_field_name(target_field)
             expr = _ast_to_python(c.assert_json_ast)
             lines += [
                 "",
-                f'    @field_validator({target_field!r})',
+                f'    @field_validator({py_field!r})',
                 "    @classmethod",
                 f"    def _assert_{c.name}(cls, v):",
-                f"        {target_field} = v",
+                f"        {py_field} = v",
                 f"        if not {expr}:",
                 f'            raise ValueError("ASSERT failed: " + {expr!r})',
                 "        return v",
