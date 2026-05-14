@@ -705,6 +705,51 @@ clio compile two_flows.clio --target python --output ./out --flow analyze_only
 `--flow` is only required when there's ambiguity; single-FLOW files
 work as before.
 
+## Recipe: Refine loop (writer + critic)
+
+When you want an LLM to revise its own output until a quality bar is met,
+the canonical CLIO pattern is two judgment steps in a bounded `WHILE` loop:
+one writer step, one critic step.
+
+```
+CONTRACT verdict
+  SHAPE:  {score: float, missing_points: List<str(max=200)>, verdict: enum(accept|refine)}
+  ASSERT: 0.0 <= score <= 1.0
+
+STEP draft   ... MODE: judgment   invoke: { mode: api, protocol: anthropic, model: sonnet }
+STEP judge   ... GIVES: review: verdict   MODE: judgment   invoke: { mode: api, protocol: anthropic, model: haiku }
+STEP refine  ... TAKES: ..., review: verdict   MODE: judgment   invoke: { mode: api, protocol: anthropic, model: sonnet }
+
+FLOW refine_loop
+    draft(...)
+    -> judge(...)
+    -> WHILE review.score < 0.85 and review.verdict == "refine" MAX 3:
+        refine(..., review=review)
+        -> judge(...)
+    -> finalize(...)
+```
+
+**Three things to notice:**
+
+1. **The critic returns a record, not just a score.** Passing the whole
+   `review` record into `refine` is how the writer reads
+   `missing_points` -- kwargs at the flow level are simple identifiers,
+   not dotted paths (the latter is only allowed inside `RESCUE` bodies).
+2. **The body re-judges at the end of each pass.** Without that re-judge
+   the loop condition would be stale and `WHILE` could run all `MAX`
+   times even after acceptance.
+3. **`MAX` is a hard ceiling.** A loop that exhausts `MAX 3` without
+   reaching `score >= 0.85` still produces a valid final draft --
+   `MAX`-reached is normal output, not failure. Use a `final_summary`
+   contract with an `iterations: int` field if you want to surface
+   this to callers.
+
+**Naming caveat:** the field name `judgment` is a CLIO keyword (the value
+of `MODE: judgment`), so you cannot name a contract instance `judgment`.
+Use `review`, `verdict_out`, `critique`, or similar.
+
+A complete, runnable project: [`examples/projects/01-iterative-refiner/`](../../examples/projects/01-iterative-refiner/). The committed `expected_output/` lets you read the compiled `flow.py` (the `WHILE` becomes a bounded `for _i in range(3): if not cond: break` loop) without installing anything.
+
 ## What's not in the cookbook (yet)
 
 - **Multi-field ASSERT** — accept `a > b` between two fields. Specced, planned.
