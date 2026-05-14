@@ -11,6 +11,7 @@ from clio.ir.graph import (
     ConditionIR,
     ContractIR,
     DatabaseSpecIR,
+    ErrorAccessIR,
     FieldIR,
     FileBodyIR,
     FlowGraph,
@@ -54,6 +55,7 @@ from clio.parser.ast_nodes import (
     ContractRef,
     DatabaseSpec,
     EnumType,
+    ErrorAccessExpr,
     FieldRefExpr,
     FileBody,
     FloatExpr,
@@ -668,7 +670,18 @@ def _build_call(
                     f"flow provides {_render(ref_type)}"
                 )
 
-    return CallIR(step_name=call.name, kwargs=call.kwargs, line=call.line)
+    new_kwargs: list[tuple[str, object]] = []
+    for name, value in call.kwargs:
+        if isinstance(value, ErrorAccessExpr):
+            ir_value: object = ErrorAccessIR(
+                rescued_step=value.step_name,
+                field=value.field,
+                line=value.line,
+            )
+        else:
+            ir_value = value
+        new_kwargs.append((name, ir_value))
+    return CallIR(step_name=call.name, kwargs=tuple(new_kwargs), line=call.line)
 
 
 def _build_if_block(

@@ -4,7 +4,7 @@ See docs/superpowers/specs/2026-05-10-rescue-handler-design.md."""
 import pytest
 
 from clio.ir.builder import IRBuildError, build_ir
-from clio.ir.graph import RescueBlockIR
+from clio.ir.graph import ErrorAccessIR, RescueBlockIR
 from clio.keywords import Keyword
 from clio.parser.ast_nodes import ErrorAccessExpr, FlowDecl, RescueBlock, ResumeAst, StepCall
 from clio.parser.parser import parse
@@ -480,6 +480,20 @@ RESOURCES
   target: python
   models: [haiku]
 """
+
+
+def test_ir_builds_error_access():
+    """ErrorAccessExpr kwargs in a RESCUE body become ErrorAccessIR in the IR."""
+    program = _parse(ERROR_ACCESS_SRC)
+    graph = build_ir(program)
+    rescue = graph.flow.rescues[0]
+    notify_ir = rescue.body[0]
+    kwargs = dict(notify_ir.kwargs)
+    assert isinstance(kwargs["reason"], ErrorAccessIR)
+    assert kwargs["reason"].rescued_step == "detect"
+    assert kwargs["reason"].field == "message"
+    assert isinstance(kwargs["err_type"], ErrorAccessIR)
+    assert kwargs["err_type"].field == "type"
 
 
 def test_parse_resume_terminator():

@@ -244,6 +244,17 @@ class CallIR:
 
 
 @dataclass(frozen=True)
+class ErrorAccessIR:
+    """`<rescued_step>.error.<field>` reference resolved inside a RESCUE
+    body. `rescued_step` MUST equal the step protected by the enclosing
+    RESCUE handler. `field` MUST be one of {"message", "type"} (both
+    validated at IR build time)."""
+    rescued_step: str
+    field: str
+    line: int
+
+
+@dataclass(frozen=True)
 class ForEachIR:
     """IR mirror of ForEachBlock: iterate `loop_var` over `collection` (a state
     field name), executing `body` for each element.
