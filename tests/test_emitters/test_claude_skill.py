@@ -9,6 +9,7 @@ To regenerate goldens after intentional changes:
 """
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -158,7 +159,10 @@ def test_exact_step_script_is_autonomous(tmp_path):
     src = (FIXTURES / "mvp_phase1.clio").read_text()
     graph = build_ir(parse(src))
     ClaudeSkillEmitter().emit(graph, tmp_path)
-    script = next((tmp_path / "scripts").glob("*.py")).read_text()
+    script = next(
+        p for p in sorted((tmp_path / "scripts").glob("*.py"))
+        if not p.name.startswith("_")
+    ).read_text()
     assert "import sys" in script
     assert "import json" in script
     assert "json.load(sys.stdin)" in script
@@ -215,10 +219,9 @@ def test_validate_helper_runs_against_real_schema(tmp_path):
     instance_path = tmp_path / "instance.json"
     instance_path.write_text(json.dumps({"name": "hello"}))
     result = subprocess.run(
-        [".venv/bin/python", str(tmp_path / "scripts" / "_validate.py"),
+        [sys.executable, str(tmp_path / "scripts" / "_validate.py"),
          str(instance_path), str(schema_path)],
         capture_output=True, text=True, timeout=10,
-        cwd="/Users/jean-paulgavini/Documents/Dev/clio",
     )
     assert result.returncode == 0, f"validator failed: {result.stderr}"
 
@@ -233,10 +236,9 @@ def test_cache_key_helper_produces_sha256_hex(tmp_path):
     state_path = tmp_path / "state.json"
     state_path.write_text(json.dumps({"customer": {"id": "c1"}, "order": {"items": [1, 2, 3]}}))
     result = subprocess.run(
-        [".venv/bin/python", str(tmp_path / "scripts" / "_cache_key.py"),
+        [sys.executable, str(tmp_path / "scripts" / "_cache_key.py"),
          str(state_path), "fetch_customer", '["customer.id", "order.items"]'],
         capture_output=True, text=True, timeout=10,
-        cwd="/Users/jean-paulgavini/Documents/Dev/clio",
     )
     assert result.returncode == 0, f"cache-key failed: {result.stderr}"
     key = result.stdout.strip()
