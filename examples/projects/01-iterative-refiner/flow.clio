@@ -1,0 +1,85 @@
+# 01-iterative-refiner -- writer + critic refine loop on a single article.
+#
+# Two LLM roles cooperate: a writer drafts and refines a summary, a critic
+# scores it on fidelity (no claims absent from the source) and coverage
+# (key points of the source represented). The loop terminates when the
+# critic's score crosses 0.85 or after 3 refine passes.
+
+CONTRACT summary_judgment
+  SHAPE:  {score: float, missing_points: List<str(max=200)>, verdict: enum(accept|refine)}
+  ASSERT: 0.0 <= score <= 1.0
+
+CONTRACT final_summary
+  SHAPE:  {text: str(max=4000), iterations: int, final_score: float}
+  ASSERT: iterations >= 1
+
+STEP load_article
+  TAKES: file:    str
+  GIVES: article: str
+  MODE:  exact
+
+STEP draft_summary
+  TAKES:       article: str
+  GIVES:       draft:   str
+  MODE:        judgment
+  DESCRIPTION: "Write the first draft of a faithful 150-200 word summary of the article."
+  STRATEGIES:  "Cover the main historical facts (who, when, what, why it mattered). Do not introduce claims absent from the source."
+  CACHE:       ttl(7d)
+  ON_FAIL:     retry(3) then escalate then abort("draft_summary failed")
+  invoke:
+    mode:     api
+    protocol: anthropic
+    model:    sonnet
+
+STEP judge_summary
+  TAKES:       article: str, draft: str
+  GIVES:       review: summary_judgment
+  MODE:        judgment
+  DESCRIPTION: "Score the draft against the article on fidelity (no hallucination) and coverage (key facts represented)."
+  STRATEGIES:  "score = mean(fidelity, coverage). Fidelity = 1 if no claim in the draft is absent from the article; deduct for each unsupported claim. Coverage = 1 if every key fact of the article appears; deduct for each missing key fact. verdict = 'accept' iff score >= 0.85, else 'refine'. missing_points lists up to 5 short labels of facts the writer should add or correct."
+  CACHE:       ttl(7d)
+  ON_FAIL:     retry(3) then escalate then abort("judge_summary failed")
+  invoke:
+    mode:     api
+    protocol: anthropic
+    model:    haiku
+
+STEP refine_summary
+  TAKES:       article: str, draft: str, review: summary_judgment
+  GIVES:       draft:    str
+  MODE:        judgment
+  DESCRIPTION: "Revise the draft to address review.missing_points while keeping it faithful to the article and within ~200 words."
+  STRATEGIES:  "Read review.missing_points and integrate each item in the revised draft. Do not invent supporting details. If a missing_point cannot be supported by the article, omit it rather than fabricate. Ignore review.score; the loop terminates on it, the writer does not need to react to it."
+  CACHE:       ttl(7d)
+  ON_FAIL:     retry(3) then escalate then abort("refine_summary failed")
+  invoke:
+    mode:     api
+    protocol: anthropic
+    model:    sonnet
+
+STEP finalize
+  TAKES: draft:    str, review: summary_judgment
+  GIVES: result:   final_summary
+  MODE:  exact
+
+FLOW iterative_refiner
+    load_article(file="article.txt")
+    -> draft_summary(article=article)
+    -> judge_summary(article=article, draft=draft)
+    -> WHILE review.score < 0.85 and review.verdict == "refine" MAX 3:
+        refine_summary(article=article, draft=draft, review=review)
+        -> judge_summary(article=article, draft=draft)
+    -> finalize(draft=draft, review=review)
+
+TEST refine_loop_terminates_with_known_article:
+  FLOW: iterative_refiner
+  WITH:
+    file: "data/article.txt"
+  EXPECTS:
+    result:   not_empty
+    draft:    not_empty
+    review:   not_empty
+
+RESOURCES
+  target: python
+  models: [haiku, sonnet, opus]
