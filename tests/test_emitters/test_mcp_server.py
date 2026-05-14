@@ -788,7 +788,7 @@ def test_mcp_emitter_rescue_error_access_async(tmp_path):
     """async helper signature takes _err; substitutions identical to python."""
     MCPServerEmitter().emit(build_ir(parse(_RESCUE_ERROR_ACCESS_SRC)), tmp_path)
     flow_py = (tmp_path / "pipeline" / "flow.py").read_text()
-    assert "async def _rescue_detect(state: dict, _err: BaseException, _session) -> None:" in flow_py
+    assert "async def _rescue_detect(state: dict, _err: BaseException, _session=None) -> None:" in flow_py
     assert "except Exception as _err:" in flow_py
     assert "await _rescue_detect(state, _err, _session=_session)" in flow_py
     assert "reason=str(_err)" in flow_py
@@ -837,4 +837,4 @@ def test_mcp_emitter_rescue_resume_terminator_async(tmp_path):
     flow_py = (tmp_path / "pipeline" / "flow.py").read_text()
     assert "state['report'] = await _rescue_detect(state, _err, _session=_session)" in flow_py
     assert "return state['report']" in flow_py
-    assert "async def _rescue_detect(state: dict, _err: BaseException, _session) -> object:" in flow_py
+    assert "async def _rescue_detect(state: dict, _err: BaseException, _session=None) -> object:" in flow_py

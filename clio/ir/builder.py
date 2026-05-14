@@ -608,12 +608,10 @@ def _build_rescue(
             )
         rescued_step_ir = steps_by_name[decl.step_name]
         rescued_gives = rescued_step_ir.gives
-        if rescued_gives is None or rescued_gives.name != _last.field_name:
-            known_r = ([rescued_gives.name] if rescued_gives is not None else [])
+        if rescued_gives is None:
             raise IRBuildError(
                 f"line {_last.line}: RESUME({_last.fallback_step}.{_last.field_name}): "
-                f"rescued step {decl.step_name!r} has no GIVES field "
-                f"{_last.field_name!r} (got: {sorted(known_r)})"
+                f"rescued step {decl.step_name!r} has no GIVES field"
             )
         if not (
             types_equal(fb_gives.type, rescued_gives.type, contracts)

@@ -718,3 +718,43 @@ RESOURCES
     assert isinstance(last, ResumeIR)
     assert last.fallback_step == "recover"
     assert last.field_name == "report"
+
+
+def test_ir_accepts_resume_with_renamed_fallback_field():
+    """RESUME where fallback's GIVES field name differs from rescued's GIVES
+    field name (but types match) must succeed after C2."""
+    src = """
+STEP load
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE:  exact
+
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  judgment
+
+STEP recover
+  TAKES: rows: List<int>
+  GIVES: alt_report: str
+  MODE:  exact
+
+FLOW pipeline
+  load(path="data.csv")
+    -> detect(rows=rows)
+
+  RESCUE detect:
+    -> recover(rows=rows)
+    -> RESUME(recover.alt_report)
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+    program = _parse(src)
+    graph = build_ir(program)
+    rescue = graph.flow.rescues[0]
+    last = rescue.body[-1]
+    assert isinstance(last, ResumeIR)
+    assert last.fallback_step == "recover"
+    assert last.field_name == "alt_report"

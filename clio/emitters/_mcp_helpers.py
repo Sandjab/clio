@@ -468,7 +468,7 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
         terminator = rb.body[-1]
         ret_ann = "object" if isinstance(terminator, ResumeIR) else "None"
         rescue_helpers.append(
-            f"async def _rescue_{rb.step_name}(state: dict, _err: BaseException, _session) -> {ret_ann}:\n"
+            f"async def _rescue_{rb.step_name}(state: dict, _err: BaseException, _session=None) -> {ret_ann}:\n"
             + rescue_body
             + "\n"
         )
