@@ -49,6 +49,37 @@ def _to_field_name(name: str) -> str:
     return name
 
 
+def _render_system_prompt(step: StepIR) -> list[str]:
+    """Render the `_SYSTEM_PROMPT = (...)` block for a judgment step.
+
+    Always emits the strict JSON-only directive. When the step declares
+    DESCRIPTION or STRATEGIES (v0.15), appends them as a labelled section
+    so the model can use them as judgment context without being misled
+    about the output contract. Output is byte-identical to the pre-v0.15
+    emitter when neither field is set.
+
+    Shared by the python and mcp-server targets — both emit the same
+    `_SYSTEM_PROMPT` module constant, so the v0.15 enrichment applies
+    uniformly. Was previously python-only; mcp-server compiled the
+    legacy literal, silently dropping DESCRIPTION/STRATEGIES."""
+    legacy = [
+        "_SYSTEM_PROMPT = (",
+        "    'You are a strict JSON-only API. Output exactly one JSON document matching '",
+        "    'the requested schema, with no prose, no markdown code fences, no commentary, '",
+        "    'and no leading or trailing whitespace beyond the JSON itself.'",
+        ")",
+    ]
+    if not step.description and not step.strategies:
+        return legacy
+    extras: list[str] = []
+    if step.description:
+        extras.append("Step intent: " + step.description.replace("\n", " "))
+    if step.strategies:
+        extras.append("Heuristics:\n" + step.strategies)
+    suffix = "\n\n" + "\n\n".join(extras)
+    return [*legacy[:-1], f"    {suffix!r}", legacy[-1]]
+
+
 def _safe_package_name(graph: FlowGraph, default: str) -> str:
     """Return a Python-importable package name derived from `graph.flow.name`.
 

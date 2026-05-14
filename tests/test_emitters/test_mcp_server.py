@@ -838,3 +838,51 @@ def test_mcp_emitter_rescue_resume_terminator_async(tmp_path):
     assert "state['report'] = await _rescue_detect(state, _err, _session=_session)" in flow_py
     assert "return state['report']" in flow_py
     assert "async def _rescue_detect(state: dict, _err: BaseException, _session=None) -> object:" in flow_py
+
+
+# -- DESCRIPTION / STRATEGIES injection (v0.15) — was python-only before fix #2 --
+
+
+def test_mcp_emit_injects_description_into_system_prompt(tmp_path):
+    """A judgment step's DESCRIPTION must surface inside the emitted
+    `_SYSTEM_PROMPT`, same as the python target. Pre-fix #2 the mcp-server
+    target compiled a hard-coded legacy prompt that silently dropped the
+    field, causing same-source / different-target behaviour drift."""
+    src = (
+        "STEP analyze\n"
+        '  DESCRIPTION: "score risk on a cohort"\n'
+        "  TAKES: rows: str\n  GIVES: risks: str\n  MODE: judgment\n"
+        "FLOW p\n  analyze(rows=\"x\")\n"
+    )
+    MCPServerEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "p" / "steps" / "analyze.py").read_text()
+    assert "Step intent: score risk on a cohort" in body
+
+
+def test_mcp_emit_injects_strategies_into_system_prompt(tmp_path):
+    src = (
+        "STEP analyze\n"
+        "  STRATEGIES: |\n"
+        "    - prefer high-recency signals\n"
+        "  TAKES: rows: str\n  GIVES: risks: str\n  MODE: judgment\n"
+        "FLOW p\n  analyze(rows=\"x\")\n"
+    )
+    MCPServerEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "p" / "steps" / "analyze.py").read_text()
+    assert "Heuristics:" in body
+    assert "prefer high-recency signals" in body
+
+
+def test_mcp_emit_no_description_keeps_legacy_prompt(tmp_path):
+    """Without DESCRIPTION/STRATEGIES the mcp-server target keeps emitting
+    the v0.14 legacy `_SYSTEM_PROMPT` literal verbatim."""
+    src = (
+        "STEP analyze\n"
+        "  TAKES: rows: str\n  GIVES: risks: str\n  MODE: judgment\n"
+        "FLOW p\n  analyze(rows=\"x\")\n"
+    )
+    MCPServerEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "p" / "steps" / "analyze.py").read_text()
+    assert "Step intent:" not in body
+    assert "Heuristics:" not in body
+    assert "    'You are a strict JSON-only API." in body
