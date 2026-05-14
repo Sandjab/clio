@@ -507,8 +507,8 @@ class PythonEmitter(BaseEmitter):
                 _current.append(f"{indent}    {call_line}")
                 _current.append(f"{indent}except FlowAborted:")
                 _current.append(f"{indent}    raise")
-                _current.append(f"{indent}except Exception:")
-                _current.append(f"{indent}    _rescue_{step.name}(state)")
+                _current.append(f"{indent}except Exception as _err:")
+                _current.append(f"{indent}    _rescue_{step.name}(state, _err)")
                 _current.append(f"{indent}    raise")
             else:
                 _current.append(f"{indent}{call_line}")
@@ -621,7 +621,7 @@ class PythonEmitter(BaseEmitter):
             for sub in rb.body:
                 _emit_item(sub, "    ", set())
             rescue_helpers.append(
-                f"def _rescue_{rb.step_name}(state: dict) -> None:\n"
+                f"def _rescue_{rb.step_name}(state: dict, _err: BaseException) -> None:\n"
                 + "\n".join(_current)
                 + "\n"
             )

@@ -1792,6 +1792,43 @@ def test_python_runtime_rescue_aborts(tmp_path):
                 del sys.modules[k]
 
 
+def test_python_emitter_rescue_abort_helper_takes_err(tmp_path):
+    """Helper signature includes `_err`, wrapper binds `as _err` and passes it."""
+    src = """STEP load
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE:  exact
+
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  judgment
+
+STEP notify
+  TAKES: channel: str
+  GIVES: sent: bool
+  MODE:  exact
+
+FLOW pipeline
+  load(path="x.csv")
+    -> detect(rows=rows)
+
+  RESCUE detect:
+    -> notify(channel="#a")
+    -> abort("boom")
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+    graph = build_ir(parse(src))
+    PythonEmitter().emit(graph, tmp_path)
+    flow_py = (tmp_path / "pipeline" / "flow.py").read_text()
+    assert "def _rescue_detect(state: dict, _err: BaseException) -> None:" in flow_py
+    assert "except Exception as _err:" in flow_py
+    assert "_rescue_detect(state, _err)" in flow_py
+
+
 # --- impl.mode: mcp_tool emission (v0.10) -----------------------------------
 
 _MCP_PY_SRC = (
