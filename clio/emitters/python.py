@@ -38,6 +38,7 @@ from clio.ir.graph import (
     ForEachIR,
     IfBlockIR,
     MatchBlockIR,
+    ErrorAccessIR,
     McpServerSpecIR,
     McpToolImplIR,
     RestImplIR,
@@ -476,7 +477,16 @@ class PythonEmitter(BaseEmitter):
                 imported_steps.append(step.name)
             kw_parts = []
             for name, value in call.kwargs:
-                if isinstance(value, str) and value.startswith("@"):
+                if isinstance(value, ErrorAccessIR):
+                    if value.field == "message":
+                        kw_parts.append(f"{name}=str(_err)")
+                    elif value.field == "type":
+                        kw_parts.append(f"{name}=type(_err).__name__")
+                    else:
+                        raise AssertionError(
+                            f"unreachable: ErrorAccessIR field {value.field!r}"
+                        )
+                elif isinstance(value, str) and value.startswith("@"):
                     ref = value[1:]
                     if ref in scope_local:
                         kw_parts.append(f"{name}={ref}")

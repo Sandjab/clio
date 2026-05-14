@@ -1829,6 +1829,42 @@ RESOURCES
     assert "_rescue_detect(state, _err)" in flow_py
 
 
+def test_python_emitter_rescue_error_access_substitutions(tmp_path):
+    """ErrorAccessIR kwargs emit str(_err) / type(_err).__name__ in _rescue_ helper."""
+    src = """
+STEP load
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE:  exact
+
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  judgment
+
+STEP notify
+  TAKES: channel: str, reason: str, err_type: str
+  GIVES: sent: bool
+  MODE:  exact
+
+FLOW pipeline
+  load(path="x") -> detect(rows=rows)
+
+  RESCUE detect:
+    -> notify(channel="#a", reason=detect.error.message, err_type=detect.error.type)
+    -> abort("boom")
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+    graph = build_ir(parse(src))
+    PythonEmitter().emit(graph, tmp_path)
+    flow_py = (tmp_path / "pipeline" / "flow.py").read_text()
+    assert "reason=str(_err)" in flow_py
+    assert "err_type=type(_err).__name__" in flow_py
+
+
 # --- impl.mode: mcp_tool emission (v0.10) -----------------------------------
 
 _MCP_PY_SRC = (
