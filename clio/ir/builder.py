@@ -478,6 +478,36 @@ def _scope_before_step(
     return scope
 
 
+def _validate_error_accesses(body_items: list, rescued_step_name: str) -> None:
+    """Walk a RESCUE body's IR items and validate every ErrorAccessIR found.
+
+    Rules:
+    - `rescued_step` must equal `rescued_step_name` (the step this RESCUE protects).
+    - `field` must be one of {"message", "type"}.
+
+    Only walks direct (top-level) CallIR kwargs; nested block builders call
+    _build_rescue which invokes this helper for their own body slices.
+    """
+    _VALID_ERROR_FIELDS = {"message", "type"}
+    for item in body_items:
+        if not isinstance(item, CallIR):
+            continue
+        for _kname, value in item.kwargs:
+            if not isinstance(value, ErrorAccessIR):
+                continue
+            if value.rescued_step != rescued_step_name:
+                raise IRBuildError(
+                    f"line {value.line}: <step>.error.<field>: can only reference "
+                    f"the step protected by this RESCUE "
+                    f"(got {value.rescued_step!r}, expected {rescued_step_name!r})"
+                )
+            if value.field not in _VALID_ERROR_FIELDS:
+                raise IRBuildError(
+                    f"line {value.line}: unknown error field {value.field!r}, "
+                    f"expected one of {sorted(_VALID_ERROR_FIELDS)}"
+                )
+
+
 def _build_rescue(
     decl: RescueBlock,
     steps_by_name: dict[str, StepIR],
@@ -539,6 +569,9 @@ def _build_rescue(
     body_items = _build_flow_items(
         decl.body, steps_by_name, contracts, body_scope, in_rescue=True,
     )
+
+    # (6) ErrorAccessIR cross-step and unknown-field validation.
+    _validate_error_accesses(body_items, decl.step_name)
 
     # (5) Body terminal abort (top-level only — abort buried in nested
     #     IF/MATCH/WHILE/FOR EACH branches does NOT count).
@@ -673,6 +706,10 @@ def _build_call(
     new_kwargs: list[tuple[str, object]] = []
     for name, value in call.kwargs:
         if isinstance(value, ErrorAccessExpr):
+            if not in_rescue:
+                raise IRBuildError(
+                    f"line {value.line}: step.error.<field> is only valid inside a RESCUE handler"
+                )
             ir_value: object = ErrorAccessIR(
                 rescued_step=value.step_name,
                 field=value.field,

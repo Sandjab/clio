@@ -505,3 +505,58 @@ def test_parse_resume_terminator():
     assert isinstance(last, ResumeAst)
     assert last.fallback_step == "recover"
     assert last.field_name == "report"
+
+
+# ---------------------------------------------------------------------------
+# T7: ErrorAccessIR validation rules
+# ---------------------------------------------------------------------------
+
+
+def test_ir_rejects_error_access_cross_step():
+    """`<other_step>.error.X` where other_step is not the rescued step → reject."""
+    src = ERROR_ACCESS_SRC.replace(
+        "reason=detect.error.message",
+        "reason=load.error.message",
+    )
+    program = _parse(src)
+    with pytest.raises(IRBuildError) as exc:
+        build_ir(program)
+    assert "can only reference the step protected by this RESCUE" in str(exc.value)
+
+
+def test_ir_rejects_error_access_unknown_field():
+    src = ERROR_ACCESS_SRC.replace(
+        "reason=detect.error.message",
+        "reason=detect.error.stacktrace",
+    )
+    program = _parse(src)
+    with pytest.raises(IRBuildError) as exc:
+        build_ir(program)
+    assert "unknown error field 'stacktrace'" in str(exc.value)
+    assert "'message'" in str(exc.value) and "'type'" in str(exc.value)
+
+
+def test_ir_rejects_error_access_outside_rescue():
+    """ErrorAccessExpr in the main flow chain (not inside a RESCUE body) → reject."""
+    src = """
+STEP a
+  TAKES: x: int
+  GIVES: y: int
+  MODE: exact
+
+STEP b
+  TAKES: msg: str
+  GIVES: z: int
+  MODE: exact
+
+FLOW f
+  a(x=1) -> b(msg=a.error.message)
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+    program = _parse(src)
+    with pytest.raises(IRBuildError) as exc:
+        build_ir(program)
+    assert "step.error.<field> is only valid inside a RESCUE handler" in str(exc.value)
