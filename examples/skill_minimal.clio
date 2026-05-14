@@ -1,0 +1,11 @@
+# A trivial example to compile into a Claude Code skill.
+# Compile: python -m clio compile examples/skill_minimal.clio --target claude-skill --output ./skill-out
+# After compilation, fill in scripts/01_greet.py (raises NotImplementedError by default).
+
+STEP greet
+  # Say hello. The script body is a stub by default — fill it in after compilation.
+  GIVES: msg: str
+  MODE:  exact
+
+FLOW skill_minimal
+  greet()

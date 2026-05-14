@@ -561,6 +561,72 @@ type matches `detect`'s `GIVES` type exactly. A type mismatch is a compile error
 not a runtime surprise. Compiles to `python` and `mcp-server`; `claude-cli` and
 `langgraph` reject RESCUE at compile time (v0.13).
 
+## 15. Compile a `.clio` into a Claude Code skill
+
+**Pattern:** turn a CLIO flow into an LLM-host-orchestrated Claude Code skill — no external runtime, no API key, no CLIO binary needed after install. The host (Claude Code) reads `SKILL.md` and drives the flow; exact steps are Python scripts the author fills in.
+
+**Reference:** [`examples/skill_minimal.clio`](../../examples/skill_minimal.clio)
+
+```
+# A trivial example to compile into a Claude Code skill.
+# After compilation, fill in scripts/01_greet.py (raises NotImplementedError).
+
+STEP greet
+  GIVES: msg: str
+  MODE:  exact
+
+FLOW skill_minimal
+  greet()
+```
+
+**Compile:**
+
+```bash
+python -m clio compile flow.clio --target claude-skill --output ./skill-out
+```
+
+**Output layout:**
+
+```
+skill-out/
+  SKILL.md                    # orchestration manifest — the host reads this
+  README.md                   # install + invocation guide
+  process_flow.dot            # Graphviz DOT of the flow
+  state.example.json          # sample state for manual testing
+  scripts/
+    01_greet.py               # NotImplementedError stub — fill the body here
+    _validate.py              # bundled JSON Schema helper
+    _cache_key.py             # bundled SHA256 cache-key helper
+  schemas/
+    01_greet.input.json       # JSON Schema for step TAKES
+```
+
+**After compilation — fill the stubs:**
+
+`scripts/01_greet.py` raises `NotImplementedError` until you implement it. Open it, implement the function body, and make it return a `dict` matching the GIVES contract:
+
+```python
+def greet() -> dict:
+    return {"msg": "Hello from CLIO!"}
+```
+
+**Install:**
+
+```bash
+cp -r ./skill-out ~/.claude/skills/my-skill
+```
+
+**Invoke from Claude Code:**
+
+Ask Claude Code to run the skill by name. The host reads `SKILL.md`, calls `scripts/01_greet.py`, and delivers the result.
+
+**Caveats:**
+
+- LLM-host fidelity varies: the TodoWrite checklist in `SKILL.md` is the main drift anchor — if the host drifts, the checklist catches it.
+- Exact-step scripts must be filled in by the author before the skill is usable; they are stubs by design.
+- `FOR EACH ... PARALLEL` is serialised in the emitted skill (the host does not execute concurrently). If you need parallelism, use `--target python` or `--target mcp-server`.
+- Only `python` and `bash` are supported as exact-step languages in `claude-skill` v1.
+
 ## What's not in the cookbook (yet)
 
 - **Multi-field ASSERT** — accept `a > b` between two fields. Specced, planned.
