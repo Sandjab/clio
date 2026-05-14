@@ -56,3 +56,49 @@ def test_cli_compile_claude_skill_produces_skill_md(tmp_path):
     assert rc == 0, f"_cmd_compile returned {rc}"
     skill_md = tmp_path / "SKILL.md"
     assert skill_md.exists(), "SKILL.md not produced by CLI path"
+
+
+def test_frontmatter_uses_flow_description_when_present(tmp_path):
+    """Option B taken in Task 2: FlowIR has no description field as of v0.14.
+
+    The parser grammar does not capture a FLOW description string, so
+    FlowIR.description does not exist.  This test is skipped until
+    TODO(post-v0.14) is resolved and Option A is implemented.
+    """
+    import pytest
+
+    src = (FIXTURES / "mvp_phase2.clio").read_text()
+    graph = build_ir(parse(src))
+    if not getattr(getattr(graph, "flow", None), "description", None):
+        pytest.skip("FlowIR.description not yet wired (Option B taken in Task 2)")
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    front = _parse_frontmatter(body)
+    assert front["description"] == graph.flow.description.strip()
+
+
+def test_frontmatter_warns_when_no_description(tmp_path, capsys):
+    """A warning is emitted to stderr when the flow has no description."""
+    src = (FIXTURES / "mvp_phase1.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    captured = capsys.readouterr()
+    assert "claude-skill warning" in captured.err
+    assert "no description" in captured.err.lower()
+    body = (tmp_path / "SKILL.md").read_text()
+    front = _parse_frontmatter(body)
+    assert front["description"].startswith("Execute flow ")
+
+
+def test_frontmatter_allowed_tools_baseline(tmp_path):
+    """allowed-tools is the static v1 baseline list."""
+    src = (FIXTURES / "mvp_phase1.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    front = _parse_frontmatter(body)
+    tools = [t.strip() for t in front["allowed-tools"].split(",")]
+    assert "Bash" in tools
+    assert "Read" in tools
+    assert "Write" in tools
+    assert "TodoWrite" in tools
