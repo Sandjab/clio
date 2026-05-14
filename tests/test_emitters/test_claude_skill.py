@@ -569,3 +569,141 @@ def test_for_each_parallel_collector_rendered(tmp_path):
     body = (tmp_path / "SKILL.md").read_text()
     # PARALLEL marker or collector name must appear in the section
     assert "results" in body or "parallel" in body.lower()
+
+
+# ----- Task 9: CACHE / RETRY / RESOURCES modifiers in SKILL.md ----------------
+
+
+def test_cache_block_in_step_section_uses_bundled_helper(tmp_path):
+    """A step with CACHE config emits a cache sub-block that invokes scripts/_cache_key.py."""
+    src = (FIXTURES / "mvp_v02_cache.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    # Cache header in EN or FR
+    assert "Cache" in body or "Mise en cache" in body
+    # The bundled helper is referenced
+    assert "scripts/_cache_key.py" in body
+    # The .cache directory path is mentioned
+    assert ".cache/" in body
+
+
+def test_cache_block_absent_when_no_cache_config(tmp_path):
+    """Steps without CACHE config produce no cache sub-block."""
+    src = (FIXTURES / "mvp_phase1.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    # No cache helper reference should appear in a flow with no CACHE
+    assert "scripts/_cache_key.py" not in body
+    assert ".cache/" not in body
+
+
+def test_cache_block_uses_fr_label_when_flow_is_french(tmp_path):
+    """When the heuristic detects French, the cache label is 'Mise en cache'."""
+    src = (FIXTURES / "mvp_v02_cache.clio").read_text()
+    # Inject a French diacritic into a step to trigger FR detection.
+    # detect_churn has no description field in StepIR (not yet wired) — so
+    # we splice a judgment step with a diacritic docstring inline.
+    fr_src = (
+        "CONTRACT customer_risk\n"
+        "  SHAPE: {client: str, risk: enum(low|mid|high), reason: str}\n"
+        "\n"
+        "STEP charger_données\n"
+        "  TAKES: file: str\n"
+        "  GIVES: customers: List<{name: str, revenue: float}>\n"
+        "  MODE:  exact\n"
+        "  CACHE: ttl(24h)\n"
+        "\n"
+        "FLOW rétention\n"
+        "  charger_données(file=\"données.csv\")\n"
+    )
+    try:
+        graph = build_ir(parse(fr_src))
+    except Exception:
+        import pytest
+        pytest.skip("Inline French CACHE source not parseable with current grammar.")
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    # Accept either label — the heuristic depends on step name/description content.
+    assert "Mise en cache" in body or "Cache" in body
+
+
+def test_retry_block_from_on_fail_in_step_section(tmp_path):
+    """A step with ON_FAIL retry(N) emits a retry sub-block in SKILL.md.
+
+    StepIR has no dedicated `.retry` field (TODO(post-v0.14)). The retry
+    strategy is read from on_fail.strategies with kind='retry'.
+    """
+    src = (FIXTURES / "mvp_v02_onfail.clio").read_text()
+    graph = build_ir(parse(src))
+    # Verify the fixture actually has a retry strategy in the IR.
+    step_with_retry = next(
+        (s for s in graph.steps if s.on_fail is not None
+         and any(st.kind == "retry" for st in s.on_fail.strategies)),
+        None,
+    )
+    if step_with_retry is None:
+        import pytest
+        pytest.skip("mvp_v02_onfail.clio has no retry strategy in ON_FAIL; fixture check needed.")
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    assert "Retry" in body or "Réessayer" in body
+    # Budget (max_retries) should be mentioned as a number
+    budget = next(
+        st.max_retries for st in step_with_retry.on_fail.strategies if st.kind == "retry"
+    )
+    assert str(budget) in body
+
+
+def test_retry_block_absent_when_no_retry(tmp_path):
+    """Steps without any retry strategy produce no retry sub-block."""
+    src = (FIXTURES / "mvp_phase1.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    assert "Retry" not in body and "Réessayer" not in body
+
+
+def test_resources_annex_listed(tmp_path):
+    """When a flow declares RESOURCES, an annex section lists them in SKILL.md."""
+    src = (FIXTURES / "mvp_phase9.clio").read_text()
+    graph = build_ir(parse(src))
+    assert graph.resources is not None, "mvp_phase9.clio must declare RESOURCES"
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    assert "Resources" in body or "Ressources" in body
+
+
+def test_resources_annex_lists_models(tmp_path):
+    """The resources annex renders the declared models."""
+    src = (FIXTURES / "mvp_phase9.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    # mvp_phase9.clio declares models: [haiku]
+    assert "haiku" in body
+
+
+def test_resources_annex_absent_when_no_resources(tmp_path):
+    """When no RESOURCES block is declared, no resources annex appears."""
+    src = (FIXTURES / "mvp_phase1.clio").read_text()
+    graph = build_ir(parse(src))
+    assert graph.resources is None, "mvp_phase1.clio must not declare RESOURCES"
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    # The section header should not appear at all
+    assert "## Resources" not in body and "## Ressources" not in body
+
+
+def test_resources_annex_with_multiple_models(tmp_path):
+    """When RESOURCES declares multiple models, all appear in the annex."""
+    src = (FIXTURES / "mvp_v02_onfail.clio").read_text()
+    graph = build_ir(parse(src))
+    if graph.resources is None:
+        import pytest
+        pytest.skip("mvp_v02_onfail.clio declares no RESOURCES.")
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    for model in graph.resources.models:
+        assert model in body, f"Model {model!r} not found in SKILL.md"

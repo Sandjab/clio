@@ -10,7 +10,17 @@ import json
 from collections.abc import Callable
 
 from clio.ir.contracts import type_to_json_schema
-from clio.ir.graph import BoolOpIR, FlowGraph, ForEachIR, IfBlockIR, MatchBlockIR, StepIR, WhileBlockIR
+from clio.ir.graph import (
+    BoolOpIR,
+    FlowGraph,
+    ForEachIR,
+    IfBlockIR,
+    MatchBlockIR,
+    OnFailChainIR,
+    ResourcesIR,
+    StepIR,
+    WhileBlockIR,
+)
 from clio.parser.ast_nodes import (
     ConstrainedType,
     ContractRef,
@@ -214,7 +224,7 @@ def render_exact_step_section(step: StepIR, idx: int, lang: str = "en") -> str:
         "Tick the corresponding TodoWrite todo. "
         "Do not advance until the script exited 0.\n\n"
     )
-    return title + doc_block + cmd + tail
+    return title + doc_block + cmd + tail + render_cache_block(step, lang=lang) + render_retry_block(step, lang=lang)
 
 
 def render_judgment_prompt(step: StepIR) -> str:
@@ -356,7 +366,7 @@ def render_judgment_step_section(step: StepIR, idx: int, lang: str = "en") -> st
         f"otherwise stop.\n\n"
         "Tick the corresponding TodoWrite todo.\n\n"
     )
-    return title + doc_block + body
+    return title + doc_block + body + render_cache_block(step, lang=lang) + render_retry_block(step, lang=lang)
 
 
 def _render_condition(cond) -> str:
@@ -459,6 +469,114 @@ def render_while_section(node: WhileBlockIR, idx_label: str, lang: str = "en") -
     )
 
 
+def render_cache_block(step: StepIR, lang: str = "en") -> str:
+    """Cache sub-block instructing the LLM to use the bundled cache-key helper.
+
+    CacheConfigIR has two fields: `.mode` ("on" | "off" | "ttl") and
+    `.ttl_seconds`. There is no `.key_fields` in the v0.14 IR — cache is
+    mode-driven, not field-driven. The block passes an empty key_fields array to
+    _cache_key.py, which hashes the entire step namespace in state.json.
+
+    If `step.cache` is None or mode is "off", returns "".
+    """
+    cache = getattr(step, "cache", None)
+    if cache is None:
+        return ""
+    mode = getattr(cache, "mode", "off") or "off"
+    if mode == "off":
+        return ""
+    label = {"en": "Cache", "fr": "Mise en cache"}[lang]
+    ttl_seconds = getattr(cache, "ttl_seconds", None)
+    ttl_note = ""
+    if ttl_seconds is not None:
+        ttl_note = f" (TTL: {ttl_seconds}s)"
+    # TODO(post-v0.14): CacheConfigIR has no `.key_fields`. When the IR adds
+    # field-level cache keys, replace the empty list below with the actual
+    # key_fields tuple serialised as a JSON array.
+    key_fields_json = "[]"
+    body = (
+        f"\n**{label}**{ttl_note}: before executing, compute the cache key:\n\n"
+        f"    KEY=$(python scripts/_cache_key.py state.json '{step.name}' '{key_fields_json}')\n\n"
+        f"If `.cache/{step.name}_${{KEY}}.json` exists, skip execution and merge its "
+        f"contents into `state.json` under `state.{step.name}`. Otherwise run the step "
+        f"normally and write the output to `.cache/{step.name}_${{KEY}}.json` after success.\n\n"
+    )
+    return body
+
+
+def render_retry_block(step: StepIR, lang: str = "en") -> str:
+    """Retry sub-block if ON_FAIL has a retry strategy.
+
+    TODO(post-v0.14): StepIR has no dedicated `.retry` field. Retry config is
+    currently expressed via ON_FAIL: retry(N) inside OnFailChainIR. This
+    function reads the first retry strategy from on_fail.strategies and renders
+    it. A dedicated StepIR.retry shorthand is deferred to post-v0.14.
+
+    Returns "" when no retry strategy is found.
+    """
+    on_fail: OnFailChainIR | None = getattr(step, "on_fail", None)
+    if on_fail is None:
+        return ""
+    retry_strategy = None
+    for s in on_fail.strategies:
+        if getattr(s, "kind", None) == "retry":
+            retry_strategy = s
+            break
+    if retry_strategy is None:
+        return ""
+    label = {"en": "Retry", "fr": "Réessayer"}[lang]
+    budget = getattr(retry_strategy, "max_retries", 1) or 1
+    body = (
+        f"\n**{label}**: on failure, regenerate up to {budget} time(s). "
+        f"After the budget is exhausted, see RESCUE section if present, otherwise stop.\n\n"
+    )
+    return body
+
+
+def render_resources_annex(graph: FlowGraph, lang: str = "en") -> str:
+    """Annex at the end of SKILL.md listing flow-level RESOURCES.
+
+    ResourcesIR has: .target (str), .models (tuple[str, ...]),
+    .mcp_servers (tuple[McpServerSpecIR, ...]), .databases (tuple[DatabaseSpecIR, ...]).
+    Returns "" when graph.resources is None or all collections are empty.
+    """
+    resources: ResourcesIR | None = getattr(graph, "resources", None)
+    if resources is None:
+        return ""
+    has_content = bool(
+        getattr(resources, "models", ())
+        or getattr(resources, "mcp_servers", ())
+        or getattr(resources, "databases", ())
+    )
+    if not has_content:
+        return ""
+    label = {"en": "Resources", "fr": "Ressources"}[lang]
+    lines = [f"\n## {label}\n\n"]
+    target = getattr(resources, "target", None)
+    if target:
+        target_label = {"en": "Target", "fr": "Cible"}[lang]
+        lines.append(f"**{target_label}**: `{target}`\n\n")
+    models = getattr(resources, "models", ())
+    if models:
+        models_label = {"en": "Models", "fr": "Modèles"}[lang]
+        lines.append(f"**{models_label}**: {', '.join(f'`{m}`' for m in models)}\n\n")
+    mcp_servers = getattr(resources, "mcp_servers", ())
+    if mcp_servers:
+        mcp_label = {"en": "MCP servers", "fr": "Serveurs MCP"}[lang]
+        lines.append(f"**{mcp_label}**:\n\n")
+        for srv in mcp_servers:
+            lines.append(f"- `{srv.name}`\n")
+        lines.append("\n")
+    databases = getattr(resources, "databases", ())
+    if databases:
+        db_label = {"en": "Databases", "fr": "Bases de données"}[lang]
+        lines.append(f"**{db_label}**:\n\n")
+        for db in databases:
+            lines.append(f"- `{db.name}` ({db.driver})\n")
+        lines.append("\n")
+    return "".join(lines)
+
+
 def render_skill_md(
     graph: FlowGraph,
     *,
@@ -496,6 +614,7 @@ def render_skill_md(
                 parts.append(render_while_section(item, f"{item_idx:02d}", lang=lang))
             # RescueBlockIR: deferred to later tasks.
 
+    parts.append(render_resources_annex(graph, lang=lang))
     return "".join(parts)
 
 
