@@ -596,11 +596,9 @@ class PythonEmitter(BaseEmitter):
                     _emit_item(sub, inner_indent, scope_local)
                 return
             if isinstance(item, ResumeIR):
-                # RESUME(<step>.<field>) — use the fallback value as the result.
-                _current.append(
-                    f"{indent}return state[{item.fallback_step!r}].{item.field_name}"
+                raise NotImplementedError(
+                    f"line {item.line}: ResumeIR emit not yet implemented (see T12)"
                 )
-                return
             if isinstance(item, CallIR):
                 _emit_call(item, indent, scope_local)
                 return
