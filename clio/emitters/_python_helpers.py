@@ -293,6 +293,10 @@ def _attempt_anthropic_block(
         "            return None",
         "        cleaned = '\\n'.join(line for line in raw.splitlines() if not line.startswith('```'))",
         f"        return {result_class}(json.loads(cleaned))",
+        # Non-transient errors must propagate immediately — retry on a
+        # bad API key or malformed request only burns tokens.
+        "    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError, anthropic.BadRequestError):",
+        "        raise",
         "    except Exception:",
         "        return None",
     ]
@@ -355,6 +359,10 @@ def _attempt_openai_block(
         "            return None",
         "        cleaned = '\\n'.join(line for line in raw.splitlines() if not line.startswith('```'))",
         f"        return {result_class}(json.loads(cleaned))",
+        # Non-transient errors must propagate immediately — retry on a
+        # bad API key or malformed request only burns tokens.
+        "    except (openai.AuthenticationError, openai.PermissionDeniedError, openai.BadRequestError):",
+        "        raise",
         "    except Exception:",
         "        return None",
     ]

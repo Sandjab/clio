@@ -432,6 +432,25 @@ def test_emit_chained_assert_validates_at_runtime(tmp_path):
         Scored.model_validate({"score": 1.1})
 
 
+def test_judgment_attempt_re_raises_non_transient_sdk_errors(tmp_path):
+    """A bad API key (anthropic.AuthenticationError) is not a transient
+    failure — retrying just burns tokens without changing the outcome.
+    The emitted _attempt() must re-raise authentication / permission /
+    bad-request errors instead of swallowing them as `return None`."""
+    src = (FIXTURES / "mvp_v03_onfail.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    step_path = tmp_path / "retention" / "steps" / "detect_churn.py"
+    body = step_path.read_text()
+    # The explicit re-raise must come before the generic except Exception
+    # (Python evaluates except clauses top-down, so order matters).
+    assert (
+        "except (anthropic.AuthenticationError, anthropic.PermissionDeniedError, "
+        "anthropic.BadRequestError):\n            raise\n"
+    ) in body
+    # And the generic catch still exists.
+    assert "        except Exception:\n            return None\n" in body
+
+
 def test_emit_field_validator_handles_python_keyword_field_name(tmp_path):
     """A CONTRACT field whose CLIO name is a Python keyword (`class`,
     `return`, …) gets renamed to `<name>_` by `_to_field_name`. The

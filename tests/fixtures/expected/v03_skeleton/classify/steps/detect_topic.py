@@ -52,6 +52,8 @@ def detect_topic(*, text: str) -> str:
                 return None
             cleaned = '\n'.join(line for line in raw.splitlines() if not line.startswith('```'))
             return (lambda raw: raw)(json.loads(cleaned))
+        except (anthropic.AuthenticationError, anthropic.PermissionDeniedError, anthropic.BadRequestError):
+            raise
         except Exception:
             return None
 

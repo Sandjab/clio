@@ -65,6 +65,8 @@ def detect_churn(*, customers: list[dict]) -> list[contracts.CustomerRisk]:
                 return None
             cleaned = '\n'.join(line for line in raw.splitlines() if not line.startswith('```'))
             return (lambda raw: [contracts.CustomerRisk.model_validate(item) for item in raw])(json.loads(cleaned))
+        except (anthropic.AuthenticationError, anthropic.PermissionDeniedError, anthropic.BadRequestError):
+            raise
         except Exception:
             return None
 
