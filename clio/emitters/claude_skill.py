@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 
 from clio.emitters._claude_skill_helpers import (
+    render_bundled_cache_key_script,
+    render_bundled_validate_script,
     render_exact_script,
     render_process_flow_dot,
     render_readme,
@@ -24,6 +26,8 @@ class ClaudeSkillEmitter(BaseEmitter):
     def emit(self, graph: FlowGraph, output_dir: Path) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "scripts").mkdir(exist_ok=True)
+        (output_dir / "scripts" / "_validate.py").write_text(render_bundled_validate_script())
+        (output_dir / "scripts" / "_cache_key.py").write_text(render_bundled_cache_key_script())
         warn = lambda m: print(m, file=sys.stderr)  # noqa: E731
         contracts = {c.name: c for c in (graph.contracts or ())}
         for idx, step in enumerate(graph.steps, start=1):

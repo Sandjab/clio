@@ -143,7 +143,10 @@ def test_exact_step_emits_script(tmp_path):
     src = (FIXTURES / "mvp_phase1.clio").read_text()
     graph = build_ir(parse(src))
     ClaudeSkillEmitter().emit(graph, tmp_path)
-    scripts = sorted((tmp_path / "scripts").glob("*.py"))
+    # Exclude bundled runtime helpers (underscore-prefixed).
+    scripts = sorted(
+        p for p in (tmp_path / "scripts").glob("*.py") if not p.name.startswith("_")
+    )
     assert len(scripts) == 1
     assert scripts[0].name.startswith("01_")
 
@@ -170,3 +173,71 @@ def test_skill_md_references_exact_step_script(tmp_path):
     # The script reference must appear
     assert "scripts/01_" in body
     assert "python scripts/01_" in body
+
+
+def test_validate_helper_is_bundled(tmp_path):
+    src = (FIXTURES / "mvp_phase1.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    validate_py = tmp_path / "scripts" / "_validate.py"
+    assert validate_py.exists()
+    body = validate_py.read_text()
+    assert "import json" in body
+    assert "import sys" in body
+    # Must not blow up if jsonschema is missing — stdlib fallback
+    assert "try:" in body and "jsonschema" in body
+
+
+def test_cache_key_helper_is_bundled(tmp_path):
+    src = (FIXTURES / "mvp_phase1.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    key_py = tmp_path / "scripts" / "_cache_key.py"
+    assert key_py.exists()
+    body = key_py.read_text()
+    assert "hashlib" in body
+    assert "sha256" in body
+
+
+def test_validate_helper_runs_against_real_schema(tmp_path):
+    """Layer 2 check: the bundled validator must actually work."""
+    import subprocess
+
+    # Build a trivially-valid instance against a simple schema.
+    src = (FIXTURES / "mvp_phase1.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    # Write a temp schema and a matching instance into tmp_path.
+    schema_path = tmp_path / "test_schema.json"
+    schema_path.write_text(json.dumps({"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}))
+    instance_path = tmp_path / "instance.json"
+    instance_path.write_text(json.dumps({"name": "hello"}))
+    result = subprocess.run(
+        [".venv/bin/python", str(tmp_path / "scripts" / "_validate.py"),
+         str(instance_path), str(schema_path)],
+        capture_output=True, text=True, timeout=10,
+        cwd="/Users/jean-paulgavini/Documents/Dev/clio",
+    )
+    assert result.returncode == 0, f"validator failed: {result.stderr}"
+
+
+def test_cache_key_helper_produces_sha256_hex(tmp_path):
+    """Layer 2 check: the bundled cache-key generator must actually work."""
+    import subprocess
+
+    src = (FIXTURES / "mvp_phase1.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps({"customer": {"id": "c1"}, "order": {"items": [1, 2, 3]}}))
+    result = subprocess.run(
+        [".venv/bin/python", str(tmp_path / "scripts" / "_cache_key.py"),
+         str(state_path), "fetch_customer", '["customer.id", "order.items"]'],
+        capture_output=True, text=True, timeout=10,
+        cwd="/Users/jean-paulgavini/Documents/Dev/clio",
+    )
+    assert result.returncode == 0, f"cache-key failed: {result.stderr}"
+    key = result.stdout.strip()
+    # SHA256 hex digest is 64 hex chars
+    assert len(key) == 64
+    assert all(c in "0123456789abcdef" for c in key)
