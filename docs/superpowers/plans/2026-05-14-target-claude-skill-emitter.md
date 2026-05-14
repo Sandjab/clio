@@ -4,7 +4,7 @@
 
 **Goal:** Ship a new compilation target `claude-skill` that takes a CLIO IR and emits a Claude Code skill directory (`SKILL.md` + `scripts/` + `schemas/` + `prompts/` + `process_flow.dot`) executable by the LLM host itself, with parity for v0.13 features (RESCUE, `step.error.*`, RESUME, CACHE, RETRY, RESOURCES).
 
-**Architecture:** Add one new emitter module `clio/emitters/claude_skill.py` and one helper module `clio/emitters/_claude_skill_helpers.py`. Targeted **duplication** (no cross-emitter imports) of the minimum needed from `_python_helpers.py` for exact-step script generation. The emitter walks the IR (same `FlowGraph` consumed by every other emitter) and writes a deterministic, byte-stable output tree. No edits to `parser/`, `ir/`, or other emitters.
+**Architecture:** Add one new emitter module `clio/emitters/claude_skill.py` and one helper module `clio/emitters/_claude_skill_helpers.py`. **Extract** type-utility helpers (`_to_class_name`, `_to_field_name`, `_type_to_python`, `_render_type_short`, `_json_type_to_python`, `_shape_from_schema`, `_field_from_schema`, `_uses_contract_refs`) from `_python_helpers.py` into a new `clio/emitters/_shared_utils.py` consumed by `python`, `mcp-server` and `claude-skill` alike (in response to Gemini PR #11 #1). Convention-specific renderers stay emitter-local. The emitter walks the IR (same `FlowGraph` consumed by every other emitter) and writes a deterministic, byte-stable output tree. No edits to `parser/` or `ir/`.
 
 **Tech Stack:** Python 3.12, frozen dataclasses, Pydantic v2 (already used for contracts), pytest. No new dependencies. See validated spec: `docs/superpowers/specs/2026-05-14-target-claude-skill-design.md`.
 
@@ -14,9 +14,11 @@
 
 **Created:**
 
+- `clio/emitters/_shared_utils.py` — type-utility helpers extracted from `_python_helpers.py` (consumed by `python`, `mcp-server`, `claude-skill`)
 - `clio/emitters/claude_skill.py` — `ClaudeSkillEmitter(BaseEmitter)` (orchestration: writes the output tree)
-- `clio/emitters/_claude_skill_helpers.py` — pure rendering helpers (frontmatter, SKILL.md sections, JSON Schema dump, exact-script body, DOT)
+- `clio/emitters/_claude_skill_helpers.py` — pure rendering helpers (frontmatter, SKILL.md sections, JSON Schema dump, exact-script body, DOT, bundled `_validate.py` and `_cache_key.py` script bodies)
 - `tests/test_emitters/test_claude_skill.py` — emission tests (Layer 1 granular + Layer 2 runtime + golden snapshots)
+- `tests/test_emitters/test_shared_utils.py` — unit tests for the extracted module
 - `tests/fixtures/expected_skill/` — directory holding golden snapshots `<fixture_name>/` (separate from `expected/` used by `claude-cli`)
 - `examples/skill_minimal.clio` — minimal example shipped with the manual
 - `docs/manual/03-cookbook.md` entry — new recipe "Compile a `.clio` into a Claude Code skill"
@@ -24,14 +26,16 @@
 
 **Modified:**
 
+- `clio/emitters/_python_helpers.py` — extracted helpers replaced by `from clio.emitters._shared_utils import …`
+- `clio/emitters/_mcp_helpers.py` — extracted helpers replaced by `from clio.emitters._shared_utils import …`
 - `clio/cli.py` — register `"claude-skill"` target in `_cmd_compile` dispatch (one new `elif` branch)
 - `docs/COMPILATION_TARGETS.md` — move `claude-skill` from "Future/Candidate" to "Implemented" + dedicated section
-- `CHANGELOG.md` — new section for the release that ships this target (the version bump itself happens in the release commit, not in this plan — see Roadmap in the spec)
+- `CHANGELOG.md` — new section for the release that ships this target
 
-**Not touched (verify after each task with `git status`):**
+**Not touched:**
 
 - `clio/parser/`, `clio/ir/`, `clio/keywords.py` — no language changes
-- `clio/emitters/claude_cli.py`, `python.py`, `mcp_server.py`, `langgraph.py` — no edits, no shared module touched
+- `clio/emitters/claude_cli.py`, `python.py`, `mcp_server.py`, `langgraph.py` — no edits to emitter bodies (only their `_*_helpers.py` are touched, transparently)
 
 ---
 
@@ -196,6 +200,193 @@ Expected: same green count as before this task + 1 new green.
 ```bash
 git add clio/emitters/claude_skill.py clio/emitters/_claude_skill_helpers.py clio/cli.py tests/test_emitters/test_claude_skill.py
 git commit -m "feat(claude-skill): scaffold emitter + CLI target"
+```
+
+---
+
+## Task 1b: Extract type-utility helpers into `clio/emitters/_shared_utils.py`
+
+Done in response to Gemini PR #11 review comment #1 — the user (Sandjab) reversed the initial decision and asked for the refactor to be integrated in this sprint, not deferred.
+
+**Strategy**: small, reversible move. Each function moves verbatim with no semantic change; `_python_helpers.py` and `_mcp_helpers.py` keep working through re-imports. The existing emitter test suites (`test_python.py`, `test_mcp_server.py`) are the safety net — every move must keep them fully green before moving on.
+
+**Helpers to extract** (in order of dependency, leaves first):
+
+1. `_to_class_name(name: str) -> str` — `_python_helpers.py:85-88`
+2. `_to_field_name(name: str) -> str` — `_python_helpers.py:90-95`
+3. `_model_id(short_name: str) -> str` — `_python_helpers.py:68-70`
+4. `_uses_contract_refs(step: StepIR) -> bool` — `_python_helpers.py:97-117`
+5. `_render_type_short(t: TypeExpr) -> str` — `_python_helpers.py:141-157`
+6. `_type_to_python(t: TypeExpr, contracts) -> str` — `_python_helpers.py:119-139`
+7. `_json_type_to_python(schema: dict) -> str` — `_python_helpers.py:201-223`
+8. `_shape_from_schema(schema: dict) -> list[tuple[str, dict]]` — `_python_helpers.py:188-191`
+9. `_field_from_schema(name: str, schema: dict) -> str` — `_python_helpers.py:193-199`
+
+**Files:**
+- Create: `clio/emitters/_shared_utils.py`
+- Create: `tests/test_emitters/test_shared_utils.py`
+- Modify: `clio/emitters/_python_helpers.py` (replace bodies with re-imports)
+- Modify: `clio/emitters/_mcp_helpers.py` (replace usages with imports — verify it imported these from `_python_helpers` indirectly; if not, no change needed there)
+
+- [ ] **Step 1: Inventory call sites — confirm all usages live in `_python_helpers.py` and `_mcp_helpers.py`**
+
+```bash
+for fn in _to_class_name _to_field_name _model_id _uses_contract_refs _render_type_short _type_to_python _json_type_to_python _shape_from_schema _field_from_schema; do
+    echo "=== $fn ==="
+    grep -rn "$fn" clio/ tests/ | grep -v __pycache__
+done
+```
+
+Expected: each helper appears (a) once defined in `_python_helpers.py`, (b) possibly in `_mcp_helpers.py` (which may re-import or duplicate), (c) possibly in `python.py` / `mcp_server.py` via wildcard or direct import.
+
+Write down the call-site map. If `_mcp_helpers.py` duplicates a helper rather than importing it from `_python_helpers.py`, the refactor must update **both** call paths.
+
+- [ ] **Step 2: Capture the "before" test baseline**
+
+```bash
+pytest tests/ -q 2>&1 | tail -3
+```
+
+Expected: green, ~695 tests passing. Record the exact count — this becomes the regression bar.
+
+- [ ] **Step 3: Create `_shared_utils.py` with the 9 helpers copied verbatim**
+
+`clio/emitters/_shared_utils.py`:
+
+```python
+"""Type-utility helpers shared by emitter modules.
+
+Originally lived in `_python_helpers.py`; extracted in v0.14 because
+3 emitters now consume the same shape-rendering and naming logic
+(python, mcp-server, claude-skill).
+
+The CLAUDE.md rule "emitters never import from each other" continues
+to hold: `_shared_utils.py` is a utility module, not an emitter. Both
+emitter helper modules (`_python_helpers.py`, `_mcp_helpers.py`,
+`_claude_skill_helpers.py`) import from here.
+"""
+from __future__ import annotations
+
+# Lift type annotations and imports that the moved helpers need
+# (TypeExpr, ContractIR, StepIR). Copy the exact import block from
+# the top of _python_helpers.py.
+
+# Then paste the 9 functions in dependency order (Step 1 list).
+```
+
+Copy the functions one by one from `_python_helpers.py` (the line numbers in the inventory above are the source-of-truth — adjust if the file has shifted). Preserve docstrings exactly. Do not change names, signatures, or bodies.
+
+- [ ] **Step 4: Write a small unit test file**
+
+`tests/test_emitters/test_shared_utils.py`:
+
+```python
+"""Smoke tests for clio.emitters._shared_utils.
+
+These guard the public surface; behavioural coverage stays in
+test_python.py and test_mcp_server.py via the existing emitter suites.
+"""
+
+from clio.emitters._shared_utils import (
+    _field_from_schema,
+    _json_type_to_python,
+    _model_id,
+    _render_type_short,
+    _shape_from_schema,
+    _to_class_name,
+    _to_field_name,
+    _type_to_python,
+    _uses_contract_refs,
+)
+
+
+def test_to_class_name_basic():
+    assert _to_class_name("customer_order") == "CustomerOrder"
+    assert _to_class_name("foo") == "Foo"
+
+
+def test_to_field_name_basic():
+    # Adjust expectations after Step 3 if the original convention
+    # differs — copy the existing examples already covered by
+    # test_python.py to stay 1:1 with prior behaviour.
+    assert _to_field_name("CustomerID") == "customer_id"  # adapt if different
+
+
+def test_model_id_smoke():
+    # _model_id maps a short alias to a full model id. Just verify it
+    # returns a non-empty string for a known alias used elsewhere.
+    out = _model_id("sonnet")
+    assert isinstance(out, str) and len(out) > 0
+```
+
+These tests are deliberately small — the real safety net is the existing emitter suites that exercise these helpers indirectly.
+
+- [ ] **Step 5: Run the new unit tests, verify green**
+
+```bash
+pytest tests/test_emitters/test_shared_utils.py -v
+```
+
+If any test fails, the function was copied incorrectly. Fix and retry.
+
+- [ ] **Step 6: Rewrite `_python_helpers.py` to import from `_shared_utils`**
+
+For each of the 9 functions, delete its body in `_python_helpers.py` and replace with a re-export:
+
+```python
+# At the top of the import block:
+from clio.emitters._shared_utils import (
+    _field_from_schema,
+    _json_type_to_python,
+    _model_id,
+    _render_type_short,
+    _shape_from_schema,
+    _to_class_name,
+    _to_field_name,
+    _type_to_python,
+    _uses_contract_refs,
+)
+
+# Then DELETE the original function definitions from _python_helpers.py
+# (lines 68-70, 85-95, 97-117, 119-139, 141-157, 188-199, 201-223).
+```
+
+Keep them as re-exports (don't `__all__`-restrict): downstream code that does `from clio.emitters._python_helpers import _to_class_name` continues to work.
+
+- [ ] **Step 7: Repeat for `_mcp_helpers.py` if it duplicated any helper**
+
+Per the Step 1 inventory: if `_mcp_helpers.py` duplicated any of the 9 functions, replace those copies with the same re-export. If it imported them transitively from `_python_helpers.py`, no change required (still resolves through the re-exports).
+
+- [ ] **Step 8: Run the full test suite — must equal the Step 2 baseline**
+
+```bash
+pytest tests/ -q 2>&1 | tail -3
+```
+
+Expected: exactly the same number of tests, all green, including the new `test_shared_utils.py` ones (+ ~3 new greens above baseline).
+
+If any prior test fails: revert the failing helper's move and investigate. Do not advance.
+
+- [ ] **Step 9: Run `git diff --stat` and verify scope discipline**
+
+```bash
+git diff --stat
+```
+
+Expected: only `clio/emitters/_python_helpers.py`, `clio/emitters/_mcp_helpers.py` (if changed in Step 7), `clio/emitters/_shared_utils.py` (new), `tests/test_emitters/test_shared_utils.py` (new). **No changes to `python.py`, `mcp_server.py`, `claude_cli.py`, `langgraph.py`** — if anything else shows up, you've gone too far.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add clio/emitters/_shared_utils.py clio/emitters/_python_helpers.py clio/emitters/_mcp_helpers.py tests/test_emitters/test_shared_utils.py
+git commit -m "refactor(emitters): extract type-utility helpers into _shared_utils.py
+
+Addresses Gemini PR #11 review #1. The 9 type-utility helpers (naming,
+type-to-python, schema shape, model id, contract-ref check) move verbatim
+from _python_helpers.py into a new clio/emitters/_shared_utils.py. The
+two emitter-helper modules re-import them from there so no consumer code
+changes. This unblocks claude-skill emitter (and future targets) from
+either duplicating the helpers or importing across emitters."
 ```
 
 ---
@@ -519,7 +710,7 @@ def test_skill_md_references_exact_step_script(tmp_path):
 
 - [ ] **Step 2: Run, verify red**
 
-- [ ] **Step 3: Implement the exact-script renderer (duplicated minimum from `_python_helpers.emit_default_exact_step`)**
+- [ ] **Step 3: Implement the exact-script renderer (adapted from `_python_helpers.emit_default_exact_step`; type-utility helpers imported from `_shared_utils`)**
 
 Open `clio/emitters/_python_helpers.py` and read `emit_default_exact_step` (currently at L225). It already produces a Python function body for an exact step. We adapt it into a **standalone script** (with `if __name__ == "__main__"` boilerplate).
 
@@ -1492,7 +1683,7 @@ def test_emitted_exact_script_runs_against_state_example(tmp_path):
     assert isinstance(output, dict)
 ```
 
-- [ ] **Step 2: Run, verify green** (if it fails, fix the script template in `render_exact_script` until it passes — this is the integration check that the duplicated helper actually produces standalone code)
+- [ ] **Step 2: Run, verify green** (if it fails, fix the script template in `render_exact_script` until it passes — this is the integration check that the adapted helper actually produces standalone code)
 
 - [ ] **Step 3: Commit**
 
@@ -1677,5 +1868,6 @@ The following list captures spec items vs tasks. If any row is unchecked, add a 
 | Docs (COMPILATION_TARGETS, cookbook, troubleshooting, CHANGELOG, manual) | Task 13 |
 | E2E goldens on 3 representative fixtures including v0.13 regression | Task 14 |
 | FR/EN language heuristic (incl. "Cache" → "Mise en cache", Gemini #2) | Task 4 (Step 5), Task 9 (Step 3) |
-| Targeted duplication of `_python_helpers.py` (no import across emitters) | Task 4 / Task 5 |
+| Extract type-utility helpers into `_shared_utils.py` (Gemini #1) | Task 1b |
+| Convention-specific renderer for `exact`-step script (adapted from `emit_default_exact_step`, not extracted) | Task 4 / Task 5 |
 | No edits to `parser/`, `ir/`, other emitters | Verified at each commit via `git diff --stat` |

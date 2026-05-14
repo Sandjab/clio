@@ -25,7 +25,7 @@ The reverse direction (skill → CLIO importer) is **out of scope** for this spe
 | Drift anchor | TodoWrite checklist (one todo per major step, mandated in the emitted body) + section-end "tick the todo, validate before advancing" instructions + final "verification" section that checks all todos done and contract-of-flow fields present | Inline LLM-self-assertions only — too weak |
 | Languages supported for STEP `exact` in v1 | `python` and `bash` only | Rust/Go/…: error at compile time, direct user to a different target |
 | Parallelism | Serialized in topological order, with compile warning if the source flow has `PARALLEL` | Genuine concurrency — the LLM host doesn't truly parallelize; would force a script-orchestrated layer (rejected above) |
-| Reuse of existing helpers | Targeted **duplication** into `_claude_skill_helpers.py` of the minimum needed from `_python_helpers.py` for `exact`/python script bodies. No edits to `python.py` or `_python_helpers.py`. | (a) Importing across emitters — forbidden by CLAUDE.md ("emitters never import from each other"); (b) Refactoring shared code into a common module — surgical-changes rule, out of scope for this sprint |
+| Reuse of existing helpers | Extract type-utility helpers (`_to_class_name`, `_to_field_name`, `_type_to_python`, `_render_type_short`, `_json_type_to_python`, `_shape_from_schema`, `_field_from_schema`, `_uses_contract_refs`) from `_python_helpers.py` into a new `clio/emitters/_shared_utils.py`. `_python_helpers.py` and `_mcp_helpers.py` re-import them from there; `_claude_skill_helpers.py` consumes the same module. Convention-specific renderers (exact-step script squelette, judgment prompt body) remain emitter-local. | (a) Importing across emitters — forbidden by CLAUDE.md ("emitters never import from each other"); (b) Targeted duplication into `_claude_skill_helpers.py` — was the initial plan, reversed in response to Gemini PR #11 #1 to avoid mid-term maintenance debt and to lock the boundary while we know what's genuinely shared (3 emitters minimum). |
 | Frontmatter `description` | Derived from `FLOW.description` if present; otherwise default + compile **warning** (auto-trigger weakens) | Auto-generating a description with another LLM call — out of scope, deterministic emitter only |
 | State format | Single namespaced JSON file `state.json` (`state.<step_name>.<field>`) — same convention as `claude-cli` / `python` | Per-step state files — fragments harder for the LLM host to reason about |
 | Natural language of emitted markdown | English by default. If the source `.clio` carries a `lang:` flow-level hint (already free-form metadata), the emitter respects it for section titles ("Step" → "Étape", "If" → "Si", "Cache" → "Mise en cache", "For each" → "Pour chaque", …). Frontmatter `description` always preserves the source. | Hardcoded English — "Étape" examples in this spec come from FR-source flows; we don't want the emitter to assume English universally. (Translation note: "Cache" in French is *"Mise en cache"* — never *"cacher"* which means *to hide*.) |
@@ -40,13 +40,18 @@ The reverse direction (skill → CLIO importer) is **out of scope** for this spe
 ```
 clio/emitters/
   claude_skill.py              # ClaudeSkillEmitter(BaseEmitter)
-  _claude_skill_helpers.py     # markdown rendering, frontmatter, schema dump, script body generator (extracted minimum from _python_helpers)
+  _claude_skill_helpers.py     # markdown rendering, frontmatter, schema dump, exact-script squelette (skill-specific)
+  _shared_utils.py             # NEW: type-utility helpers extracted from _python_helpers (consumed by python, mcp-server, claude-skill)
+  _python_helpers.py           # MODIFIED: re-imports extracted helpers from _shared_utils.py
+  _mcp_helpers.py              # MODIFIED: re-imports extracted helpers from _shared_utils.py
 tests/test_emitters/
   test_claude_skill.py         # mirror of test_claude_cli.py
 docs/
   COMPILATION_TARGETS.md       # update: claude-skill moves from "future/candidate" to "Implemented"
   manual/                      # add cookbook recipe + troubleshooting entries (per project rule)
 ```
+
+**Why `_shared_utils.py` is *not* a cross-emitter import**: it sits at the same level as `_python_helpers.py` and `_mcp_helpers.py` (utility module for emitters, *not* an emitter). The CLAUDE.md rule "emitters never import from each other" forbids `claude_skill.py` importing from `python.py` / `mcp_server.py` directly. Importing both from a shared utility module is the standard pattern — same as how `_python_helpers.py` and `_mcp_helpers.py` already coexist without importing each other.
 
 ### Emitter interface
 
