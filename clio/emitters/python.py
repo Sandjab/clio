@@ -34,6 +34,7 @@ from clio.ir.graph import (
     CallIR,
     ContractIR,
     DatabaseSpecIR,
+    ErrorAccessIR,
     FlowGraph,
     ForEachIR,
     IfBlockIR,
@@ -41,6 +42,7 @@ from clio.ir.graph import (
     McpServerSpecIR,
     McpToolImplIR,
     RestImplIR,
+    ResumeIR,
     ShellImplIR,
     SqlImplIR,
     StepIR,
@@ -465,6 +467,7 @@ class PythonEmitter(BaseEmitter):
         # (used to wrap their call site in try/except) and the blocks
         # themselves (used to emit the _rescue_<name> helper functions).
         rescue_target_names = {rb.step_name for rb in graph.flow.rescues}
+        rescues_by_step = {rb.step_name: rb for rb in graph.flow.rescues}
         # The currently-being-built group; reset between top-level items.
         # Mutated (.append) by closures below; never reassigned inside them.
         _current: list[str] = []
@@ -475,7 +478,16 @@ class PythonEmitter(BaseEmitter):
                 imported_steps.append(step.name)
             kw_parts = []
             for name, value in call.kwargs:
-                if isinstance(value, str) and value.startswith("@"):
+                if isinstance(value, ErrorAccessIR):
+                    if value.field == "message":
+                        kw_parts.append(f"{name}=str(_err)")
+                    elif value.field == "type":
+                        kw_parts.append(f"{name}=type(_err).__name__")
+                    else:
+                        raise AssertionError(
+                            f"unreachable: ErrorAccessIR field {value.field!r}"
+                        )
+                elif isinstance(value, str) and value.startswith("@"):
                     ref = value[1:]
                     if ref in scope_local:
                         kw_parts.append(f"{name}={ref}")
@@ -502,18 +514,28 @@ class PythonEmitter(BaseEmitter):
             # is empty — i.e. never inside a FOR EACH / IF / MATCH / WHILE
             # body. We still gate on `not scope_local` for defence in depth.
             if step.name in rescue_target_names and not scope_local:
+                rb = rescues_by_step[step.name]
+                terminator = rb.body[-1]
                 _current.append(f"{indent}try:")
                 _current.append(f"{indent}    {call_line}")
                 _current.append(f"{indent}except FlowAborted:")
                 _current.append(f"{indent}    raise")
-                _current.append(f"{indent}except Exception:")
-                _current.append(f"{indent}    _rescue_{step.name}(state)")
-                _current.append(f"{indent}    raise")
+                _current.append(f"{indent}except Exception as _err:")
+                if isinstance(terminator, ResumeIR):
+                    assert step.gives is not None  # T9 validates: RESUME requires GIVES
+                    rescued_gives_field = step.gives.name
+                    _current.append(
+                        f"{indent}    state[{rescued_gives_field!r}] = "
+                        f"_rescue_{step.name}(state, _err)"
+                    )
+                else:
+                    _current.append(f"{indent}    _rescue_{step.name}(state, _err)")
+                    _current.append(f"{indent}    raise")
             else:
                 _current.append(f"{indent}{call_line}")
 
         def _emit_item(
-            item: CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR,
+            item: CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR | ResumeIR,
             indent: str,
             scope_local: set[str],
         ) -> None:
@@ -594,6 +616,9 @@ class PythonEmitter(BaseEmitter):
                 for sub in item.body:
                     _emit_item(sub, inner_indent, scope_local)
                 return
+            if isinstance(item, ResumeIR):
+                _current.append(f"{indent}return state[{item.field_name!r}]")
+                return
             if isinstance(item, CallIR):
                 _emit_call(item, indent, scope_local)
                 return
@@ -615,8 +640,10 @@ class PythonEmitter(BaseEmitter):
             _current = []
             for sub in rb.body:
                 _emit_item(sub, "    ", set())
+            terminator = rb.body[-1]
+            ret_ann = "object" if isinstance(terminator, ResumeIR) else "None"
             rescue_helpers.append(
-                f"def _rescue_{rb.step_name}(state: dict) -> None:\n"
+                f"def _rescue_{rb.step_name}(state: dict, _err: BaseException) -> {ret_ann}:\n"
                 + "\n".join(_current)
                 + "\n"
             )

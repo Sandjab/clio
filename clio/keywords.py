@@ -80,6 +80,7 @@ class Keyword(StrEnum):
     WHILE = "WHILE"
     MAX = "MAX"
     RESCUE = "RESCUE"
+    RESUME = "RESUME"
     MCP_TOOL = "mcp_tool"
     MCP_SERVERS = "mcp_servers"
     STDIO = "stdio"

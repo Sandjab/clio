@@ -13,10 +13,93 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.skipif(
+_NEEDS_E2E = pytest.mark.skipif(
     os.environ.get("CLIO_E2E") != "1",
     reason="CLIO_E2E=1 not set",
 )
+
+
+def test_e2e_rescue_resume_python_flow(tmp_path):
+    """A flow whose first (non-trivial) step always raises is rescued by
+    RESUME(recover.report).  The downstream step reads the injected value
+    and returns True, proving RESUME injected the fallback successfully."""
+    import json as _json
+
+    from clio.emitters.python import PythonEmitter
+    from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
+
+    src = """
+STEP load
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE:  exact
+
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  exact
+
+STEP recover
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  exact
+
+STEP downstream
+  TAKES: report: str
+  GIVES: ok: bool
+  MODE:  exact
+
+FLOW pipeline
+  load(path="data.csv")
+    -> detect(rows=rows)
+    -> downstream(report=report)
+
+  RESCUE detect:
+    -> recover(rows=rows)
+    -> RESUME(recover.report)
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+    out_dir = tmp_path / "out"
+    PythonEmitter().emit(build_ir(parse(src)), out_dir)
+
+    pkg = out_dir / "pipeline"
+    (pkg / "steps" / "load.py").write_text(
+        "def load(*, path):\n"
+        "    return [1, 2, 3]\n"
+    )
+    (pkg / "steps" / "detect.py").write_text(
+        "def detect(*, rows):\n"
+        "    raise RuntimeError('detect always fails in this test')\n"
+    )
+    (pkg / "steps" / "recover.py").write_text(
+        "def recover(*, rows):\n"
+        "    return 'rescued-report'\n"
+    )
+    (pkg / "steps" / "downstream.py").write_text(
+        "def downstream(*, report):\n"
+        "    return report == 'rescued-report'\n"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-m", "pipeline", "--kwargs", "{}"],
+        cwd=out_dir,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"subprocess failed (rc={result.returncode})\n"
+        f"stdout: {result.stdout}\n"
+        f"stderr: {result.stderr}"
+    )
+    output = _json.loads(result.stdout)
+    assert output.get("ok") is True, (
+        f"expected ok=True in output, got: {output!r}\n"
+        f"stderr: {result.stderr}"
+    )
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -60,6 +143,7 @@ def _patch_steps(out_dir: Path) -> None:
         naive.write_text(NAIVE_BODY)
 
 
+@_NEEDS_E2E
 def test_python_real_claude_then_cache_hit(tmp_path, monkeypatch):
     out = tmp_path / "out"
     rc = subprocess.run(

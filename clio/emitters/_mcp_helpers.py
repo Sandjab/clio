@@ -8,10 +8,12 @@ from clio.emitters._python_helpers import _has_parallel, _python_condition_expr
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
     CallIR,
+    ErrorAccessIR,
     FlowGraph,
     ForEachIR,
     IfBlockIR,
     MatchBlockIR,
+    ResumeIR,
     StepIR,
     WhileBlockIR,
 )
@@ -286,6 +288,7 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
     # emit the async _rescue_<name> helper functions). Mirror of the python
     # target's pattern in clio/emitters/python.py:413.
     rescue_target_names = {rb.step_name for rb in graph.flow.rescues}
+    rescues_by_step = {rb.step_name: rb for rb in graph.flow.rescues}
 
     def _emit_call(call: CallIR, indent: str, scope_local: set[str]) -> None:
         step = next(s for s in graph.steps if s.name == call.step_name)
@@ -293,7 +296,16 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
             imported_steps.append(step.name)
         kw_parts = []
         for name, value in call.kwargs:
-            if isinstance(value, str) and value.startswith("@"):
+            if isinstance(value, ErrorAccessIR):
+                if value.field == "message":
+                    kw_parts.append(f"{name}=str(_err)")
+                elif value.field == "type":
+                    kw_parts.append(f"{name}=type(_err).__name__")
+                else:
+                    raise AssertionError(
+                        f"unreachable: ErrorAccessIR field {value.field!r}"
+                    )
+            elif isinstance(value, str) and value.startswith("@"):
                 ref = value[1:]
                 if ref in scope_local:
                     kw_parts.append(f"{name}={ref}")
@@ -325,15 +337,25 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
         # FOR EACH / IF / MATCH / WHILE body. We still gate on
         # `not scope_local` for defence in depth (matches python.py:450).
         if step.name in rescue_target_names and not scope_local:
+            rb = rescues_by_step[step.name]
+            terminator = rb.body[-1]
             chain_lines.append(f"{indent}try:")
             chain_lines.append(f"{indent}    {call_line}")
             chain_lines.append(f"{indent}except FlowAborted:")
             chain_lines.append(f"{indent}    raise")
-            chain_lines.append(f"{indent}except Exception:")
-            chain_lines.append(
-                f"{indent}    await _rescue_{step.name}(state, _session=_session)"
-            )
-            chain_lines.append(f"{indent}    raise")
+            chain_lines.append(f"{indent}except Exception as _err:")
+            if isinstance(terminator, ResumeIR):
+                assert step.gives is not None  # T9 validates: RESUME requires GIVES
+                rescued_gives_field = step.gives.name
+                chain_lines.append(
+                    f"{indent}    state[{rescued_gives_field!r}] = "
+                    f"await _rescue_{step.name}(state, _err, _session=_session)"
+                )
+            else:
+                chain_lines.append(
+                    f"{indent}    await _rescue_{step.name}(state, _err, _session=_session)"
+                )
+                chain_lines.append(f"{indent}    raise")
         else:
             chain_lines.append(f"{indent}{call_line}")
 
@@ -414,6 +436,9 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
             for sub in item.body:
                 _emit_item(sub, inner_indent, scope_local)
             return
+        if isinstance(item, ResumeIR):
+            chain_lines.append(f"{indent}return state[{item.field_name!r}]")
+            return
         if isinstance(item, CallIR):
             _emit_call(item, indent, scope_local)
             return
@@ -440,8 +465,10 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
         for sub in rb.body:
             _emit_item(sub, "    ", set())
         rescue_body = "\n".join(chain_lines)
+        terminator = rb.body[-1]
+        ret_ann = "object" if isinstance(terminator, ResumeIR) else "None"
         rescue_helpers.append(
-            f"async def _rescue_{rb.step_name}(state: dict, _session=None) -> None:\n"
+            f"async def _rescue_{rb.step_name}(state: dict, _err: BaseException, _session=None) -> {ret_ann}:\n"
             + rescue_body
             + "\n"
         )

@@ -1,5 +1,70 @@
 # Changelog
 
+## v0.13.0 — 2026-05-14
+
+### Language
+
+- **RESCUE handler can inspect the captured error** (`docs/LANGUAGE_SPEC.md` §RESCUE):
+  `<rescued_step>.error.message` (str) and `<rescued_step>.error.type` (str = Python
+  exception classname) are now valid as kwarg values in step calls inside a RESCUE
+  body. The reference is validated at compile time: the step must be the one
+  protected by the enclosing handler, and the field must be `message` or `type`.
+
+- **RESUME terminator** (same section): `RESUME(<fallback_step>.<field>)` is a
+  second legal terminator of a RESCUE body, next to `abort("...")`. The fallback
+  step must be called earlier in the same chain, the field must exist in its
+  GIVES, and the field's type must structurally equal the rescued step's GIVES
+  type. After RESUME, the flow continues normally with `state[<rescued_field>]`
+  set to the injected value.
+
+### Parser
+
+- `_parse_call_arg` accepts a 3-segment dotted kwarg value `<step>.error.<field>`
+  in addition to STRING, NUMBER, and IDENT shorthand. Other 3-segment patterns
+  (middle ≠ `error`) raise a ParseError with a clear pointer to the supported shape.
+
+- `RESUME` is a new closed keyword. `parse_rescue_block` recognises
+  `RESUME(<step>.<field>)` as a terminator alongside `abort("...")`.
+
+### IR
+
+- New IR nodes `ErrorAccessIR(rescued_step, field, line)` and
+  `ResumeIR(fallback_step, field_name, line)`. `RescueBlockIR.body`'s union widens
+  to accept `ResumeIR` as a legal terminator.
+
+- IR build validates 7 new rules at compile time, each with source line: cross-step
+  error access, unknown error field, error access outside RESCUE, RESUME with
+  missing fallback step, RESUME with unknown field, RESUME with type mismatch,
+  and missing rescue terminator. All produce single-line error messages.
+
+### Emitters
+
+- `python` and `mcp-server` emitters: helper signature gains `_err: BaseException`
+  (mcp-server adds `_session` as before). Wrapper binds `as _err` and passes it.
+  Substitutions `detect.error.message` → `str(_err)` and `detect.error.type` →
+  `type(_err).__name__` emitted inline.
+
+- For `RescueBlockIR` with `ResumeIR` terminator, both emitters dispatch to a
+  RESUME squelette: helper returns `state[<rescued_field>]` (populated by the
+  fallback call earlier in the chain), wrapper assigns the helper's return value
+  to the rescued step's state slot. No `raise` after the helper call.
+
+- `claude-cli` and `langgraph` continue to reject RESCUE at compile time
+  (v0.8 rule unchanged).
+
+### Cross-target invariant
+
+- Flows without RESCUE continue to produce byte-identical output to v0.12.
+
+- Flows with RESCUE produce a single-line diff vs v0.12: the helper signature
+  gains `_err: BaseException` and the wrapper binds `as _err`. No other shape
+  changes.
+
+### Tests
+
+- 19 new test cases: 7 parser, 8 IR validation, 3 Python emitter snapshots,
+  3 MCP emitter snapshots, 1 E2E. Final count: 688 passed (was 669).
+
 ## v0.12.0 — 2026-05-12
 
 ### Language

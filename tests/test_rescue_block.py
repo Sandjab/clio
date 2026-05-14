@@ -4,9 +4,9 @@ See docs/superpowers/specs/2026-05-10-rescue-handler-design.md."""
 import pytest
 
 from clio.ir.builder import IRBuildError, build_ir
-from clio.ir.graph import RescueBlockIR
+from clio.ir.graph import ErrorAccessIR, RescueBlockIR, ResumeIR
 from clio.keywords import Keyword
-from clio.parser.ast_nodes import FlowDecl, RescueBlock, StepCall
+from clio.parser.ast_nodes import ErrorAccessExpr, FlowDecl, RescueBlock, ResumeAst, StepCall
 from clio.parser.parser import parse
 
 
@@ -17,6 +17,11 @@ def _parse(src: str):
 def test_rescue_keyword_present():
     """RESCUE must be registered as a closed keyword of the lexer."""
     assert Keyword.RESCUE.value == "RESCUE"
+
+
+def test_resume_keyword_present():
+    """RESUME must be registered as a closed keyword of the lexer."""
+    assert Keyword.RESUME.value == "RESUME"
 
 
 def test_rescue_block_ast_shape():
@@ -398,3 +403,358 @@ FLOW p
     rescues = graph.flow.rescues
     assert len(rescues) == 1
     assert rescues[0].step_name == "b"
+
+
+ERROR_ACCESS_SRC = """
+STEP load
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE:  exact
+
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  judgment
+
+STEP notify
+  TAKES: channel: str, reason: str, err_type: str
+  GIVES: sent: bool
+  MODE:  exact
+
+FLOW pipeline
+  load(path="x") -> detect(rows=rows)
+
+  RESCUE detect:
+    -> notify(channel="#a", reason=detect.error.message, err_type=detect.error.type)
+    -> abort("detection failed")
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+
+
+def test_parse_error_access_in_kwarg():
+    """`step.error.message` and `step.error.type` parse as ErrorAccessExpr kwarg values."""
+    program = _parse(ERROR_ACCESS_SRC)
+    flow = next(d for d in program.decls if isinstance(d, FlowDecl))
+    rescue = flow.rescues[0]
+    notify_call = rescue.body[0]
+    kwargs = dict(notify_call.kwargs)
+    assert isinstance(kwargs["reason"], ErrorAccessExpr)
+    assert kwargs["reason"].step_name == "detect"
+    assert kwargs["reason"].field == "message"
+    assert isinstance(kwargs["err_type"], ErrorAccessExpr)
+    assert kwargs["err_type"].field == "type"
+
+
+# ---------------------------------------------------------------------------
+# RESUME(<step>.<field>) terminator (Task 4)
+# ---------------------------------------------------------------------------
+
+RESUME_SRC = """
+STEP load
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE:  exact
+
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  judgment
+
+STEP recover
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  exact
+
+FLOW pipeline
+  load(path="data.csv")
+    -> detect(rows=rows)
+
+  RESCUE detect:
+    -> recover(rows=rows)
+    -> RESUME(recover.report)
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+
+
+def test_ir_builds_error_access():
+    """ErrorAccessExpr kwargs in a RESCUE body become ErrorAccessIR in the IR."""
+    program = _parse(ERROR_ACCESS_SRC)
+    graph = build_ir(program)
+    rescue = graph.flow.rescues[0]
+    notify_ir = rescue.body[0]
+    kwargs = dict(notify_ir.kwargs)
+    assert isinstance(kwargs["reason"], ErrorAccessIR)
+    assert kwargs["reason"].rescued_step == "detect"
+    assert kwargs["reason"].field == "message"
+    assert isinstance(kwargs["err_type"], ErrorAccessIR)
+    assert kwargs["err_type"].field == "type"
+
+
+def test_parse_resume_terminator():
+    """RESUME(<step>.<field>) parses as a ResumeAst at the end of the rescue body."""
+    program = _parse(RESUME_SRC)
+    flow = next(d for d in program.decls if isinstance(d, FlowDecl))
+    rescue = flow.rescues[0]
+    last = rescue.body[-1]
+    assert isinstance(last, ResumeAst)
+    assert last.fallback_step == "recover"
+    assert last.field_name == "report"
+
+
+# ---------------------------------------------------------------------------
+# T7: ErrorAccessIR validation rules
+# ---------------------------------------------------------------------------
+
+
+def test_ir_rejects_error_access_cross_step():
+    """`<other_step>.error.X` where other_step is not the rescued step → reject."""
+    src = ERROR_ACCESS_SRC.replace(
+        "reason=detect.error.message",
+        "reason=load.error.message",
+    )
+    program = _parse(src)
+    with pytest.raises(IRBuildError) as exc:
+        build_ir(program)
+    assert "can only reference the step protected by this RESCUE" in str(exc.value)
+
+
+def test_ir_rejects_error_access_unknown_field():
+    src = ERROR_ACCESS_SRC.replace(
+        "reason=detect.error.message",
+        "reason=detect.error.stacktrace",
+    )
+    program = _parse(src)
+    with pytest.raises(IRBuildError) as exc:
+        build_ir(program)
+    assert "unknown error field 'stacktrace'" in str(exc.value)
+    assert "'message'" in str(exc.value) and "'type'" in str(exc.value)
+
+
+def test_ir_rejects_error_access_outside_rescue():
+    """ErrorAccessExpr in the main flow chain (not inside a RESCUE body) → reject."""
+    src = """
+STEP a
+  TAKES: x: int
+  GIVES: y: int
+  MODE: exact
+
+STEP b
+  TAKES: msg: str
+  GIVES: z: int
+  MODE: exact
+
+FLOW f
+  a(x=1) -> b(msg=a.error.message)
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+    program = _parse(src)
+    with pytest.raises(IRBuildError) as exc:
+        build_ir(program)
+    assert "step.error.<field> is only valid inside a RESCUE handler" in str(exc.value)
+
+
+def test_ir_builds_resume_terminator():
+    """RESUME at the end of a rescue body becomes a ResumeIR in the IR."""
+    program = _parse(RESUME_SRC)
+    graph = build_ir(program)
+    rescue = graph.flow.rescues[0]
+    last = rescue.body[-1]
+    assert isinstance(last, ResumeIR)
+    assert last.fallback_step == "recover"
+    assert last.field_name == "report"
+
+
+# ---------------------------------------------------------------------------
+# T9: ResumeIR semantic validations
+# ---------------------------------------------------------------------------
+
+
+def test_ir_rejects_resume_fallback_not_in_chain():
+    src = RESUME_SRC.replace(
+        "RESUME(recover.report)",
+        "RESUME(ghost.report)",
+    )
+    program = _parse(src)
+    with pytest.raises(IRBuildError) as exc:
+        build_ir(program)
+    assert "RESUME(ghost.report)" in str(exc.value)
+    assert "is not called in this RESCUE handler" in str(exc.value)
+
+
+def test_ir_rejects_resume_field_not_in_gives():
+    src = RESUME_SRC.replace(
+        "RESUME(recover.report)",
+        "RESUME(recover.nope)",
+    )
+    program = _parse(src)
+    with pytest.raises(IRBuildError) as exc:
+        build_ir(program)
+    assert "is not a field of step 'recover'" in str(exc.value)
+
+
+def test_ir_rejects_resume_type_mismatch():
+    # detect.gives: report: str  /  recover.gives: report: int  → type mismatch
+    src = """
+STEP load
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE:  exact
+
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  judgment
+
+STEP recover
+  TAKES: rows: List<int>
+  GIVES: report: int
+  MODE:  exact
+
+FLOW pipeline
+  load(path="data.csv")
+    -> detect(rows=rows)
+
+  RESCUE detect:
+    -> recover(rows=rows)
+    -> RESUME(recover.report)
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+    program = _parse(src)
+    with pytest.raises(IRBuildError) as exc:
+        build_ir(program)
+    assert "is incompatible with rescued step's GIVES type" in str(exc.value)
+
+
+def test_ir_rejects_rescue_without_terminator():
+    src = """
+STEP load
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE:  exact
+
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  judgment
+
+STEP notify
+  TAKES: channel: str
+  GIVES: sent: bool
+  MODE:  exact
+
+FLOW pipeline
+  load(path="data.csv")
+    -> detect(rows=rows)
+
+  RESCUE detect:
+    -> notify(channel="#a")
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+    program = _parse(src)
+    with pytest.raises(IRBuildError) as exc:
+        build_ir(program)
+    assert "must end with abort(...) or RESUME(...)" in str(exc.value)
+
+
+def test_ir_accepts_resume_contract_ref_type_match():
+    """RESUME where both fallback and rescued GIVES are the same CONTRACT ref must succeed.
+
+    This is a regression test for the bug where ContractRef instances with
+    different source locations (line/col) compared unequal via raw !=, causing
+    a false type-mismatch rejection.
+    """
+    src = """
+CONTRACT churn_report
+  SHAPE: {risks: List<{client: str, score: float}>}
+
+STEP load
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE:  exact
+
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: report: churn_report
+  MODE:  judgment
+
+STEP recover
+  TAKES: rows: List<int>
+  GIVES: report: churn_report
+  MODE:  exact
+
+FLOW pipeline
+  load(path="data.csv")
+    -> detect(rows=rows)
+
+  RESCUE detect:
+    -> recover(rows=rows)
+    -> RESUME(recover.report)
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+    program = _parse(src)
+    graph = build_ir(program)
+    rescue = graph.flow.rescues[0]
+    last = rescue.body[-1]
+    # No exception means the type-equality check accepted the two ContractRefs
+    # despite their different line/col.
+    assert isinstance(last, ResumeIR)
+    assert last.fallback_step == "recover"
+    assert last.field_name == "report"
+
+
+def test_ir_accepts_resume_with_renamed_fallback_field():
+    """RESUME where fallback's GIVES field name differs from rescued's GIVES
+    field name (but types match) must succeed after C2."""
+    src = """
+STEP load
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE:  exact
+
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  judgment
+
+STEP recover
+  TAKES: rows: List<int>
+  GIVES: alt_report: str
+  MODE:  exact
+
+FLOW pipeline
+  load(path="data.csv")
+    -> detect(rows=rows)
+
+  RESCUE detect:
+    -> recover(rows=rows)
+    -> RESUME(recover.alt_report)
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+    program = _parse(src)
+    graph = build_ir(program)
+    rescue = graph.flow.rescues[0]
+    last = rescue.body[-1]
+    assert isinstance(last, ResumeIR)
+    assert last.fallback_step == "recover"
+    assert last.field_name == "alt_report"

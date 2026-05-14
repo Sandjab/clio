@@ -244,6 +244,31 @@ class CallIR:
 
 
 @dataclass(frozen=True)
+class ErrorAccessIR:
+    """`<rescued_step>.error.<field>` reference resolved inside a RESCUE
+    body. `rescued_step` MUST equal the step protected by the enclosing
+    RESCUE handler. `field` MUST be one of {"message", "type"} (both
+    validated at IR build time)."""
+    rescued_step: str
+    field: str
+    line: int
+
+
+@dataclass(frozen=True)
+class ResumeIR:
+    """`RESUME(<fallback_step>.<field_name>)` terminator of a RESCUE chain.
+
+    `fallback_step` MUST be a step called earlier in the same RESCUE
+    handler chain. `field_name` MUST be a key of that step's GIVES.
+    The type of that field MUST be structurally equal to the GIVES type
+    of the step rescued by this handler. All three validated at IR
+    build time (Task 9, follow-up to this task)."""
+    fallback_step: str
+    field_name: str
+    line: int
+
+
+@dataclass(frozen=True)
 class ForEachIR:
     """IR mirror of ForEachBlock: iterate `loop_var` over `collection` (a state
     field name), executing `body` for each element.
@@ -331,7 +356,7 @@ class RescueBlockIR:
     pointer because StepIR is frozen). The handler runs only if the
     referenced STEP raises after its ON_FAIL chain (if any) exhausts."""
     step_name: str
-    body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
+    body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR | ResumeIR, ...]"
     line: int
 
 

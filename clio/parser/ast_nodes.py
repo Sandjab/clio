@@ -91,7 +91,7 @@ class ForEachBlock:
     each item, and results are collected into `state[<collector>]` as a list."""
     loop_var: str
     collection: str
-    body: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock, ...]"
+    body: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock | ResumeAst, ...]"
     line: int
     col: int
     parallel: bool = False
@@ -168,7 +168,7 @@ class RescueBlock:
     body runs if step_name raises after its ON_FAIL chain is exhausted.
     The body's last top-level item must be a StepCall to `abort`."""
     step_name: str
-    body: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock, ...]"
+    body: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock | ResumeAst, ...]"
     line: int
     col: int
 
@@ -176,7 +176,7 @@ class RescueBlock:
 @dataclass(frozen=True)
 class FlowDecl:
     name: str
-    chain: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock, ...]"
+    chain: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock | ResumeAst, ...]"
     rescues: "tuple[RescueBlock, ...]"
     line: int
     col: int
@@ -225,6 +225,35 @@ class FieldRefExpr(ExprNode):
     by the IR builder."""
     step_name: str
     field: str
+
+
+@dataclass(frozen=True)
+class ErrorAccessExpr(ExprNode):
+    """`<step_name>.error.<field>` — kwarg value reference to the captured
+    error of a step protected by a RESCUE handler. Valid only as a kwarg
+    value inside a step call that itself lives in a RESCUE body. Bound to
+    the rescued step's identity by the IR builder.
+
+    `field` is parsed as-is; the IR builder validates membership in
+    {"message", "type"}."""
+    step_name: str
+    field: str
+    line: int
+
+
+@dataclass(frozen=True)
+class ResumeAst:
+    """`RESUME(<fallback_step>.<field>)` — alternative terminator of a
+    RESCUE handler chain (next to `abort(...)`). `fallback_step` is
+    the name of a step called earlier in the same RESCUE chain;
+    `field_name` is one of that step's GIVES fields.
+
+    The IR builder validates that the field type matches the rescued
+    step's GIVES type."""
+    fallback_step: str
+    field_name: str
+    line: int
+    col: int
 
 
 @dataclass(frozen=True)

@@ -81,6 +81,86 @@ WHILE requires cyclic edges plus state-counter accumulators in LangGraph, which 
 
 **Fix:** use `--target python` or `--target mcp-server` for refine-loop / improve-until-acceptable patterns. The bounded `for _i in range(MAX): if not cond: break; body` pattern they emit is the canonical CLIO WHILE today.
 
+### `IRBuildError: line N: <step>.error.<field>: can only reference the step protected by this RESCUE`
+
+**Cause:** A `step.error.message` or `step.error.type` kwarg value refers to a
+step other than the one protected by the enclosing `RESCUE` handler.
+
+**Fix:** use the rescued step's own name on the left of `.error.`:
+
+```
+RESCUE detect:
+  -> notify(reason=detect.error.message)    # OK — detect is the rescued step
+  -> notify(reason=load.error.message)      # ERROR — load is not the rescued step
+```
+
+### `IRBuildError: line N: unknown error field 'X', expected one of ['message', 'type']`
+
+**Cause:** Only `step.error.message` (the exception string) and `step.error.type`
+(the Python exception class name) are exposed in v0.13. Other names like
+`.stacktrace` or `.cause` are not supported.
+
+**Fix:** use one of the two supported fields. If you need additional context,
+read it inside the `exact` step's Python body (e.g., `traceback.format_exc()`).
+
+### `IRBuildError: line N: step.error.<field> is only valid inside a RESCUE handler`
+
+**Cause:** `step.error.message` or `step.error.type` appeared as a kwarg value
+in the main FLOW chain, not inside a RESCUE body. These values are only
+meaningful while handling a failure.
+
+**Fix:** move the reference into the `RESCUE <step>:` block attached to the
+step whose error you want to inspect.
+
+### `IRBuildError: line N: RESUME(<step>.<field>): step '<step>' is not called in this RESCUE handler`
+
+**Cause:** The step named in `RESUME(X.field)` does not appear as a call
+earlier in the same RESCUE body chain.
+
+**Fix:** call the fallback step in the RESCUE body before the `RESUME` line:
+
+```
+RESCUE detect:
+  -> fallback_detect(rows=rows)     # call the fallback step first
+  -> RESUME(fallback_detect.report) # then resume from its result
+```
+
+### `IRBuildError: line N: RESUME(<step>.<field>): '<field>' is not a field of step '<step>'`
+
+**Cause:** The field name in `RESUME(step.field)` does not match any `GIVES`
+declaration on the fallback step.
+
+**Fix:** check the fallback step's `GIVES` and use the exact field name it
+declares.
+
+### `IRBuildError: line N: RESUME(<step>.<field>): type T1 is incompatible with rescued step's GIVES type T2`
+
+**Cause:** The fallback step's `GIVES` type does not structurally match the
+rescued step's `GIVES` type. v0.13 requires strict equality so that the
+injected value is a drop-in replacement.
+
+**Fix:** align the types. Either change the fallback step's `GIVES` type to
+match, or introduce an intermediate `exact` step that transforms the fallback
+result into the expected shape before the `RESUME`.
+
+### `IRBuildError: line N: RESCUE body for 'X' must end with abort(...) or RESUME(...)`
+
+**Cause:** The last top-level item in the `RESCUE <step>:` chain is neither
+`abort("...")` nor `RESUME(<step>.<field>)`. Every RESCUE handler must
+terminate with exactly one of these.
+
+**Fix:** add the missing terminator. If the handler runs side effects and has
+no meaningful fallback, end with `abort("...")`:
+
+```
+RESCUE detect:
+  -> notify(channel="#alerts", reason=detect.error.message, err_type=detect.error.type)
+  -> abort("detect failed — see #alerts")
+```
+
+If a deterministic fallback is available, end with `RESUME(...)` instead (see
+[recipe #14](#14-fallback-via-resume--recover-from-a-judgment-step-failure)).
+
 ### `IRBuildError: line N: RESCUE body for 'X' must end with abort(...) at the top level of the body chain`
 
 The last item of the top-level chain in your `RESCUE X:` block must be

@@ -1792,6 +1792,79 @@ def test_python_runtime_rescue_aborts(tmp_path):
                 del sys.modules[k]
 
 
+def test_python_emitter_rescue_abort_helper_takes_err(tmp_path):
+    """Helper signature includes `_err`, wrapper binds `as _err` and passes it."""
+    src = """STEP load
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE:  exact
+
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  judgment
+
+STEP notify
+  TAKES: channel: str
+  GIVES: sent: bool
+  MODE:  exact
+
+FLOW pipeline
+  load(path="x.csv")
+    -> detect(rows=rows)
+
+  RESCUE detect:
+    -> notify(channel="#a")
+    -> abort("boom")
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+    graph = build_ir(parse(src))
+    PythonEmitter().emit(graph, tmp_path)
+    flow_py = (tmp_path / "pipeline" / "flow.py").read_text()
+    assert "def _rescue_detect(state: dict, _err: BaseException) -> None:" in flow_py
+    assert "except Exception as _err:" in flow_py
+    assert "_rescue_detect(state, _err)" in flow_py
+
+
+def test_python_emitter_rescue_error_access_substitutions(tmp_path):
+    """ErrorAccessIR kwargs emit str(_err) / type(_err).__name__ in _rescue_ helper."""
+    src = """
+STEP load
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE:  exact
+
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  judgment
+
+STEP notify
+  TAKES: channel: str, reason: str, err_type: str
+  GIVES: sent: bool
+  MODE:  exact
+
+FLOW pipeline
+  load(path="x") -> detect(rows=rows)
+
+  RESCUE detect:
+    -> notify(channel="#a", reason=detect.error.message, err_type=detect.error.type)
+    -> abort("boom")
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+    graph = build_ir(parse(src))
+    PythonEmitter().emit(graph, tmp_path)
+    flow_py = (tmp_path / "pipeline" / "flow.py").read_text()
+    assert "reason=str(_err)" in flow_py
+    assert "err_type=type(_err).__name__" in flow_py
+
+
 # --- impl.mode: mcp_tool emission (v0.10) -----------------------------------
 
 _MCP_PY_SRC = (
@@ -1838,6 +1911,50 @@ def test_python_emit_mcp_tool_bundles_runtime(tmp_path):
     assert (rt / "mcp_client.py").exists()
     # mcp_client imports `subst` from rest, so rest must be bundled too.
     assert (rt / "rest.py").exists()
+
+
+def test_python_emitter_rescue_resume_terminator(tmp_path):
+    src = """
+STEP load
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE:  exact
+
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  judgment
+
+STEP recover
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  exact
+
+STEP downstream
+  TAKES: report: str
+  GIVES: ok: bool
+  MODE:  exact
+
+FLOW pipeline
+  load(path="x") -> detect(rows=rows) -> downstream(report=report)
+
+  RESCUE detect:
+    -> recover(rows=rows)
+    -> RESUME(recover.report)
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+    graph = build_ir(parse(src))
+    PythonEmitter().emit(graph, tmp_path)
+    flow_py = (tmp_path / "pipeline" / "flow.py").read_text()
+    # Wrapper assigns helper return to rescued step's slot:
+    assert "state['report'] = _rescue_detect(state, _err)" in flow_py
+    # Helper returns from the state slot the fallback populated:
+    assert "return state['report']" in flow_py
+    # The downstream call still reads state["report"] as before:
+    assert "state['ok'] = downstream_mod.downstream(report=state['report'])" in flow_py
 
 
 def test_python_emit_mcp_tool_renders_env_pairs_as_list_of_tuples(tmp_path):

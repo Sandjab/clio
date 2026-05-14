@@ -1819,3 +1819,65 @@ def test_parse_databases_unknown_field_rejected():
     )
     with pytest.raises(ParseError, match=r"unknown field 'port'"):
         parse(src)
+
+
+def test_parse_error_three_segment_middle_not_error():
+    """3-segment dotted kwarg with middle != 'error' must raise ParseError."""
+    src = """
+STEP a
+  TAKES: x: int
+  GIVES: y: int
+  MODE: exact
+
+STEP b
+  TAKES: foo: int
+  GIVES: bar: int
+  MODE: exact
+
+FLOW f
+  a(x=1)
+
+  RESCUE a:
+    -> b(foo=a.report.client)
+    -> abort("nope")
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "unknown 2-segment kwarg value 'a.report'" in str(exc.value)
+    assert "<step>.error.<message|type>" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "src_body, expected_msg_fragment",
+    [
+        ("    -> RESUME(foo)",                 "expected DOT"),
+        ('    -> RESUME("literal")',           "RESUME requires '<step>.<field>'"),
+        ("    -> RESUME()",                    "RESUME requires '<step>.<field>'"),
+        ("    -> RESUME(a.b.c)",               "RESUME accepts exactly '<step>.<field>'"),
+        ("    -> RESUME(a.b, c.d)",            "RESUME takes a single '<step>.<field>'"),
+    ],
+)
+def test_parse_error_malformed_resume(src_body, expected_msg_fragment):
+    src = f"""
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE: judgment
+
+FLOW pipeline
+  detect(rows=rows)
+
+  RESCUE detect:
+{src_body}
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert expected_msg_fragment in str(exc.value)
