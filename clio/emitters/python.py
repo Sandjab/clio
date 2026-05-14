@@ -11,6 +11,7 @@ the PythonEmitter class.
 import json
 from pathlib import Path
 
+from clio.emitters._shared_utils import _safe_package_name
 from clio.emitters._python_helpers import (
     _emit_attempt_block,
     _gives_validator_expr,
@@ -911,9 +912,7 @@ class PythonEmitter(BaseEmitter):
 
     @staticmethod
     def _package_name(graph: FlowGraph) -> str:
-        if graph.flow is None:
-            return "clio_flow"
-        return graph.flow.name
+        return _safe_package_name(graph, default="clio_flow")
 
     @staticmethod
     def _pyproject(

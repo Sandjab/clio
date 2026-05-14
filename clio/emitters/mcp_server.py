@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from clio.emitters._shared_utils import _safe_package_name
 from clio.emitters._mcp_helpers import (
     _emit_flow_module_async,
     _emit_main_module,
@@ -40,7 +41,7 @@ class MCPServerEmitter(BaseEmitter):
         self._validate_for_mcp(graph)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        pkg_name = graph.flow.name if graph.flow is not None else "clio_mcp"
+        pkg_name = _safe_package_name(graph, default="clio_mcp")
         pkg_dir = output_dir / pkg_name
         steps_dir = pkg_dir / "steps"
         pkg_dir.mkdir(parents=True, exist_ok=True)

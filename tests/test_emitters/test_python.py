@@ -2152,3 +2152,33 @@ def test_python_emit_test_files_are_executable_pytest(tmp_path):
     test_path = tmp_path / "tests" / "test_t_collect.py"
     code = test_path.read_text()
     compile(code, str(test_path), "exec")  # raises SyntaxError if invalid
+
+
+def test_emit_with_python_keyword_flow_name_produces_importable_package(tmp_path):
+    """A FLOW named after a Python keyword (e.g. `class`) produces a package
+    whose generated imports (`from class.flow import ...`) would be a SyntaxError.
+    The emitter must sanitize the package directory and import statements.
+    """
+    src = (
+        "STEP greet\n"
+        "  GIVES: msg: str\n"
+        "  MODE: exact\n"
+        "FLOW class\n"
+        "  greet()\n"
+    )
+    graph = build_ir(parse(src))
+    PythonEmitter().emit(graph, tmp_path)
+
+    # The emitted package directory must NOT clash with a Python reserved
+    # keyword; one stable convention is to suffix with `_`.
+    pkg_dir = tmp_path / "class_"
+    assert pkg_dir.is_dir(), (
+        f"expected sanitized package dir 'class_' under {tmp_path}, got: "
+        f"{sorted(p.name for p in tmp_path.iterdir())}"
+    )
+
+    # Every emitted .py file must be syntactically valid Python (no
+    # `from class import ...` lurking inside).
+    for py in pkg_dir.rglob("*.py"):
+        code = py.read_text()
+        compile(code, str(py), "exec")  # raises SyntaxError if any import is broken
