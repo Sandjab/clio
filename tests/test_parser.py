@@ -1819,3 +1819,33 @@ def test_parse_databases_unknown_field_rejected():
     )
     with pytest.raises(ParseError, match=r"unknown field 'port'"):
         parse(src)
+
+
+def test_parse_error_three_segment_middle_not_error():
+    """3-segment dotted kwarg with middle != 'error' must raise ParseError."""
+    src = """
+STEP a
+  TAKES: x: int
+  GIVES: y: int
+  MODE: exact
+
+STEP b
+  TAKES: foo: int
+  GIVES: bar: int
+  MODE: exact
+
+FLOW f
+  a(x=1)
+
+  RESCUE a:
+    -> b(foo=a.report.client)
+    -> abort("nope")
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "unknown 2-segment kwarg value 'a.report'" in str(exc.value)
+    assert "<step>.error.<message|type>" in str(exc.value)
