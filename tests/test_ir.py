@@ -843,3 +843,102 @@ def test_ir_build_sql_primitive_gives_shape_accepted():
     g = build_ir(parse(src))
     step = g.steps[0]
     assert isinstance(step.impl, SqlImplIR)
+
+
+# -- multi-FLOW (v0.15) --
+
+
+def test_build_ir_multiple_flows_requires_flow_name():
+    src = (
+        "STEP foo\n"
+        "  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n"
+        "FLOW alpha\n  foo(x=\"a\")\n"
+        "FLOW beta\n  foo(x=\"b\")\n"
+    )
+    with pytest.raises(IRBuildError) as exc:
+        build_ir(parse(src))
+    assert "2 FLOWs" in str(exc.value)
+    assert "alpha" in str(exc.value) and "beta" in str(exc.value)
+
+
+def test_build_ir_multi_flow_select_by_name():
+    src = (
+        "STEP foo\n"
+        "  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n"
+        "FLOW alpha\n  foo(x=\"a\")\n"
+        "FLOW beta\n  foo(x=\"b\")\n"
+    )
+    g = build_ir(parse(src), flow_name="beta")
+    assert g.flow is not None
+    assert g.flow.name == "beta"
+
+
+def test_build_ir_unknown_flow_name_raises():
+    src = (
+        "STEP foo\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n"
+        "FLOW alpha\n  foo(x=\"a\")\n"
+    )
+    with pytest.raises(IRBuildError) as exc:
+        build_ir(parse(src), flow_name="missing")
+    assert "not found" in str(exc.value)
+    assert "alpha" in str(exc.value)
+
+
+def test_build_ir_duplicate_flow_name_rejected():
+    src = (
+        "STEP foo\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n"
+        "FLOW alpha\n  foo(x=\"a\")\n"
+        "FLOW alpha\n  foo(x=\"b\")\n"
+    )
+    with pytest.raises(IRBuildError) as exc:
+        build_ir(parse(src))
+    assert "duplicate FLOW name" in str(exc.value)
+
+
+def test_build_ir_single_flow_ignores_flow_name_when_matching():
+    src = (
+        "STEP foo\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n"
+        "FLOW alpha\n  foo(x=\"a\")\n"
+    )
+    # Backwards compat: a flow_name that matches the single flow is fine.
+    g = build_ir(parse(src), flow_name="alpha")
+    assert g.flow.name == "alpha"
+
+
+# -- TEST block (v0.15) --
+
+
+def test_ir_test_references_unknown_flow_raises():
+    src = (
+        "STEP load\n  MODE: exact\n"
+        "FLOW p\n  load()\n"
+        "TEST t1:\n  FLOW: zzz\n  EXPECTS:\n    rows: not_empty\n"
+    )
+    with pytest.raises(IRBuildError) as exc:
+        build_ir(parse(src))
+    assert "unknown" in str(exc.value)
+    assert "zzz" in str(exc.value)
+
+
+def test_ir_duplicate_test_name_rejected():
+    src = (
+        "STEP load\n  MODE: exact\n"
+        "FLOW p\n  load()\n"
+        "TEST t1:\n  FLOW: p\n  EXPECTS:\n    a: not_empty\n"
+        "TEST t1:\n  FLOW: p\n  EXPECTS:\n    b: not_empty\n"
+    )
+    with pytest.raises(IRBuildError) as exc:
+        build_ir(parse(src))
+    assert "duplicate TEST" in str(exc.value)
+
+
+def test_ir_test_appears_in_graph_tests_tuple():
+    src = (
+        "STEP load\n  MODE: exact\n"
+        "FLOW p\n  load()\n"
+        "TEST t1:\n  FLOW: p\n  EXPECTS:\n    rows: not_empty\n"
+    )
+    g = build_ir(parse(src))
+    assert len(g.tests) == 1
+    assert g.tests[0].name == "t1"
+    assert g.tests[0].flow_name == "p"

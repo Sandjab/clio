@@ -1,5 +1,50 @@
 # Changelog
 
+## v0.15.0 — 2026-05-14
+
+OpenProse-inspired sprint: borrows the most defensible ideas from
+`openprose/prose` (diagnostic command, free-text intent, status command,
+declarative tests, multi-flow files) without sacrificing CLIO's
+deterministic-compiler philosophy. See
+[docs/COMPARISON_OPENPROSE.md](docs/COMPARISON_OPENPROSE.md) for the full
+side-by-side comparison and why each idea was either adopted, deferred, or
+rejected.
+
+### Added
+
+- **`clio doctor [SOURCE]`** — environment diagnostic command. Checks Python
+  version, `ANTHROPIC_API_KEY`, anthropic SDK importability, and (when a
+  `.clio` source is given) MCP server commands on PATH plus declared database
+  URL parsability. Exits 1 on any FAIL, 0 otherwise.
+- **`clio status [--state-file PATH] [--log-file PATH] [--limit N]`** — read a
+  python-target run's `state.json` and tail the last N events from a
+  `CLIO_LOG_FILE` JSONL log. Useful for "what was the last run, where did it
+  stop, what events did it emit" without writing custom tooling.
+- **`DESCRIPTION:` and `STRATEGIES:` per STEP** — optional free-text fields
+  (single-line `"..."` or `|` block scalar) carrying author intent and edge-case
+  heuristics. The python emitter appends them as a "Step intent: …" and
+  "Heuristics: …" suffix to the judgment step's `_SYSTEM_PROMPT`, so the model
+  has the context without changing the strict JSON-only output contract.
+  Byte-identical to v0.14 output when neither field is set.
+- **Multiple `FLOW` declarations per source file** — `clio compile` and
+  `clio graph` accept `--flow <name>` to pick one. Single-FLOW files behave
+  exactly as before. Duplicate FLOW names are rejected at IR build time with a
+  source-line message.
+- **`TEST` top-level block** — declarative tests with `FLOW: <name>`, optional
+  `WITH:` kwargs, and `EXPECTS:` / `EXPECTS_NOT:` predicate blocks. Predicates:
+  `not_empty`, `empty`, `== <literal>`, `!= <literal>`, `> N`, `>= N`, `< N`,
+  `<= N`, `contains <literal>`. Emitted as pytest files under `<output>/tests/`
+  by the **python** target. Other targets ignore TESTs (no crash).
+- `docs/COMPARISON_OPENPROSE.md` — comparative analysis with openprose: grid,
+  similarities, each side, narrative positioning, and the cross-pollination
+  table that drove this sprint.
+
+### Internal
+
+- `clio/diagnostics.py` — new module with status and doctor logic.
+
+---
+
 ## v0.14.0 — 2026-05-14
 
 ### Added

@@ -191,3 +191,133 @@ def test_gen_inline_and_from_file_conflict_returns_2(tmp_path, monkeypatch, caps
     assert rc == 2
     err = capsys.readouterr().err
     assert "either" in err.lower() and "--from-file" in err
+
+
+# -- doctor / status --
+
+
+def test_doctor_no_source_returns_0_when_env_warns(monkeypatch, capsys):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    rc = main(["doctor"])
+    out = capsys.readouterr().out
+    assert "python version" in out
+    assert "anthropic SDK" in out
+    assert "ANTHROPIC_API_KEY" in out
+    # WARN doesn't fail the run when no source is given.
+    assert rc == 0
+
+
+def test_doctor_with_source_judgment_fails_without_api_key(tmp_path, monkeypatch, capsys):
+    src = tmp_path / "f.clio"
+    src.write_text(
+        "STEP foo\n  MODE: judgment\n  TAKES: x: str\n  GIVES: y: str\n"
+        "FLOW p\n  foo(x=\"a\")\n"
+    )
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    rc = main(["doctor", str(src)])
+    out = capsys.readouterr().out
+    assert "source compiles" in out
+    assert "ANTHROPIC_API_KEY" in out
+    assert rc == 1
+
+
+def test_doctor_multi_flow_without_selector_reports_fail(tmp_path, monkeypatch, capsys):
+    """Regression: clio doctor used to crash on multi-FLOW sources because
+    build_ir requires --flow when more than one flow is declared
+    (Gemini PR #13 review). Now it surfaces as a clean FAIL line."""
+    src = tmp_path / "two.clio"
+    src.write_text(
+        "STEP foo\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n"
+        "FLOW alpha\n  foo(x=\"a\")\n"
+        "FLOW beta\n  foo(x=\"b\")\n"
+    )
+    rc = main(["doctor", str(src)])
+    out = capsys.readouterr().out
+    assert "FAIL" in out
+    assert "2 FLOWs" in out
+    assert rc == 1
+
+
+def test_doctor_multi_flow_with_selector_passes(tmp_path, monkeypatch, capsys):
+    src = tmp_path / "two.clio"
+    src.write_text(
+        "STEP foo\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n"
+        "FLOW alpha\n  foo(x=\"a\")\n"
+        "FLOW beta\n  foo(x=\"b\")\n"
+    )
+    rc = main(["doctor", str(src), "--flow", "beta"])
+    out = capsys.readouterr().out
+    assert "source compiles" in out
+    # No FAIL when the right flow is selected and there are no judgment steps.
+    assert "FAIL" not in out
+    assert rc == 0
+
+
+def test_doctor_source_compile_error_reports_fail(tmp_path, monkeypatch, capsys):
+    src = tmp_path / "bad.clio"
+    src.write_text("STEP\n  MODE: bogus\n")  # missing IDENT after STEP
+    rc = main(["doctor", str(src)])
+    out = capsys.readouterr().out
+    assert "FAIL" in out
+    assert rc == 1
+
+
+def test_status_no_state_file_reports_missing(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CLIO_STATE_FILE", raising=False)
+    monkeypatch.delenv("CLIO_LOG_FILE", raising=False)
+    rc = main(["status"])
+    out = capsys.readouterr().out
+    assert "state file" in out
+    assert "missing" in out
+    assert rc == 0
+
+
+def test_compile_multi_flow_requires_selector(tmp_path, capsys):
+    src = tmp_path / "two.clio"
+    src.write_text(
+        "STEP foo\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n"
+        "FLOW alpha\n  foo(x=\"a\")\n"
+        "FLOW beta\n  foo(x=\"b\")\n"
+    )
+    rc = main(["compile", str(src), "--target", "python", "--output", str(tmp_path / "o")])
+    assert rc == 1
+    out = (capsys.readouterr().out or capsys.readouterr().err).lower()
+    # one of stdout/stderr should carry the helpful diagnostic
+    assert "flow" in out
+
+
+def test_compile_multi_flow_with_selector_picks_one(tmp_path):
+    src = tmp_path / "two.clio"
+    src.write_text(
+        "STEP foo\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n"
+        "FLOW alpha\n  foo(x=\"a\")\n"
+        "FLOW beta\n  foo(x=\"b\")\n"
+    )
+    out = tmp_path / "o"
+    rc = main(["compile", str(src), "--target", "python", "--output", str(out), "--flow", "beta"])
+    assert rc == 0
+    # Python target produces pyproject + package dir; flow name 'beta' drives the entry.
+    assert (out / "pyproject.toml").exists()
+
+
+def test_status_reads_state_and_log(tmp_path, monkeypatch, capsys):
+    import json
+    sf = tmp_path / "state.json"
+    sf.write_text(json.dumps({
+        "version": 1, "flow": "demo", "step_index": 3,
+        "state": {"a": 1, "b": 2},
+    }))
+    lf = tmp_path / "log.jsonl"
+    lf.write_text(
+        '{"ts": "2026-05-14T10:00:00Z", "event": "flow_start", "flow": "demo"}\n'
+        '{"ts": "2026-05-14T10:00:01Z", "event": "step_end", "step": "load", '
+        '"mode": "exact", "success": true, "duration_ms": 42}\n'
+    )
+    rc = main(["status", "--state-file", str(sf), "--log-file", str(lf)])
+    out = capsys.readouterr().out
+    assert "demo" in out
+    assert "step_index" in out
+    assert "flow_start" in out
+    assert "step_end" in out
+    assert rc == 0

@@ -2,6 +2,23 @@
 
 This is the reference grammar for the CLIO language. The compiler parses `.clio` files written in this syntax.
 
+## v0.15 changes
+
+Adds OpenProse-inspired surface features without touching execution semantics:
+
+- **`DESCRIPTION:` and `STRATEGIES:`** — optional free-text fields on `STEP`.
+  Both accept either a quoted `"..."` single-line string or a `|` block scalar.
+  The python emitter appends them to the judgment step's system prompt as a
+  "Step intent: …" / "Heuristics: …" suffix. Other targets store them in IR
+  and may use them later.
+- **Multiple `FLOW` declarations per file** — the parser accepts any number.
+  IR build requires `--flow <name>` (programmatic: `build_ir(program, flow_name=...)`)
+  when more than one FLOW exists. Single-FLOW files behave exactly as v0.14.
+  Duplicate FLOW names are rejected at IR build time with the source line.
+- **`TEST` top-level block** — declarative tests, see §TEST below. Emitted as
+  pytest files by the `python` target under `<output>/tests/`. Other targets
+  ignore them silently in v0.15.
+
 ## v0.2 changes
 
 Adds per-step **`impl:`** block (EXACT implementations: code, REST, shell, SQL, MCP tool, binary) and per-step **`invoke:`** block (JUDGMENT invocations: CLI, API, embedded, MCP sampling). Both are optional and backward-compatible — v0.1 files parse unchanged. Defaults can be set at the `RESOURCES` level and overridden per step.
@@ -75,15 +92,17 @@ An atomic unit of work. Does not describe HOW — only WHAT and with what guaran
 
 ```
 STEP <name>
-  TAKES:     <name>: <type> [, <name>: <type>]*
-  GIVES:     <name>: <type>
-  MODE:      exact | judgment | auto
-  LANG:      python | rust | go | node | bash | auto    # optional, exact only — shorthand for impl.mode=code; impl.lang=<value>
-  CACHE:     on | off | ttl(<duration>)                  # optional, judgment only
-  VALIDATE:  <boolean expression>                        # optional
-  ON_FAIL:   <failure strategy>                          # optional
-  impl:      <impl-block>                                # optional, exact only — see "EXACT implementations"
-  invoke:    <invoke-block>                              # optional, judgment only — see "JUDGMENT invocation"
+  TAKES:        <name>: <type> [, <name>: <type>]*
+  GIVES:        <name>: <type>
+  MODE:         exact | judgment | auto
+  LANG:         python | rust | go | node | bash | auto  # optional, exact only — shorthand for impl.mode=code; impl.lang=<value>
+  CACHE:        on | off | ttl(<duration>)               # optional, judgment only
+  VALIDATE:     <boolean expression>                     # optional
+  ON_FAIL:      <failure strategy>                       # optional
+  impl:         <impl-block>                             # optional, exact only — see "EXACT implementations"
+  invoke:       <invoke-block>                           # optional, judgment only — see "JUDGMENT invocation"
+  DESCRIPTION:  "<text>" | |<block scalar>               # optional (v0.15) — author intent; injected into judgment prompts
+  STRATEGIES:   "<text>" | |<block scalar>               # optional (v0.15) — heuristics for edge cases; injected into judgment prompts
 ```
 
 **MODE values:**
@@ -483,6 +502,56 @@ FLOW <name>
     -> <step_call>
     -> <step_call>
 ```
+
+**Multiple FLOWs per file (v0.15):** a `.clio` source may declare any number
+of FLOWs. `clio compile` and `clio graph` require `--flow <name>` to pick one
+when more than one is declared. Programmatically: `build_ir(program, flow_name=...)`.
+Duplicate FLOW names are rejected at IR build time.
+
+### TEST (v0.15)
+
+Declarative test against a FLOW. Emitted as a pytest file under
+`<output>/tests/test_<name>.py` by the **python** target.
+
+```
+TEST <name>:
+  FLOW: <flow_name>                # required
+  WITH:                            # optional: kwargs forwarded to run()
+    <kwarg>: <literal>             # literal: "string" | number | true | false
+    ...
+  EXPECTS:                         # at least one EXPECTS or EXPECTS_NOT required
+    <state_field>: <predicate>
+    ...
+  EXPECTS_NOT:                     # optional: same shape, sense inverted
+    <state_field>: <predicate>
+    ...
+```
+
+**Predicates:**
+
+| Form              | Asserts                                    |
+|-------------------|--------------------------------------------|
+| `not_empty`       | `state[field]` is truthy / non-empty       |
+| `empty`           | `state[field]` is falsy / empty / absent   |
+| `== <literal>`    | equality (string / int / float / bool)     |
+| `!= <literal>`    | inequality                                  |
+| `> <number>`      | strictly greater than                       |
+| `>= <number>`     | greater or equal                            |
+| `< <number>`      | strictly less than                          |
+| `<= <number>`     | less or equal                               |
+| `contains <lit>`  | `<lit> in (state[field] or [])` — works on lists, strings, dict keys |
+
+**Target support:**
+
+- `python`: emits `tests/test_<name>.py` calling `run(**kwargs)` with
+  `CLIO_STATE_FILE` pinned to a per-test tempfile (so runs don't pollute cwd).
+- `claude-cli`, `mcp-server`, `langgraph`, `claude-skill`: ignore TESTs in
+  v0.15 (compile cleanly, no test artefacts).
+
+**Validation:** the referenced FLOW must exist in the same source. Duplicate
+TEST names are rejected at IR build time. WITH-kwargs vs flow-signature
+compatibility is **not** checked at compile time in v0.15 — type mismatches
+surface at runtime.
 
 ### RESOURCES
 

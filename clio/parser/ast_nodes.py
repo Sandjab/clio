@@ -47,6 +47,8 @@ class StepDecl:
     invoke: "InvokeBlock | None"  # invoke: block (cli | api), judgment-only
     line: int
     col: int
+    description: str | None = None    # v0.15 — free-text intent; injected into judgment prompts
+    strategies: str | None = None     # v0.15 — heuristics for edge cases; injected into judgment prompts
 
 
 @dataclass(frozen=True)
@@ -183,8 +185,41 @@ class FlowDecl:
 
 
 @dataclass(frozen=True)
+class Predicate:
+    """v0.15 — a TEST assertion predicate.
+
+    `kind` is one of:
+      - "not_empty" / "empty"      → no value
+      - "eq" / "ne"                → value: str | int | float | bool
+      - "gt" / "ge" / "lt" / "le"  → value: int | float
+      - "contains"                 → value: str | int | float | bool
+    """
+    kind: str
+    value: object = None
+
+
+@dataclass(frozen=True)
+class TestDecl:
+    """v0.15 — top-level TEST block.
+
+    `flow_name` references a FLOW declared in the same source. `with_kwargs`
+    is the kwargs dict passed to the flow's `run()`. `expects` / `expects_not`
+    are tuples of (state_field, Predicate) assertions evaluated against the
+    state dict returned by `run()`. The python target emits these as pytest
+    files under <output>/tests/.
+    """
+    name: str
+    flow_name: str
+    with_kwargs: tuple[tuple[str, object], ...]
+    expects: tuple[tuple[str, Predicate], ...]
+    expects_not: tuple[tuple[str, Predicate], ...]
+    line: int
+    col: int
+
+
+@dataclass(frozen=True)
 class Program:
-    decls: tuple[object, ...]    # StepDecl | ContractDecl | FlowDecl
+    decls: tuple[object, ...]    # StepDecl | ContractDecl | FlowDecl | TestDecl
 
 
 @dataclass(frozen=True)

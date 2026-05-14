@@ -226,6 +226,8 @@ class StepIR:
     impl: ImplIR | None           # impl: block (code | rest), exact-only; None if unset
     invoke: InvokeIR | None       # invoke: block (cli | api), judgment-only; None if unset
     line: int
+    description: str | None = None    # v0.15 — free-text intent; emitters inject into judgment prompts
+    strategies: str | None = None     # v0.15 — heuristics for edge cases; emitters inject into judgment prompts
 
 
 @dataclass(frozen=True)
@@ -377,8 +379,28 @@ class ResourcesIR:
 
 
 @dataclass(frozen=True)
+class PredicateIR:
+    """v0.15 — see Predicate in ast_nodes for kind semantics."""
+    kind: str           # not_empty | empty | eq | ne | gt | ge | lt | le | contains
+    value: object = None
+
+
+@dataclass(frozen=True)
+class TestIR:
+    """v0.15 — top-level TEST. References a FLOW by name. Emitted by the
+    python target as a pytest file under `<output>/tests/`."""
+    name: str
+    flow_name: str
+    with_kwargs: tuple[tuple[str, object], ...]
+    expects: tuple[tuple[str, PredicateIR], ...]
+    expects_not: tuple[tuple[str, PredicateIR], ...]
+    line: int
+
+
+@dataclass(frozen=True)
 class FlowGraph:
     steps: tuple[StepIR, ...]
     contracts: tuple[ContractIR, ...] = ()
     flow: FlowIR | None = None
     resources: ResourcesIR | None = None
+    tests: tuple[TestIR, ...] = ()

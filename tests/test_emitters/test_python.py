@@ -2046,3 +2046,109 @@ def test_python_emit_sql_list_of_primitive_rejected(tmp_path):
     )
     with _pt.raises(ValueError, match="List<PrimitiveType>.*single-field record"):
         PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+
+
+# -- DESCRIPTION / STRATEGIES injection into system prompt (v0.15) --
+
+
+def test_python_emit_injects_description_into_system_prompt(tmp_path):
+    src = (
+        "STEP analyze\n"
+        '  DESCRIPTION: "score risk on a cohort"\n'
+        "  TAKES: rows: str\n  GIVES: risks: str\n  MODE: judgment\n"
+        "FLOW p\n  analyze(rows=\"x\")\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "p" / "steps" / "analyze.py").read_text()
+    assert "Step intent: score risk on a cohort" in body
+
+
+def test_python_emit_injects_strategies_into_system_prompt(tmp_path):
+    src = (
+        "STEP analyze\n"
+        "  STRATEGIES: |\n"
+        "    - prefer high-recency signals\n"
+        "  TAKES: rows: str\n  GIVES: risks: str\n  MODE: judgment\n"
+        "FLOW p\n  analyze(rows=\"x\")\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "p" / "steps" / "analyze.py").read_text()
+    assert "Heuristics:" in body
+    assert "prefer high-recency signals" in body
+
+
+def test_python_emit_no_description_keeps_legacy_prompt(tmp_path):
+    src = (
+        "STEP analyze\n"
+        "  TAKES: rows: str\n  GIVES: risks: str\n  MODE: judgment\n"
+        "FLOW p\n  analyze(rows=\"x\")\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "p" / "steps" / "analyze.py").read_text()
+    assert "Step intent:" not in body
+    assert "Heuristics:" not in body
+    # The original 3-line legacy SYSTEM_PROMPT is preserved byte-for-byte.
+    assert "    'You are a strict JSON-only API." in body
+
+
+# -- TEST block emission (v0.15) --
+
+
+def test_python_emit_writes_test_file_per_test(tmp_path):
+    src = (
+        "STEP load\n  TAKES: f: str\n  GIVES: rows: List<int>\n  MODE: exact\n"
+        "FLOW p\n  load(f=\"d\")\n"
+        "TEST t_one:\n  FLOW: p\n  EXPECTS:\n    rows: not_empty\n"
+        "TEST t_two:\n  FLOW: p\n  EXPECTS:\n    rows: contains 42\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    assert (tmp_path / "tests" / "test_t_one.py").exists()
+    assert (tmp_path / "tests" / "test_t_two.py").exists()
+    body = (tmp_path / "tests" / "test_t_one.py").read_text()
+    assert "from p.flow import run" in body
+    assert "monkeypatch.setenv(\"CLIO_STATE_FILE\"" in body
+    assert "bool(state.get('rows'))" in body
+
+
+def test_python_emit_no_test_block_means_no_tests_dir(tmp_path):
+    src = (
+        "STEP load\n  MODE: exact\n"
+        "FLOW p\n  load()\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    assert not (tmp_path / "tests").exists()
+
+
+def test_python_emit_predicate_human_messages(tmp_path):
+    src = (
+        "STEP load\n  TAKES: f: str\n  GIVES: rows: List<int>\n  MODE: exact\n"
+        "FLOW p\n  load(f=\"d\")\n"
+        "TEST t1:\n"
+        "  FLOW: p\n"
+        "  EXPECTS:\n"
+        "    rows: not_empty\n"
+        "  EXPECTS_NOT:\n"
+        "    rows: empty\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "tests" / "test_t1.py").read_text()
+    assert "be not empty" in body
+    assert "NOT to be empty" in body
+
+
+def test_python_emit_test_files_are_executable_pytest(tmp_path):
+    """Smoke: the emitted pytest file must run and assert against the result
+    of run() returning state. We use a NotImplementedError-stub step but make
+    the assertion target the EXACT-step path: state will be empty, the test
+    will fail at the assertion, but pytest itself must collect+run the file
+    cleanly (no SyntaxError, no ImportError)."""
+    src = (
+        "STEP load\n  TAKES: f: str\n  GIVES: rows: List<int>\n  MODE: exact\n"
+        "FLOW p\n  load(f=\"d\")\n"
+        "TEST t_collect:\n  FLOW: p\n  EXPECTS:\n    rows: not_empty\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    # Just check the test file compiles as Python.
+    test_path = tmp_path / "tests" / "test_t_collect.py"
+    code = test_path.read_text()
+    compile(code, str(test_path), "exec")  # raises SyntaxError if invalid

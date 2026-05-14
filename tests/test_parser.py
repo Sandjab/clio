@@ -1881,3 +1881,140 @@ RESOURCES
     with pytest.raises(ParseError) as exc:
         parse(src)
     assert expected_msg_fragment in str(exc.value)
+
+
+# -- DESCRIPTION / STRATEGIES (v0.15) --
+
+
+def test_parse_step_with_description_quoted_string():
+    src = (
+        "STEP foo\n"
+        '  DESCRIPTION: "one-line intent"\n'
+        "  TAKES: x: str\n  GIVES: y: str\n  MODE: judgment\n"
+    )
+    program = parse(src)
+    step = program.decls[0]
+    assert step.description == "one-line intent"
+    assert step.strategies is None
+
+
+def test_parse_step_with_description_and_strategies_block():
+    src = (
+        "STEP foo\n"
+        "  DESCRIPTION: |\n"
+        "    First line.\n"
+        "    Second line.\n"
+        "  STRATEGIES: |\n"
+        "    - prefer A\n"
+        "    - fallback to B\n"
+        "  TAKES: x: str\n  GIVES: y: str\n  MODE: judgment\n"
+    )
+    program = parse(src)
+    step = program.decls[0]
+    assert "First line" in step.description
+    assert "Second line" in step.description
+    assert "prefer A" in step.strategies
+    assert "fallback to B" in step.strategies
+
+
+def test_parse_step_duplicate_description_raises():
+    src = (
+        "STEP foo\n"
+        '  DESCRIPTION: "a"\n'
+        '  DESCRIPTION: "b"\n'
+        "  MODE: exact\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "duplicate DESCRIPTION" in str(exc.value)
+
+
+def test_parse_step_description_rejects_non_text():
+    src = "STEP foo\n  DESCRIPTION: 42\n  MODE: exact\n"
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "quoted string or `|` block scalar" in str(exc.value)
+
+
+# -- TEST block (v0.15) --
+
+
+def test_parse_test_minimal():
+    src = (
+        "STEP load\n  TAKES: f: str\n  GIVES: rows: List<int>\n  MODE: exact\n"
+        "FLOW p\n  load(f=\"d\")\n"
+        "TEST t1:\n"
+        "  FLOW: p\n"
+        "  EXPECTS:\n"
+        "    rows: not_empty\n"
+    )
+    program = parse(src)
+    test = next(d for d in program.decls if type(d).__name__ == "TestDecl")
+    assert test.name == "t1"
+    assert test.flow_name == "p"
+    assert test.expects[0][0] == "rows"
+    assert test.expects[0][1].kind == "not_empty"
+
+
+def test_parse_test_all_predicate_kinds():
+    src = (
+        "STEP load\n  TAKES: f: str\n  GIVES: rows: List<int>\n  MODE: exact\n"
+        "FLOW p\n  load(f=\"d\")\n"
+        "TEST t1:\n"
+        "  FLOW: p\n"
+        "  WITH:\n"
+        "    f: \"x\"\n"
+        "  EXPECTS:\n"
+        '    a: == "hi"\n'
+        "    b: != 0\n"
+        "    c: > 3\n"
+        "    d: <= 10.5\n"
+        "    e: contains 1\n"
+        "    f: empty\n"
+        "    g: not_empty\n"
+    )
+    program = parse(src)
+    test = next(d for d in program.decls if type(d).__name__ == "TestDecl")
+    kinds = [p.kind for _, p in test.expects]
+    assert kinds == ["eq", "ne", "gt", "le", "contains", "empty", "not_empty"]
+
+
+def test_parse_test_requires_at_least_one_expects():
+    src = (
+        "STEP load\n  MODE: exact\n"
+        "FLOW p\n  load()\n"
+        "TEST t1:\n"
+        "  FLOW: p\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "at least one EXPECTS" in str(exc.value)
+
+
+def test_parse_test_missing_flow_field_raises():
+    src = (
+        "STEP load\n  MODE: exact\n"
+        "FLOW p\n  load()\n"
+        "TEST t1:\n"
+        "  EXPECTS:\n"
+        "    x: not_empty\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "missing required FLOW" in str(exc.value)
+
+
+def test_parse_test_duplicate_section_rejected():
+    src = (
+        "STEP load\n  MODE: exact\n"
+        "FLOW p\n  load()\n"
+        "TEST t1:\n"
+        "  FLOW: p\n"
+        "  EXPECTS:\n"
+        "    x: not_empty\n"
+        "  EXPECTS:\n"
+        "    y: not_empty\n"
+    )
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert "duplicate EXPECTS" in str(exc.value)
