@@ -20,7 +20,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from clio.emitters._shared_utils import _safe_package_name
 from clio.emitters._langgraph_helpers import (
     emit_flow_module,
     emit_main_module,
@@ -32,6 +31,7 @@ from clio.emitters._python_helpers import (
     emit_rest_step,
     emit_shell_step,
 )
+from clio.emitters._shared_utils import _safe_package_name
 from clio.emitters.base import BaseEmitter
 from clio.emitters.python import PythonEmitter
 from clio.ir.graph import (

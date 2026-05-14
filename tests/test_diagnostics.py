@@ -10,8 +10,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-import pytest
-
 from clio.diagnostics import (
     CheckResult,
     _check_database,
@@ -19,7 +17,6 @@ from clio.diagnostics import (
     checks_exit_code,
     status_summary,
 )
-
 
 # ---------- _check_mcp_server -----------------------------------------------
 

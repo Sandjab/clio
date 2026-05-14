@@ -11,16 +11,11 @@ the PythonEmitter class.
 import json
 from pathlib import Path
 
-from clio.emitters._shared_utils import _render_system_prompt, _safe_package_name
 from clio.emitters._python_helpers import (
     _emit_attempt_block,
     _gives_validator_expr,
-    _has_parallel,
     _model_id,
-    _python_condition_expr,
     _step_signature,
-    _to_field_name,
-    _type_to_python,
     emit_contracts,
     emit_default_exact_step,
     emit_mcp_tool_step,
@@ -28,6 +23,14 @@ from clio.emitters._python_helpers import (
     emit_rest_step,
     emit_shell_step,
     emit_sql_step,
+)
+from clio.emitters._shared_utils import (
+    _has_parallel,
+    _python_condition_expr,
+    _render_system_prompt,
+    _safe_package_name,
+    _to_field_name,
+    _type_to_python,
 )
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import (

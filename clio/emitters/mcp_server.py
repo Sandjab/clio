@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from clio.emitters._shared_utils import _safe_package_name
 from clio.emitters._mcp_helpers import (
     _emit_flow_module_async,
     _emit_main_module,
@@ -24,6 +23,7 @@ from clio.emitters._python_helpers import (
     emit_shell_step,
     emit_sql_step,
 )
+from clio.emitters._shared_utils import _safe_package_name
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import (
     ApiInvokeIR,

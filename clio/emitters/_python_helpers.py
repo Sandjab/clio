@@ -7,8 +7,6 @@ Split out per CLAUDE.md scope-discipline rule (~300-line limit per file).
 """
 
 from clio.emitters._shared_utils import (
-    _has_parallel,
-    _python_condition_expr,
     _field_from_schema,
     _model_id,  # noqa: F401 — re-exported for python.py
     _render_type_short,
@@ -20,7 +18,6 @@ from clio.emitters._shared_utils import (
 )
 from clio.ir.graph import (
     ApiInvokeIR,
-    BoolOpIR,
     CallIR,
     CliInvokeIR,
     ContractIR,

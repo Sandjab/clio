@@ -75,6 +75,7 @@ def test_ensure_loop_creates_running_daemon_thread_loop():
     """First call boots a daemon-thread asyncio loop; the second call must
     reuse it (singleton — there's exactly one MCP client loop per process)."""
     import asyncio
+
     from clio.runtime import mcp_client
 
     loop1 = mcp_client._ensure_loop()
@@ -149,6 +150,7 @@ def test_extract_treats_missing_is_error_as_success():
     from clio.runtime.mcp_client import _extract
 
     class _ResultWithoutIsError:
-        content = [_StubText("ok")]
+        def __init__(self):
+            self.content = [_StubText("ok")]
 
     assert _extract(_ResultWithoutIsError(), "text") == "ok"
