@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 
-from clio.ir.graph import FlowGraph
+from clio.ir.graph import FlowGraph, StepIR
 
 
 def _flow_name(graph: FlowGraph) -> str:
@@ -78,14 +78,129 @@ def render_frontmatter(
     )
 
 
+def detect_skill_language(graph: FlowGraph) -> str:
+    """Heuristic: FR if any common French diacritic appears in flow description
+    or step docstrings; otherwise EN."""
+    samples = []
+    flow = getattr(graph, "flow", None)
+    if flow is not None:
+        samples.append(getattr(flow, "description", "") or "")
+    for step in graph.steps:
+        samples.append(getattr(step, "description", "") or "")
+    text = " ".join(samples)
+    fr_markers = set("éèàçôîêûïü")
+    return "fr" if any(c in fr_markers for c in text) else "en"
+
+
+def render_exact_script(step: StepIR, contracts_by_name: dict, idx: int) -> str:
+    """Build a standalone Python script for an exact STEP.
+
+    Reads state JSON from stdin, calls the step's body function, merges the
+    output back into state under state[step.name], writes updated state to
+    stdout.  If the step has no impl (no CODE block), the script is a trivial
+    pass-through that echoes state unchanged.
+    """
+    takes_doc = (
+        "\n    ".join(f"{t.name}: {t.type}" for t in step.takes)
+        if step.takes else "(no TAKES)"
+    )
+    gives_doc = (
+        f"{step.gives.name}: {step.gives.type}"
+        if step.gives is not None else "(no GIVES)"
+    )
+
+    # Build the parameter unpacking lines for the step function call.
+    if step.takes:
+        param_lines = "\n".join(
+            f"    {t.name} = state.get({step.name!r}, {{}}).get({t.name!r})"
+            for t in step.takes
+        )
+        call_kwargs = ", ".join(f"{t.name}={t.name}" for t in step.takes)
+        call_expr = f"result = {step.name}({call_kwargs})"
+    else:
+        param_lines = "    # no TAKES"
+        call_expr = f"result = {step.name}()"
+
+    # Merge result back into state.
+    if step.gives is not None:
+        merge_line = f"    state.setdefault({step.name!r}, {{}})[{step.gives.name!r}] = result"
+    else:
+        merge_line = f"    # no GIVES — state unchanged by {step.name}"
+
+    return (
+        f'"""Standalone script for STEP {step.name} (exact)\n'
+        f"\n"
+        f"TAKES:\n"
+        f"    {takes_doc}\n"
+        f"GIVES:\n"
+        f"    {gives_doc}\n"
+        f"\n"
+        f"Usage:\n"
+        f"    python scripts/{idx:02d}_{step.name}.py < state.json > state.next.json\n"
+        f'"""\n'
+        f"from __future__ import annotations\n"
+        f"\n"
+        f"import json\n"
+        f"import sys\n"
+        f"\n"
+        f"\n"
+        f"def {step.name}({', '.join(t.name for t in step.takes)}):\n"
+        f'    """Implement the body of STEP {step.name} here.\n'
+        f"\n"
+        f"    TAKES:\n"
+        f"        {takes_doc}\n"
+        f"    GIVES:\n"
+        f"        {gives_doc}\n"
+        f'    """\n'
+        f"    raise NotImplementedError(\n"
+        f'        "Implement {step.name}: this is an exact (deterministic) step."\n'
+        f"    )\n"
+        f"\n"
+        f"\n"
+        f'if __name__ == "__main__":\n'
+        f"    state = json.load(sys.stdin)\n"
+        f"{param_lines}\n"
+        f"    {call_expr}\n"
+        f"{merge_line}\n"
+        f"    json.dump(state, sys.stdout, indent=2)\n"
+        f"    sys.stdout.write('\\n')\n"
+    )
+
+
+def render_exact_step_section(step: StepIR, idx: int, lang: str = "en") -> str:
+    """Markdown section for an exact STEP.
+
+    ``lang``: "en" → "Step NN", "fr" → "Étape NN".
+    """
+    label = {"en": "Step", "fr": "Étape"}[lang]
+    title = f"## {label} {idx:02d} — {step.name} (MODE: exact)\n"
+    doc = (getattr(step, "description", "") or "").strip()
+    doc_block = f"\n{doc}\n" if doc else ""
+    cmd = (
+        f"\nRun:\n\n"
+        f"    python scripts/{idx:02d}_{step.name}.py < state.json > state.next.json "
+        f"&& mv state.next.json state.json\n\n"
+    )
+    tail = (
+        "Tick the corresponding TodoWrite todo. "
+        "Do not advance until the script exited 0.\n\n"
+    )
+    return title + doc_block + cmd + tail
+
+
 def render_skill_md(
     graph: FlowGraph,
     *,
     warn: Callable[[str], None] | None = None,
 ) -> str:
     """Render the full SKILL.md content for a flow."""
-    raw_name = _flow_name(graph)
-    return render_frontmatter(graph, warn=warn) + f"\n# {raw_name}\n"
+    lang = detect_skill_language(graph)
+    parts = [render_frontmatter(graph, warn=warn), f"\n# {_flow_name(graph)}\n"]
+    for idx, step in enumerate(graph.steps, start=1):
+        if step.mode == "exact":
+            parts.append(render_exact_step_section(step, idx, lang=lang))
+        # judgment branch: deferred to Task 5
+    return "".join(parts)
 
 
 def render_process_flow_dot(graph: FlowGraph) -> str:

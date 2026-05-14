@@ -136,3 +136,37 @@ def test_emits_readme(tmp_path):
     # Should mention "claude-skill" and be non-trivial
     assert "claude-skill" in readme.lower()
     assert len(readme.strip()) >= 100, "README should be a few sentences"
+
+
+def test_exact_step_emits_script(tmp_path):
+    """A FLOW with one exact STEP must produce scripts/01_<name>.py."""
+    src = (FIXTURES / "mvp_phase1.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    scripts = sorted((tmp_path / "scripts").glob("*.py"))
+    assert len(scripts) == 1
+    assert scripts[0].name.startswith("01_")
+
+
+def test_exact_step_script_is_autonomous(tmp_path):
+    """Emitted script reads stdin JSON, writes stdout JSON."""
+    src = (FIXTURES / "mvp_phase1.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    script = next((tmp_path / "scripts").glob("*.py")).read_text()
+    assert "import sys" in script
+    assert "import json" in script
+    assert "json.load(sys.stdin)" in script
+    assert "json.dump(" in script
+
+
+def test_skill_md_references_exact_step_script(tmp_path):
+    src = (FIXTURES / "mvp_phase1.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    # Some kind of section header for step 01 (Step or Étape)
+    assert "## Step 01" in body or "## Étape 01" in body
+    # The script reference must appear
+    assert "scripts/01_" in body
+    assert "python scripts/01_" in body
