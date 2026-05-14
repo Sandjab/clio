@@ -223,8 +223,9 @@ error, not a runtime surprise.
 
 **One RESCUE per STEP**; the handler attaches to a STEP that appears in
 the top-level FLOW chain (not nested inside FOR EACH / IF / MATCH /
-WHILE). Compiles to **python** and **mcp-server**; **langgraph** and
-**claude-cli** reject at compile time.
+WHILE). Compiles to **python**, **mcp-server**, and **claude-skill**
+(rendered as a RESCUE sub-section in `SKILL.md` for the LLM host to
+follow); **langgraph** and **claude-cli** reject at compile time.
 
 ## Multiple FLOWs per file (v0.15)
 
