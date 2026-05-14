@@ -6,7 +6,7 @@
 [![Last commit](https://img.shields.io/github/last-commit/Sandjab/clio)](https://github.com/Sandjab/clio/commits/main)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-%E2%89%A53.12-blue.svg)](https://www.python.org)
-[![Version](https://img.shields.io/badge/Version-v0.12.0-green.svg)](https://github.com/Sandjab/clio/releases/tag/v0.12.0)
+[![Version](https://img.shields.io/badge/Version-v0.15.0-green.svg)](https://github.com/Sandjab/clio/releases/tag/v0.15.0)
 [![Visitors](https://komarev.com/ghpvc/?username=sandjab-clio&label=Visitors&color=0e75b6&style=flat)](https://github.com/Sandjab/clio)
 
 CLIO is a declarative language that compiles hybrid LLM/code programs into executable projects. You describe *what* you want — the compiler decides *what runs as code and what runs as an LLM*, then emits a project you can run directly.
@@ -52,12 +52,13 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full pipeline and IR bu
 
 The same `.clio` source compiles to different targets:
 
-| Target       | Output                                              |
-|--------------|------------------------------------------------------|
-| `claude-cli` | Claude Code project (CLAUDE.md, hooks, bash scripts) |
-| `python`     | Python package (Pydantic + Anthropic / OpenAI-compat SDKs, optional `requests`, `mcp`, `psycopg`, `pymysql`) |
-| `mcp-server` | MCP server (FLOW = tool, judgment via `sampling/createMessage`, exact via the same runtime as `python`) |
-| `langgraph`  | LangGraph StateGraph (single-step IF / MATCH branches, sequential chain only — multi-step branches deferred) |
+| Target         | Output                                              |
+|----------------|------------------------------------------------------|
+| `claude-cli`   | Claude Code project (CLAUDE.md, hooks, bash scripts) |
+| `python`       | Python package (Pydantic + Anthropic / OpenAI-compat SDKs, optional `requests`, `mcp`, `psycopg`, `pymysql`) |
+| `mcp-server`   | MCP server (FLOW = tool, judgment via `sampling/createMessage`, exact via the same runtime as `python`) |
+| `langgraph`    | LangGraph StateGraph (single-step IF / MATCH branches, sequential chain only — multi-step branches deferred) |
+| `claude-skill` | Claude Code skill directory (`SKILL.md` + `scripts/` + `schemas/` + `prompts/`); LLM-host-orchestrated, no external runtime |
 | `rust` / `docker` | *(planned)* not yet implemented; the emitter interface is target-agnostic, only the dispatch is missing |
 
 ## Quick start
@@ -86,6 +87,17 @@ pip install -e ./mcp-out
 
 # Compile a SQL-backed flow to a Python package (sqlite, postgres, or mysql)
 python -m clio compile examples/sql_demo.clio --target python --output ./sql-out
+
+# Compile to a Claude Code skill (LLM-host-orchestrated, no runtime needed)
+python -m clio compile examples/skill_minimal.clio --target claude-skill --output ./skill-out
+cp -r ./skill-out ~/.claude/skills/my-skill
+
+# Diagnose the host environment before compiling / running a flow
+python -m clio doctor                                  # generic checks
+python -m clio doctor examples/critical_pipeline.clio  # flow-aware checks (MCP commands on PATH, db URLs)
+
+# Inspect the last python-target run (state.json + tail of CLIO_LOG_FILE)
+python -m clio status --state-file ./out/state.json --log-file ./out/events.jsonl --limit 20
 
 # Run tests
 pytest tests/ -v
@@ -154,7 +166,7 @@ RESOURCES
 
 The compiler reads this and emits a runnable project with: a typed `CustomerRisk` Pydantic model with the `len(reason) > 0` assertion, a `detect_churn` step that calls the LLM with the inlined JSON Schema and a 24-hour cache, and a resilience chain — three retry attempts on Haiku, escalation to Sonnet (one attempt), fallback to the deterministic `detect_churn_naive` step, and finally `abort` with an explicit message. None of that wiring is hand-written.
 
-See [`examples/`](examples/) for the full set: `mvp.clio` (above), `entities.clio` (NER + summary, nested record types), `classify_corpus.clio` (FOR EACH + OpenAI-compat via LiteLLM / Gemini), `parallel_classify.clio` (FOR EACH PARALLEL), `ticket_routing.clio` (IF / MATCH branches), `feedback_routing.clio` (moderation + nested IF / MATCH dispatch), `critical_pipeline.clio` (ON_FAIL × RESCUE), `rest_advanced.clio` (auth, multipart, retries), `mcp_tool.clio` (MCP server consumer), `sql_demo.clio` (sqlite + auto-mapped GIVES), `rag_basic.clio` and `rag_selfcontained.clio`.
+See [`examples/`](examples/) for the full set: `mvp.clio` (above), `entities.clio` (NER + summary, nested record types), `classify_corpus.clio` (FOR EACH + OpenAI-compat via LiteLLM / Gemini), `parallel_classify.clio` (FOR EACH PARALLEL), `ticket_routing.clio` (IF / MATCH branches), `feedback_routing.clio` (moderation + nested IF / MATCH dispatch), `critical_pipeline.clio` (ON_FAIL × RESCUE), `critical_pipeline_resume.clio` (RESCUE + RESUME, v0.13), `rest_advanced.clio` (auth, multipart, retries), `mcp_tool.clio` (MCP server consumer), `sql_demo.clio` (sqlite + auto-mapped GIVES), `skill_minimal.clio` (claude-skill target, v0.14), `rag_basic.clio` and `rag_selfcontained.clio`.
 
 ## Project structure
 
@@ -178,23 +190,27 @@ docs/
 - [Architecture](docs/ARCHITECTURE.md) — compiler pipeline, design decisions.
 - [Compilation targets](docs/COMPILATION_TARGETS.md) — what each target emits.
 - [Positioning](docs/POSITIONING.md) — strategy, comparisons (DSPy, LangGraph, Outlines).
+- [Comparison with openprose](docs/COMPARISON_OPENPROSE.md) — side-by-side analysis and the cross-pollination table that drove the v0.15 sprint.
 - [Design document (FR)](docs/clio-spec.md) — original design rationale (in French).
 - [Examples README](examples/README.md) — guided tour of the polished `.clio` files in `examples/`.
 - [Changelog](CHANGELOG.md) — what's landed in each tag.
 
 ## Current status
 
-**v0.12.0 (current)**: **4 compilation targets** (`claude-cli`, `python`, `mcp-server`, `langgraph`). **669 unit tests + 13 gated e2e.**
+**v0.15.0 (current)**: **5 compilation targets** (`claude-cli`, `python`, `mcp-server`, `langgraph`, `claude-skill`). **788 unit tests + 1 xfail + gated e2e.**
 
 What's in the language today:
 - **Control flow**: sequential chains, `FOR EACH`, `FOR EACH ... PARALLEL AS <name>`, `IF/ELSE` (with `and` / `or` composition since v0.12), `MATCH/CASE/DEFAULT`, `WHILE ... MAX N` (composed conditions in v0.12 too).
-- **Resilience**: `CACHE: ttl(...)`, `ON_FAIL: retry(N) then escalate then fallback(...) then abort(...)`, multi-step `RESCUE` handlers (v0.8).
+- **Resilience**: `CACHE: ttl(...)`, `ON_FAIL: retry(N) then escalate then fallback(...) then abort(...)`, multi-step `RESCUE` handlers (v0.8) — RESCUE bodies can inspect `<step>.error.message` / `<step>.error.type` and terminate with `RESUME(<fallback_step>.<field>)` for a typed drop-in fallback (v0.13).
 - **EXACT implementations** (`impl:` block):
   - `impl.mode: rest` — full HTTP (5 body forms: JSON / raw / `@file` / form-urlencoded / multipart, `query`/`headers` templating, `env:NAME` auth, `retry: { backoff: exponential | constant }` with `Retry-After` honored, `response_path` JSONPath).
   - `impl.mode: shell` — argv-style subprocess, optional `parse: json`.
   - `impl.mode: mcp_tool` — call a tool on a configured MCP server (3 transports: `stdio` / `sse` / `http`, long-lived per-server clients, `${var}` templating in args).
   - `impl.mode: sql` — parameterized query against sqlite / postgres / mysql; `:name` bindings auto-translated per driver, multi-row → `List<{...}>` auto-mapped via `cursor.description`, DML rowcount, multi-line `|` block scalar for query bodies.
-- **JUDGMENT invocation** (`invoke:` block): `cli` (Claude Code), `api` (Anthropic, OpenAI-compat covering LiteLLM / OpenRouter / Ollama / vLLM), `mcp_sampling` (mcp-server target).
+- **JUDGMENT invocation** (`invoke:` block): `cli` (Claude Code), `api` (Anthropic, OpenAI-compat covering LiteLLM / OpenRouter / Ollama / vLLM), `mcp_sampling` (mcp-server target). Optional per-STEP `DESCRIPTION:` / `STRATEGIES:` free-text fields (v0.15) are injected as a "Step intent: …" / "Heuristics: …" suffix to the judgment system prompt without changing the JSON-only output contract.
+- **Multiple FLOWs per file** (v0.15): a source may declare more than one `FLOW`; `clio compile`/`graph` pick one via `--flow <name>`. Single-FLOW files behave unchanged.
+- **Declarative tests** (v0.15): top-level `TEST <name>: FLOW: <name>  WITH: …  EXPECTS: …` blocks compile to pytest under `<output>/tests/` on the `python` target. Predicates: `not_empty`, `empty`, `==`, `!=`, `>`, `>=`, `<`, `<=`, `contains`. Other targets ignore TEST blocks silently.
+- **Diagnostics** (v0.15): `clio doctor [SOURCE]` checks Python version, `ANTHROPIC_API_KEY`, anthropic SDK importability, and (with a source) MCP server commands on PATH + declared database URLs. `clio status` reads a python target's `state.json` and tails a `CLIO_LOG_FILE` JSONL log.
 - **Observability**: structured JSONL events (`CLIO_LOG=1`, six event types, OTel-mappable). Replay an `events.jsonl` inside the HTML viewer (`clio graph --format html` then drag-drop the trace).
 - **Resume**: `--from-step N` from `state.json` (atomically written after each completed step).
 

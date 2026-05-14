@@ -16,7 +16,7 @@ Verify:
 uv run python -m clio --help
 ```
 
-You should see `compile`, `check`, `graph`, `gen`.
+You should see `compile`, `check`, `graph`, `gen`, `doctor`, `status`.
 
 ## Hello, CLIO
 
