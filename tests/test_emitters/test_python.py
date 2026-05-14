@@ -432,6 +432,42 @@ def test_emit_chained_assert_validates_at_runtime(tmp_path):
         Scored.model_validate({"score": 1.1})
 
 
+def test_if_condition_uses_renamed_field_for_python_keyword(tmp_path):
+    """Companion of fix #6: when a CONTRACT field's CLIO name collides with a
+    Python keyword (`class`, `return`, …), the Pydantic model renames it to
+    `<name>_`. An IF condition reading that field via attribute access must
+    use the renamed name; otherwise the emitted Python is a SyntaxError on
+    `state['x'].class` or an AttributeError on `state['x'].return`."""
+    src = (
+        "CONTRACT report\n"
+        "  SHAPE: {class: enum(bug|feature|other)}\n"
+        "STEP load\n"
+        "  GIVES: r: report\n"
+        "  MODE:  exact\n"
+        "STEP route_bug\n"
+        "  TAKES: r: report\n"
+        "  GIVES: dest: str\n"
+        "  MODE:  exact\n"
+        "STEP route_other\n"
+        "  TAKES: r: report\n"
+        "  GIVES: dest: str\n"
+        "  MODE:  exact\n"
+        "FLOW p\n"
+        "  load()\n"
+        "    -> IF r.class == \"bug\":\n"
+        "        route_bug(r=r)\n"
+        "    ELSE:\n"
+        "        route_other(r=r)\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = (tmp_path / "p" / "flow.py").read_text()
+    # The condition must read the Pydantic-side renamed field, not the raw CLIO name.
+    assert "state['r'].class_ == 'bug'" in flow_py
+    assert "state['r'].class ==" not in flow_py
+    # Sanity: emitted Python compiles.
+    compile(flow_py, "<flow.py>", "exec")
+
+
 def test_judgment_attempt_re_raises_non_transient_sdk_errors(tmp_path):
     """A bad API key (anthropic.AuthenticationError) is not a transient
     failure — retrying just burns tokens without changing the outcome.

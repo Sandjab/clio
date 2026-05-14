@@ -263,7 +263,12 @@ def _python_condition_expr(condition, scope_local: set[str]) -> str:
         if condition.step_name in scope_local
         else f"state[{condition.step_name!r}]"
     )
-    access = f"{base}.{condition.field}"
+    # The CONTRACT field on the Pydantic model has been renamed if its CLIO
+    # name is a Python keyword (`class` → `class_`, `return` → `return_`, …),
+    # so attribute access here must follow the same rename — otherwise the
+    # emitted Python is a SyntaxError on hard keywords or an AttributeError
+    # on softer ones.
+    access = f"{base}.{_to_field_name(condition.field)}"
     if condition.literal_kind == "int":
         lit = str(condition.literal_value)
     elif condition.literal_kind == "float":
