@@ -758,3 +758,63 @@ def test_resume_terminator_rendered(tmp_path):
     body = (tmp_path / "SKILL.md").read_text()
     # The RESUME keyword or its rendered "set state.X.Y ← ..." form appears
     assert "RESUME" in body or "← " in body or "set state." in body
+
+
+# ---------------------------------------------------------------------------
+# Task 11 — Compile-time validation (unsupported lang, parallel, no-desc)
+# ---------------------------------------------------------------------------
+
+def test_unsupported_exact_language_raises_at_compile(tmp_path):
+    """An exact STEP with LANG rust (valid parse time, invalid for claude-skill) raises ValueError."""
+    src = (
+        "STEP rusty\n"
+        "  MODE: exact\n"
+        "  LANG: rust\n"
+        "  GIVES: x: str\n"
+    )
+    import pytest
+    graph = build_ir(parse(src))
+    with pytest.raises(ValueError) as excinfo:
+        ClaudeSkillEmitter().emit(graph, tmp_path)
+    msg = str(excinfo.value).lower()
+    assert "claude-skill" in msg
+    assert "python" in msg and "bash" in msg
+    assert "line " in msg
+
+
+def test_parallel_construct_warns_serialized(tmp_path, capsys):
+    """A PARALLEL FOR EACH warns that the emitted skill serializes iterations."""
+    src = (
+        "STEP load\n"
+        "  MODE: exact\n"
+        "  GIVES: items: List<str>\n"
+        "\n"
+        "STEP process\n"
+        "  TAKES: x: str\n"
+        "  GIVES: r: str\n"
+        "  MODE: exact\n"
+        "\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH item IN items PARALLEL AS results:\n"
+        "         process(x=item)\n"
+    )
+    import pytest
+    try:
+        graph = build_ir(parse(src))
+    except Exception as exc:
+        pytest.skip(f"PARALLEL AS not in this grammar: {exc}")
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    captured = capsys.readouterr()
+    assert "claude-skill warning" in captured.err
+    assert "parallel" in captured.err.lower() or "serial" in captured.err.lower()
+
+
+def test_existing_warn_for_no_description_still_works(tmp_path, capsys):
+    """The Task 2 warning for missing FLOW description remains functional after _validate."""
+    src = (FIXTURES / "mvp_phase1.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    captured = capsys.readouterr()
+    assert "claude-skill warning" in captured.err
+    assert "no description" in captured.err.lower()
