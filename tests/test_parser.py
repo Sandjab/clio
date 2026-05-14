@@ -272,14 +272,24 @@ def test_parse_resources_target_langgraph():
     assert res[0].target == "langgraph"
 
 
+def test_parse_resources_target_claude_skill():
+    """RESOURCES target: claude-skill is accepted since v0.15 (parser was
+    out of sync with the --target CLI flag from v0.14 through early v0.15)."""
+    src = "STEP foo\n  MODE: exact\nRESOURCES\n  target: claude-skill\n"
+    program = parse(src)
+    res = [d for d in program.decls if d.__class__.__name__ == "ResourcesDecl"]
+    assert len(res) == 1
+    assert res[0].target == "claude-skill"
+
+
 def test_parse_resources_unknown_target_rejected():
-    """Unknown targets get a clear, enumerated error listing all 4 valid ones."""
+    """Unknown targets get a clear, enumerated error listing all 5 valid ones."""
     src = "STEP foo\n  MODE: exact\nRESOURCES\n  target: rust\n"
     with pytest.raises(ParseError) as exc:
         parse(src)
     msg = str(exc.value)
     assert "rust" in msg
-    for t in ("claude-cli", "python", "mcp-server", "langgraph"):
+    for t in ("claude-cli", "python", "mcp-server", "langgraph", "claude-skill"):
         assert t in msg
 
 
