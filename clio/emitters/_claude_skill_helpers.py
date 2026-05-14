@@ -10,7 +10,7 @@ import json
 from collections.abc import Callable
 
 from clio.ir.contracts import type_to_json_schema
-from clio.ir.graph import BoolOpIR, FlowGraph, IfBlockIR, MatchBlockIR, StepIR
+from clio.ir.graph import BoolOpIR, FlowGraph, ForEachIR, IfBlockIR, MatchBlockIR, StepIR, WhileBlockIR
 from clio.parser.ast_nodes import (
     ConstrainedType,
     ContractRef,
@@ -413,6 +413,52 @@ def render_match_section(match_node: MatchBlockIR, idx_label: str, lang: str = "
     return head
 
 
+def render_for_each_section(node: ForEachIR, idx_label: str, lang: str = "en") -> str:
+    """Render a FOR EACH block as a SKILL.md sub-section.
+
+    The per-iteration TodoWrite instruction is the primary drift anchor: without
+    it the LLM host has no structural checkpoint and may process items in a
+    single unchecked sweep.
+    """
+    title = {"en": "FOR EACH", "fr": "Pour chaque"}[lang]
+    var = node.loop_var
+    coll = node.collection
+    n_body = len(node.body)
+    parallel_note = ""
+    if node.parallel and node.collector:
+        parallel_note = (
+            f" Results are accumulated into `state.{node.collector}` (PARALLEL mode)."
+        )
+    return (
+        f"### {title} `{var}` IN `{coll}`  (source line {node.line})\n\n"
+        f"For each element of `{coll}`:\n"
+        f"- Create a TodoWrite sub-todo \"Iteration {var}=<value>\".\n"
+        f"- Run the {n_body} sub-step(s) in the loop body.\n"
+        f"- Mark the sub-todo done, append the result to `state.<accumulator>`.\n"
+        f"{parallel_note}\n\n"
+    )
+
+
+def render_while_section(node: WhileBlockIR, idx_label: str, lang: str = "en") -> str:
+    """Render a WHILE block as a SKILL.md sub-section.
+
+    Instructs the LLM host to create a per-iteration TodoWrite sub-todo and
+    re-evaluate the condition after each body execution, hard-capping at
+    max_iters.
+    """
+    title = {"en": "WHILE", "fr": "Tant que"}[lang]
+    cond = _render_condition(node.condition)
+    n_body = len(node.body)
+    return (
+        f"### {title} `{cond}` MAX {node.max_iters}  (source line {node.line})\n\n"
+        f"Loop while the condition holds (hard cap: {node.max_iters} iterations):\n"
+        f"- Before each iteration, create a TodoWrite sub-todo \"Iteration #N\".\n"
+        f"- Run the {n_body} sub-step(s) in the loop body.\n"
+        f"- Re-evaluate the condition. Mark the iteration's todo done.\n"
+        f"- Stop if the condition turns false or {node.max_iters} iterations have completed.\n\n"
+    )
+
+
 def render_skill_md(
     graph: FlowGraph,
     *,
@@ -444,7 +490,11 @@ def render_skill_md(
                 parts.append(render_if_section(item, f"{item_idx:02d}", lang=lang))
             elif isinstance(item, MatchBlockIR):
                 parts.append(render_match_section(item, f"{item_idx:02d}", lang=lang))
-            # WhileBlockIR / ForEachIR / RescueBlockIR: deferred to later tasks.
+            elif isinstance(item, ForEachIR):
+                parts.append(render_for_each_section(item, f"{item_idx:02d}", lang=lang))
+            elif isinstance(item, WhileBlockIR):
+                parts.append(render_while_section(item, f"{item_idx:02d}", lang=lang))
+            # RescueBlockIR: deferred to later tasks.
 
     return "".join(parts)
 

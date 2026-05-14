@@ -460,3 +460,112 @@ def test_flat_step_sections_preserved_with_control_flow(tmp_path):
     assert "classify" in body
     assert "human_review" in body
     assert "auto_route" in body
+
+
+# ----- Task 8: WHILE / FOR EACH iteration sub-flows in SKILL.md ---------------
+
+_FOR_EACH_DECLS = (
+    "STEP collect_items\n"
+    "  GIVES: items: List<str>\n"
+    "  MODE: exact\n"
+    "\n"
+    "STEP echo\n"
+    "  TAKES: x: str\n"
+    "  GIVES: msg: str\n"
+    "  MODE: exact\n"
+)
+
+_FOR_EACH_FLOW = (
+    "FLOW pipe\n"
+    "  collect_items()\n"
+    "    -> FOR EACH item IN items:\n"
+    "         echo(x=item)\n"
+)
+
+_WHILE_DECLS = (
+    "CONTRACT draft_score\n"
+    "  SHAPE: {text: str(max=2000), score: float}\n"
+    "\n"
+    "STEP draft_initial\n"
+    "  TAKES: brief: str\n"
+    "  GIVES: draft: draft_score\n"
+    "  MODE:  judgment\n"
+    "\n"
+    "STEP refine_draft\n"
+    "  TAKES: draft: draft_score\n"
+    "  GIVES: draft: draft_score\n"
+    "  MODE:  judgment\n"
+)
+
+_WHILE_FLOW = (
+    'FLOW main\n'
+    '    draft_initial(brief="x")\n'
+    '    -> WHILE draft.score < 0.9 MAX 3:\n'
+    '        refine_draft(draft=draft)\n'
+)
+
+
+def test_for_each_section_in_skill_md(tmp_path):
+    """A FOR EACH block produces a section with the per-iteration TodoWrite instruction."""
+    graph = build_ir(parse(_FOR_EACH_DECLS + _FOR_EACH_FLOW))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    # Section header for the FOR EACH block
+    assert "### FOR EACH " in body or "### Pour chaque " in body
+    # Per-iteration TodoWrite instruction is the drift anchor
+    assert "TodoWrite" in body
+    # Loop variable and collection are rendered
+    assert "item" in body
+    assert "items" in body
+    # Flat step sections are still present
+    assert "collect_items" in body
+    assert "echo" in body
+
+
+def test_for_each_section_mentions_iteration(tmp_path):
+    """The FOR EACH section must use the word iteration (en) or itération (fr)."""
+    graph = build_ir(parse(_FOR_EACH_DECLS + _FOR_EACH_FLOW))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    assert "iteration" in body.lower() or "itération" in body.lower()
+
+
+def test_while_section_in_skill_md(tmp_path):
+    """A WHILE block produces a section with the loop and condition instructions."""
+    graph = build_ir(parse(_WHILE_DECLS + _WHILE_FLOW))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    # Section header
+    assert "### WHILE " in body or "### Tant que " in body
+    # Condition is rendered
+    assert "draft.score" in body
+    # Max iters guard mentioned
+    assert "3" in body
+    # Flat step sections preserved
+    assert "draft_initial" in body
+    assert "refine_draft" in body
+
+
+def test_while_section_mentions_todowrite(tmp_path):
+    """The WHILE section must anchor iterations with TodoWrite."""
+    graph = build_ir(parse(_WHILE_DECLS + _WHILE_FLOW))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    assert "TodoWrite" in body
+
+
+def test_for_each_parallel_collector_rendered(tmp_path):
+    """PARALLEL AS <collector> appears in the FOR EACH section when set."""
+    src = (
+        "STEP load\n  GIVES: items: List<str>\n  MODE: exact\n"
+        "STEP process\n  TAKES: x: str\n  GIVES: r: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH item IN items PARALLEL AS results:\n"
+        "         process(x=item)\n"
+    )
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    # PARALLEL marker or collector name must appear in the section
+    assert "results" in body or "parallel" in body.lower()
