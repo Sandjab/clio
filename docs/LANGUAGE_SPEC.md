@@ -768,30 +768,39 @@ ON_FAIL: abort("reason")
 - `escalate` — switch to a more capable LLM model
 - `abort(message)` — stop the flow with an error
 
-## RESCUE handler (v0.8)
+## RESCUE handler (v0.8+)
 
 `RESCUE` declares a top-level handler attached to a STEP that runs only
 if the STEP raises **after** its `ON_FAIL` chain (if any) exhausts
 itself. Unlike `ON_FAIL: abort(...)`, which is a single declarative
 clause, the `RESCUE` body is a **chain of step calls** — so you can
-notify, log, persist, or otherwise side-effect before aborting. The
-body always ends in `abort("message")`, which raises
-`FlowAborted("message")`. The chain after the protected step is then
-skipped.
+notify, log, persist, or otherwise side-effect before terminating. The
+body ends in either `abort("message")` (raises `FlowAborted("message")`,
+skipping the rest of the chain) or `RESUME(<fallback_step>.<field>)`
+(injects a fallback value and continues normally). See
+[v0.13 additions](#v013-additions) for error-access and `RESUME` details.
 
 ### Grammar
 
 ```
-flow_decl    := "FLOW" ident NEWLINE INDENT
-                  flow_chain
-                  rescue_block*
-                DEDENT
+flow_decl         := "FLOW" ident NEWLINE INDENT
+                       flow_chain
+                       rescue_block*
+                     DEDENT
 
-rescue_block := "RESCUE" step_name ":" NEWLINE INDENT
-                  rescue_chain
-                DEDENT
+rescue_block      := "RESCUE" step_name ":" NEWLINE INDENT
+                       rescue_chain
+                     DEDENT
 
-rescue_chain := "->"? flow_item ("->" flow_item)*  // last top-level item MUST be abort("...")
+rescue_chain      := (flow_item ("->" flow_item)* "->")? rescue_terminator
+rescue_terminator := abort_call | resume_call
+abort_call        := "abort" "(" STRING ")"                  # unchanged since v0.8
+resume_call       := "RESUME" "(" IDENT "." IDENT ")"        # v0.13+
+
+# Kwarg values in flow_item step calls accept an extra dotted shape
+# inside RESCUE bodies:
+kwarg_value       := STRING | NUMBER | IDENT | error_access
+error_access      := IDENT "." "error" "." IDENT             # v0.13+, RESCUE body only
 ```
 
 `RESCUE` blocks appear **after** the FLOW chain and **before** the
@@ -809,9 +818,11 @@ same STEP is a compile error (redundant double-abort).
 | _(no ON_FAIL)_ | no | Exception propagates. |
 | retry/escalate/fallback (no abort) | no | Exception propagates after exhaustion. |
 | `... then abort("msg")` | no | `FlowAborted("msg")` after exhaustion. |
-| _(no ON_FAIL)_ | yes | Exception caught, handler runs, ends with abort. |
-| retry/escalate/fallback | yes | Exhaustion → handler runs → abort. |
+| _(no ON_FAIL)_ | yes | Exception caught, handler runs, ends with abort/RESUME¹. |
+| retry/escalate/fallback | yes | Exhaustion → handler runs → abort/RESUME¹. |
 | `... then abort("msg")` | yes | **Compile error**: redundant `abort` final. |
+
+¹ "RESCUE present" covers both `abort(...)` and `RESUME(...)` terminators. With `abort`, `FlowAborted` is raised and the remaining chain is skipped. With `RESUME`, a fallback value is injected into `state` and the flow continues normally.
 
 ### Targets
 
@@ -834,17 +845,28 @@ not exposed as a runtime package symbol — but importable as
 `from <pkg>.flow import FlowAborted` if a downstream user wraps the
 flow.
 
-### v0.8 limitations
+### v0.13 additions
+
+- `<rescued_step>.error.message` (str) and `<rescued_step>.error.type`
+  (str = Python exception classname) are now valid as **kwarg values**
+  inside step calls within the RESCUE body. They reference the captured
+  error that triggered the handler. Only the rescued step is
+  referenceable — `<other_step>.error.X` is a compile error.
+- `RESUME(<fallback_step>.<field>)` is a second legal terminator of the
+  RESCUE chain, alongside `abort("msg")`. The fallback step must be
+  called earlier in the same chain, the field must be a key of its
+  `GIVES`, and the field's type must match the rescued step's `GIVES`
+  type. The flow continues normally on the line after the rescued step,
+  reading the injected value from `state[<rescued_field>]`.
+
+### Persistent limitations
 
 - One `RESCUE` per STEP (compile error for duplicates).
 - The protected STEP must appear in the **top-level** FLOW chain — not
   nested inside a `FOR EACH`, `IF`, `MATCH`, or `WHILE` body.
-- The body must end with `abort(...)` **directly at the top level**
-  of the body chain (not just inside an `IF`/`MATCH`/`WHILE` branch).
-- The handler body cannot inspect the captured error message
-  (`step_name.error` is reserved for v0.9+).
-- No `RESUME` keyword for fall-through; `abort` is the only legal
-  terminator.
+- The body must end with a `rescue_terminator` (`abort(...)` or
+  `RESUME(...)`) **directly at the top level** of the body chain (not
+  just inside an `IF`/`MATCH`/`WHILE` branch).
 - The standalone `clio graph --format mermaid` (and `--format dot`)
   outputs intentionally omit the rescue cluster — only the rich
   `--format html` viewer renders it. Use HTML when you need the
