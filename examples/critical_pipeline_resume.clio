@@ -1,0 +1,52 @@
+# critical_pipeline_resume.clio — RESCUE handler with .error access + RESUME (v0.13)
+#
+# Variant of critical_pipeline.clio (v0.8) that:
+#  - reads the captured error message and type inside the rescue body
+#  - recovers via a rule-based fallback step and RESUMEs the flow with
+#    its result, instead of aborting.
+#
+# Compiles to --target python and --target mcp-server. claude-cli and
+# langgraph reject RESCUE at compile time in v0.13 (carried forward from v0.8).
+
+CONTRACT churn_report
+  SHAPE: {risks: List<{client: str, score: float}>}
+
+STEP load_clients
+  TAKES: path: str
+  GIVES: rows:  List<int>
+  MODE:  exact
+
+STEP detect_churn
+  TAKES:   rows:   List<int>
+  GIVES:   report: {risks: List<{client: str, score: float}>}
+  MODE:    judgment
+  ON_FAIL: retry(3) then escalate
+
+STEP fallback_detect_churn
+  TAKES: rows:   List<int>
+  GIVES: report: {risks: List<{client: str, score: float}>}
+  MODE:  exact
+
+STEP route_alerts
+  TAKES: report: {risks: List<{client: str, score: float}>}
+  GIVES: alerts: int
+  MODE:  exact
+
+STEP notify_slack
+  TAKES: channel: str, reason: str, err_type: str
+  GIVES: sent: bool
+  MODE:  exact
+
+FLOW pipeline
+  load_clients(path="clients.csv")
+    -> detect_churn(rows=rows)
+    -> route_alerts(report=report)
+
+  RESCUE detect_churn:
+    -> notify_slack(channel="#alerts", reason=detect_churn.error.message, err_type=detect_churn.error.type)
+    -> fallback_detect_churn(rows=rows)
+    -> RESUME(fallback_detect_churn.report)
+
+RESOURCES
+  target:  python
+  models:  [haiku, sonnet]
