@@ -241,3 +241,60 @@ def test_cache_key_helper_produces_sha256_hex(tmp_path):
     # SHA256 hex digest is 64 hex chars
     assert len(key) == 64
     assert all(c in "0123456789abcdef" for c in key)
+
+
+def test_judgment_step_emits_prompt_template(tmp_path):
+    # mvp_phase4.clio has one judgment STEP (detect_churn)
+    src = (FIXTURES / "mvp_phase4.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    prompts = sorted((tmp_path / "prompts").glob("*.md"))
+    assert len(prompts) >= 1
+    body = prompts[0].read_text()
+    # Template must be non-trivial
+    assert len(body.strip()) > 0
+
+
+def test_judgment_step_emits_output_schema(tmp_path):
+    src = (FIXTURES / "mvp_phase4.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    out_schemas = sorted((tmp_path / "schemas").glob("*.output.json"))
+    assert len(out_schemas) >= 1
+    schema = json.loads(out_schemas[0].read_text())
+    # JSON Schema must declare type=object with properties
+    assert schema.get("type") == "object"
+    assert "properties" in schema
+
+
+def test_skill_md_judgment_section_has_prompt_and_schema_refs(tmp_path):
+    src = (FIXTURES / "mvp_phase4.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    assert "MODE: judgment" in body
+    assert "prompts/" in body
+    assert "schemas/" in body
+    assert "_validate.py" in body
+
+
+def _assert_no_external_refs(node, fname):
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("../"):
+            raise AssertionError(f"{fname}: external $ref still present: {ref}")
+        for v in node.values():
+            _assert_no_external_refs(v, fname)
+    elif isinstance(node, list):
+        for item in node:
+            _assert_no_external_refs(item, fname)
+
+
+def test_output_schema_has_no_external_refs(tmp_path):
+    """Every $ref in emitted schemas must be self-contained (no file paths)."""
+    src = (FIXTURES / "mvp_phase4.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    for schema_file in (tmp_path / "schemas").glob("*.output.json"):
+        schema = json.loads(schema_file.read_text())
+        _assert_no_external_refs(schema, schema_file.name)

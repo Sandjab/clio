@@ -9,7 +9,36 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 
+from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import FlowGraph, StepIR
+from clio.parser.ast_nodes import (
+    ConstrainedType,
+    ContractRef,
+    EnumType,
+    ListType,
+    PrimitiveType,
+    RecordType,
+    TypeExpr,
+)
+
+
+def _type_to_display(t: TypeExpr) -> str:
+    """Human-readable representation of a TypeExpr for prompt templates."""
+    if isinstance(t, PrimitiveType):
+        return t.name
+    if isinstance(t, ConstrainedType):
+        constraints = ", ".join(f"{k}={v}" for k, v in t.constraints)
+        return f"{_type_to_display(t.base)}({constraints})"
+    if isinstance(t, ListType):
+        return f"List<{_type_to_display(t.inner)}>"
+    if isinstance(t, RecordType):
+        fields = ", ".join(f"{n}: {_type_to_display(ty)}" for n, ty in t.fields)
+        return "{" + fields + "}"
+    if isinstance(t, EnumType):
+        return "enum(" + "|".join(t.values) + ")"
+    if isinstance(t, ContractRef):
+        return t.name
+    return str(t)
 
 
 def _flow_name(graph: FlowGraph) -> str:
@@ -188,6 +217,125 @@ def render_exact_step_section(step: StepIR, idx: int, lang: str = "en") -> str:
     return title + doc_block + cmd + tail
 
 
+def render_judgment_prompt(step: StepIR) -> str:
+    """Markdown prompt template for a judgment STEP.
+
+    Judgment steps in CLIO source have no free-text prompt body — their
+    semantics are expressed by TAKES/GIVES. We emit a structured template
+    that instructs the LLM: substitute state values for placeholders, then
+    produce output matching the declared GIVES contract.
+    """
+    takes_lines = "\n".join(
+        f"- `{{{{state.{t.name}}}}}` ({_type_to_display(t.type)})" for t in step.takes
+    ) if step.takes else "*(no TAKES)*"
+    gives_line = (
+        f"`{step.gives.name}` ({_type_to_display(step.gives.type)})"
+        if step.gives is not None else "*(no GIVES)*"
+    )
+    return (
+        f"# Prompt template — {step.name}\n\n"
+        "Substitute `{{state.x}}` placeholders from `state.json` before sending.\n\n"
+        "---\n\n"
+        f"## Task\n\n"
+        f"You are executing STEP `{step.name}` (MODE: judgment).\n\n"
+        f"### Inputs (from state)\n\n"
+        f"{takes_lines}\n\n"
+        f"### Required output\n\n"
+        f"Produce a JSON object with one key: {gives_line}.\n\n"
+        "Respond with **only** the JSON object — no prose, no markdown fences.\n"
+    )
+
+
+def render_output_schema(step: StepIR, contracts_by_name: dict | None = None) -> str:
+    """Build a self-contained JSON Schema for the step's output contract.
+
+    Calls type_to_json_schema (which may emit $ref pointers to ../contracts/*)
+    then inlines all $ref-ed contract schemas so the result has zero external
+    file dependencies. The claude-skill output layout has no `contracts/`
+    sibling — the LLM host validates against schemas/NN_*.output.json directly
+    via scripts/_validate.py, which doesn't resolve relative $ref.
+    """
+    if step.gives is None:
+        # No declared output — open schema.
+        return json.dumps({"type": "object"}, indent=2) + "\n"
+    raw = type_to_json_schema(step.gives.type)
+    inlined = _inline_contract_refs(raw, contracts_by_name or {})
+    schema = {
+        "type": "object",
+        "properties": {step.gives.name: inlined},
+        "required": [step.gives.name],
+    }
+    return json.dumps(schema, indent=2) + "\n"
+
+
+def _contract_schema(contract) -> dict:
+    """Return a JSON Schema dict for a ContractIR.
+
+    ContractIR stores the pre-built schema as the `json_schema` attribute (a
+    plain dict, set by clio.ir.builder.build_ir). Use it directly — no
+    re-derivation needed.
+    """
+    return dict(contract.json_schema)
+
+
+def _inline_contract_refs(
+    node: object,
+    contracts_by_name: dict,
+    seen: frozenset = frozenset(),
+) -> object:
+    """Recursively replace {"$ref": "../contracts/<name>.schema.json"} with the
+    inlined contract schema.
+
+    `seen` tracks contract names already inlined in the current ancestor chain
+    to detect cycles (which would cause infinite recursion). Cycles are replaced
+    with {"type": "object"} as a safety net (CLIO IR validation should reject
+    cyclic contracts before we reach this point).
+    """
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if (
+            isinstance(ref, str)
+            and ref.startswith("../contracts/")
+            and ref.endswith(".schema.json")
+        ):
+            name = ref[len("../contracts/"):-len(".schema.json")]
+            if name in seen:
+                return {"type": "object", "description": f"(cycle: {name})"}
+            contract = contracts_by_name.get(name)
+            if contract is None:
+                return {"type": "object", "description": f"(unknown contract: {name})"}
+            inner = _contract_schema(contract)
+            return _inline_contract_refs(inner, contracts_by_name, seen | {name})
+        return {k: _inline_contract_refs(v, contracts_by_name, seen) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_inline_contract_refs(item, contracts_by_name, seen) for item in node]
+    return node
+
+
+def render_judgment_step_section(step: StepIR, idx: int, lang: str = "en") -> str:
+    """Markdown section for a judgment STEP in SKILL.md."""
+    label = {"en": "Step", "fr": "Étape"}[lang]
+    title = f"## {label} {idx:02d} — {step.name} (MODE: judgment)\n"
+    doc = (getattr(step, "description", "") or "").strip()
+    doc_block = f"\n{doc}\n" if doc else ""
+    body = (
+        f"\n**Reads from state**: see prompt template `prompts/{idx:02d}_{step.name}.md`\n"
+        f"**Writes to state**: `state.{step.name}` validated by "
+        f"`schemas/{idx:02d}_{step.name}.output.json`\n\n"
+        f"Steps:\n"
+        f"1. Read `prompts/{idx:02d}_{step.name}.md`, substitute `{{{{state.x}}}}` "
+        f"placeholders from `state.json`.\n"
+        f"2. Generate an output as the assistant, save verbatim to `out.json`.\n"
+        f"3. Validate using the bundled helper:\n\n"
+        f"        python scripts/_validate.py out.json schemas/{idx:02d}_{step.name}.output.json\n\n"
+        f"4. If exit 0 (valid): merge into `state.json` under `state.{step.name}`.\n"
+        f"5. If exit ≠ 0 (invalid): see RESCUE/RETRY section below if present, "
+        f"otherwise stop.\n\n"
+        "Tick the corresponding TodoWrite todo.\n\n"
+    )
+    return title + doc_block + body
+
+
 def render_skill_md(
     graph: FlowGraph,
     *,
@@ -199,7 +347,8 @@ def render_skill_md(
     for idx, step in enumerate(graph.steps, start=1):
         if step.mode == "exact":
             parts.append(render_exact_step_section(step, idx, lang=lang))
-        # judgment branch: deferred to Task 5
+        elif step.mode == "judgment":
+            parts.append(render_judgment_step_section(step, idx, lang=lang))
     return "".join(parts)
 
 
