@@ -36,6 +36,7 @@ from clio.parser.ast_nodes import (
     MultipartBody,
     OnFailChain,
     OnFailStrategy,
+    Predicate,
     PrimitiveType,
     Program,
     RawBody,
@@ -53,6 +54,7 @@ from clio.parser.ast_nodes import (
     StepCall,
     StepDecl,
     StrExpr,
+    TestDecl,
     TypeExpr,
     WhileBlock,
 )
@@ -116,13 +118,188 @@ class _Parser:
                 decls.append(self.parse_flow())
             elif t.type == TokenType.KEYWORD and t.value == "RESOURCES":
                 decls.append(self.parse_resources())
+            elif t.type == TokenType.KEYWORD and t.value == "TEST":
+                decls.append(self.parse_test())
             else:
                 raise ParseError(
-                    f"expected STEP / CONTRACT / FLOW / RESOURCES, got {t.type.value} {t.value!r}",
+                    f"expected STEP / CONTRACT / FLOW / RESOURCES / TEST, "
+                    f"got {t.type.value} {t.value!r}",
                     t.line, t.col,
                 )
             self.skip_newlines()
         return Program(tuple(decls))
+
+    def parse_test(self) -> TestDecl:
+        """Parse a `TEST <name>: ... ` top-level block.
+
+        Grammar:
+            TEST IDENT NEWLINE INDENT
+              "FLOW" ":" IDENT NEWLINE
+              ("WITH" ":" NEWLINE INDENT (IDENT ":" literal NEWLINE)* DEDENT)?
+              ("EXPECTS"    ":" NEWLINE INDENT (IDENT ":" predicate NEWLINE)+ DEDENT)?
+              ("EXPECTS_NOT" ":" NEWLINE INDENT (IDENT ":" predicate NEWLINE)+ DEDENT)?
+            DEDENT
+        At least one of EXPECTS / EXPECTS_NOT must be present.
+        """
+        kw = self.expect(TokenType.KEYWORD, "TEST")
+        ident = self.expect(TokenType.IDENT)
+        self.expect(TokenType.COLON)
+        self.expect(TokenType.NEWLINE)
+        self.expect(TokenType.INDENT)
+
+        flow_name: str | None = None
+        with_kwargs: tuple[tuple[str, object], ...] = ()
+        expects: tuple[tuple[str, Predicate], ...] = ()
+        expects_not: tuple[tuple[str, Predicate], ...] = ()
+        seen: set[str] = set()
+
+        while self.peek().type != TokenType.DEDENT:
+            t = self.peek()
+            if t.type != TokenType.KEYWORD:
+                raise ParseError(
+                    f"unexpected {t.type.value} {t.value!r} in TEST body",
+                    t.line, t.col,
+                )
+            if t.value in seen:
+                raise ParseError(
+                    f"TEST {ident.value} has duplicate {t.value} section",
+                    t.line, t.col,
+                )
+            seen.add(t.value)
+            if t.value == "FLOW":
+                self.advance()
+                self.expect(TokenType.COLON)
+                name_tok = self.expect(TokenType.IDENT)
+                flow_name = name_tok.value
+                self.expect(TokenType.NEWLINE)
+            elif t.value == "WITH":
+                self.advance()
+                self.expect(TokenType.COLON)
+                with_kwargs = self._parse_test_kwargs_block()
+            elif t.value == "EXPECTS":
+                self.advance()
+                self.expect(TokenType.COLON)
+                expects = self._parse_test_predicate_block()
+            elif t.value == "EXPECTS_NOT":
+                self.advance()
+                self.expect(TokenType.COLON)
+                expects_not = self._parse_test_predicate_block()
+            else:
+                raise ParseError(
+                    f"unexpected TEST field {t.value!r} "
+                    f"(expected FLOW / WITH / EXPECTS / EXPECTS_NOT)",
+                    t.line, t.col,
+                )
+
+        self.expect(TokenType.DEDENT)
+
+        if flow_name is None:
+            raise ParseError(
+                f"TEST {ident.value} is missing required FLOW field",
+                kw.line, kw.col,
+            )
+        if not expects and not expects_not:
+            raise ParseError(
+                f"TEST {ident.value} requires at least one EXPECTS or EXPECTS_NOT entry",
+                kw.line, kw.col,
+            )
+
+        return TestDecl(
+            name=ident.value,
+            flow_name=flow_name,
+            with_kwargs=with_kwargs,
+            expects=expects,
+            expects_not=expects_not,
+            line=kw.line, col=kw.col,
+        )
+
+    def _parse_test_kwargs_block(self) -> tuple[tuple[str, object], ...]:
+        """Parse WITH: <indented kwarg: literal lines>. Empty block ok."""
+        self.expect(TokenType.NEWLINE)
+        if self.peek().type != TokenType.INDENT:
+            return ()
+        self.expect(TokenType.INDENT)
+        out: list[tuple[str, object]] = []
+        while self.peek().type != TokenType.DEDENT:
+            name_tok = self.expect(TokenType.IDENT)
+            self.expect(TokenType.COLON)
+            value = self._parse_literal()
+            self.expect(TokenType.NEWLINE)
+            out.append((name_tok.value, value))
+        self.expect(TokenType.DEDENT)
+        return tuple(out)
+
+    def _parse_test_predicate_block(self) -> tuple[tuple[str, Predicate], ...]:
+        """Parse EXPECTS: / EXPECTS_NOT: <indented field: predicate lines>."""
+        self.expect(TokenType.NEWLINE)
+        self.expect(TokenType.INDENT)
+        out: list[tuple[str, Predicate]] = []
+        while self.peek().type != TokenType.DEDENT:
+            name_tok = self.expect(TokenType.IDENT)
+            self.expect(TokenType.COLON)
+            pred = self._parse_predicate()
+            self.expect(TokenType.NEWLINE)
+            out.append((name_tok.value, pred))
+        self.expect(TokenType.DEDENT)
+        if not out:
+            raise ParseError("predicate block cannot be empty",
+                             self.peek().line, self.peek().col)
+        return tuple(out)
+
+    def _parse_literal(self) -> object:
+        """Parse a single literal: string, number, or bool."""
+        t = self.peek()
+        if t.type == TokenType.STRING:
+            self.advance()
+            return t.value
+        if t.type == TokenType.NUMBER:
+            self.advance()
+            return float(t.value) if "." in t.value else int(t.value)
+        if t.type == TokenType.IDENT and t.value in {"true", "false"}:
+            self.advance()
+            return t.value == "true"
+        raise ParseError(
+            f"expected literal (string, number, true/false), got {t.type.value} {t.value!r}",
+            t.line, t.col,
+        )
+
+    def _parse_predicate(self) -> Predicate:
+        """Parse a TEST predicate. See `Predicate` in ast_nodes for kinds.
+
+        Inline grammar (token-level):
+            "not_empty" | "empty"
+            | OP_EQ literal | OP_NE literal
+            | OP_GT NUMBER  | OP_GE NUMBER  | OP_LT NUMBER | OP_LE NUMBER
+            | "contains" literal
+        """
+        t = self.peek()
+        # Bare-ident predicates (not in keyword set to avoid global pollution).
+        if t.type == TokenType.IDENT and t.value in {"not_empty", "empty"}:
+            self.advance()
+            return Predicate(kind=t.value)
+        if t.type == TokenType.IDENT and t.value == "contains":
+            self.advance()
+            return Predicate(kind="contains", value=self._parse_literal())
+        op_map = {
+            TokenType.OP_EQ: "eq", TokenType.OP_NE: "ne",
+            TokenType.RANGLE: "gt", TokenType.OP_GE: "ge",
+            TokenType.LANGLE: "lt", TokenType.OP_LE: "le",
+        }
+        if t.type in op_map:
+            self.advance()
+            kind = op_map[t.type]
+            value: object
+            if kind in {"gt", "ge", "lt", "le"}:
+                num_tok = self.expect(TokenType.NUMBER)
+                value = float(num_tok.value) if "." in num_tok.value else int(num_tok.value)
+            else:
+                value = self._parse_literal()
+            return Predicate(kind=kind, value=value)
+        raise ParseError(
+            f"expected predicate (not_empty / empty / == … / != … / > … / >= … / "
+            f"< … / <= … / contains …), got {t.type.value} {t.value!r}",
+            t.line, t.col,
+        )
 
     def parse_resources(self) -> ResourcesDecl:
         kw = self.expect(TokenType.KEYWORD, "RESOURCES")
@@ -222,6 +399,8 @@ class _Parser:
         lang_col: int = 0
         impl: ImplBlock | None = None
         invoke: InvokeBlock | None = None
+        description: str | None = None
+        strategies: str | None = None
 
         while self.peek().type != TokenType.DEDENT:
             t = self.peek()
@@ -304,6 +483,22 @@ class _Parser:
                         f"STEP {ident.value} has duplicate invoke field", t.line, t.col,
                     )
                 invoke = self.parse_invoke_block(t.line, t.col)
+            elif t.value == "DESCRIPTION":
+                if description is not None:
+                    raise ParseError(
+                        f"STEP {ident.value} has duplicate DESCRIPTION field", t.line, t.col,
+                    )
+                self.advance()
+                self.expect(TokenType.COLON)
+                description = self._parse_text_scalar(t.line, t.col, "DESCRIPTION")
+            elif t.value == "STRATEGIES":
+                if strategies is not None:
+                    raise ParseError(
+                        f"STEP {ident.value} has duplicate STRATEGIES field", t.line, t.col,
+                    )
+                self.advance()
+                self.expect(TokenType.COLON)
+                strategies = self._parse_text_scalar(t.line, t.col, "STRATEGIES")
             else:
                 raise ParseError(f"unexpected step field {t.value!r}", t.line, t.col)
 
@@ -342,6 +537,27 @@ class _Parser:
             name=ident.value, mode=mode, takes=takes, gives=gives,
             cache=cache, on_fail=on_fail, lang=lang, impl=impl, invoke=invoke,
             line=kw.line, col=kw.col,
+            description=description, strategies=strategies,
+        )
+
+    def _parse_text_scalar(self, line: int, col: int, field: str) -> str:
+        """Parse a free-text value: either a quoted STRING or a `|` block scalar.
+
+        Returns the text with leading/trailing whitespace stripped. Used by
+        DESCRIPTION and STRATEGIES on STEP. Anything else is a parse error
+        with a useful hint."""
+        t = self.peek()
+        if t.type == TokenType.STRING:
+            self.advance()
+            self.expect(TokenType.NEWLINE)
+            return t.value.strip()
+        if t.type == TokenType.BLOCK_SCALAR:
+            self.advance()
+            self.expect(TokenType.NEWLINE)
+            return t.value.strip()
+        raise ParseError(
+            f"{field} expects a quoted string or `|` block scalar",
+            line, col,
         )
 
     def parse_cache(self, line: int, col: int) -> CacheConfig:

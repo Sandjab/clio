@@ -30,6 +30,7 @@ from clio.ir.graph import (
     MultipartBodyIR,
     OnFailChainIR,
     OnFailStrategyIR,
+    PredicateIR,
     RawBodyIR,
     RescueBlockIR,
     ResourcesIR,
@@ -42,6 +43,7 @@ from clio.ir.graph import (
     SseServerSpecIR,
     StdioServerSpecIR,
     StepIR,
+    TestIR,
     WhileBlockIR,
 )
 from clio.ir.types import names_equal, types_equal
@@ -75,6 +77,7 @@ from clio.parser.ast_nodes import (
     McpServerSpec,
     McpToolImpl,
     MultipartBody,
+    Predicate,
     PrimitiveType,
     Program,
     RawBody,
@@ -92,6 +95,7 @@ from clio.parser.ast_nodes import (
     StepCall,
     StepDecl,
     StrExpr,
+    TestDecl,
     TypeExpr,
     WhileBlock,
 )
@@ -101,7 +105,15 @@ class IRBuildError(ValueError):
     pass
 
 
-def build_ir(program: Program) -> FlowGraph:
+def build_ir(program: Program, flow_name: str | None = None) -> FlowGraph:
+    """Build the IR graph for one flow.
+
+    When the source declares multiple FLOWs, `flow_name` must be set to the
+    one the caller wants compiled. With a single FLOW (the common case),
+    `flow_name` is ignored if it matches, otherwise rejected. With zero
+    FLOWs (compiler-only sources, e.g. a unit of reusable STEPs), the
+    result is the same as before.
+    """
     contracts: dict[str, ContractIR] = {}
     for d in program.decls:
         if isinstance(d, ContractDecl):
@@ -135,14 +147,32 @@ def build_ir(program: Program) -> FlowGraph:
     # Pass 3: detect cycles in the fallback graph.
     _detect_fallback_cycles(steps_by_name)
 
+    flow_decls: list[FlowDecl] = [d for d in program.decls if isinstance(d, FlowDecl)]
+    flow_names_seen: set[str] = set()
+    for d in flow_decls:
+        if d.name in flow_names_seen:
+            raise IRBuildError(
+                f"line {d.line}:{d.col}: duplicate FLOW name {d.name!r}"
+            )
+        flow_names_seen.add(d.name)
+
     flow_ir: FlowIR | None = None
-    for d in program.decls:
-        if isinstance(d, FlowDecl):
-            if flow_ir is not None:
-                raise IRBuildError(
-                    f"line {d.line}:{d.col}: only one FLOW declaration is allowed in v0.1"
-                )
-            flow_ir = _build_flow(d, steps_by_name, contracts)
+    if flow_name is not None:
+        match = next((d for d in flow_decls if d.name == flow_name), None)
+        if match is None:
+            available = ", ".join(d.name for d in flow_decls) or "<none>"
+            raise IRBuildError(
+                f"flow {flow_name!r} not found in source (available: {available})"
+            )
+        flow_ir = _build_flow(match, steps_by_name, contracts)
+    elif len(flow_decls) == 1:
+        flow_ir = _build_flow(flow_decls[0], steps_by_name, contracts)
+    elif len(flow_decls) > 1:
+        names = ", ".join(d.name for d in flow_decls)
+        raise IRBuildError(
+            f"source declares {len(flow_decls)} FLOWs ({names}); "
+            f"pass --flow <name> to select one"
+        )
 
     resources_ir: ResourcesIR | None = None
     for d in program.decls:
@@ -158,16 +188,57 @@ def build_ir(program: Program) -> FlowGraph:
                 databases=tuple(_build_database_spec(s) for s in d.databases),
             )
 
+    tests_ir = _build_tests(program, flow_names_seen)
+
     graph = FlowGraph(
         steps=tuple(steps_by_name.values()),
         contracts=tuple(contracts.values()),
         flow=flow_ir,
         resources=resources_ir,
+        tests=tests_ir,
     )
     _validate_parallel_for_each(graph)
     _validate_mcp_tool_servers(graph)
     _validate_sql_databases(graph)
     return graph
+
+
+def _build_tests(program: Program, known_flow_names: set[str]) -> tuple[TestIR, ...]:
+    """Validate TEST decls and lower them to TestIR.
+
+    Validation here is intentionally minimal: the referenced FLOW must exist;
+    duplicate test names are rejected. Predicate vs field-type compatibility
+    is left to runtime — kept simple in v0.15 since tests run against a
+    dynamic state dict."""
+    seen: set[str] = set()
+    out: list[TestIR] = []
+    for d in program.decls:
+        if not isinstance(d, TestDecl):
+            continue
+        if d.name in seen:
+            raise IRBuildError(
+                f"line {d.line}:{d.col}: duplicate TEST name {d.name!r}"
+            )
+        seen.add(d.name)
+        if d.flow_name not in known_flow_names:
+            available = ", ".join(sorted(known_flow_names)) or "<none>"
+            raise IRBuildError(
+                f"line {d.line}:{d.col}: TEST {d.name!r} references unknown "
+                f"flow {d.flow_name!r} (available: {available})"
+            )
+        out.append(TestIR(
+            name=d.name,
+            flow_name=d.flow_name,
+            with_kwargs=d.with_kwargs,
+            expects=tuple((f, _lower_predicate(p)) for f, p in d.expects),
+            expects_not=tuple((f, _lower_predicate(p)) for f, p in d.expects_not),
+            line=d.line,
+        ))
+    return tuple(out)
+
+
+def _lower_predicate(p: Predicate) -> PredicateIR:
+    return PredicateIR(kind=p.kind, value=p.value)
 
 
 def _resolve_fallbacks(
@@ -209,6 +280,8 @@ def _resolve_fallbacks(
             impl=step.impl,
             invoke=step.invoke,
             line=step.line,
+            description=step.description,
+            strategies=step.strategies,
         )
     return new_steps
 
@@ -290,6 +363,8 @@ def _build_step(decl: StepDecl) -> StepIR:
         impl=_build_impl(decl.impl) if decl.impl is not None else None,
         invoke=_build_invoke(decl.invoke) if decl.invoke is not None else None,
         line=decl.line,
+        description=decl.description,
+        strategies=decl.strategies,
     )
 
 

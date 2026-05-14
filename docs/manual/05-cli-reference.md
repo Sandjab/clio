@@ -11,8 +11,9 @@ clio compile <source.clio> --target <target> --output <dir>
 | Flag | Required | Default | Notes |
 |---|:-:|---|---|
 | `<source.clio>` | yes | — | Path to the `.clio` file. |
-| `--target` | yes | — | One of `claude-cli`, `python`, `mcp-server`, `langgraph`. |
+| `--target` | yes | — | One of `claude-cli`, `python`, `mcp-server`, `langgraph`, `claude-skill`. |
 | `--output` | yes | — | Directory to write the project into. Created if missing. **Overwrites** existing files. |
+| `--flow` | no  | — | (v0.15) Select a FLOW by name when the source declares more than one. Single-FLOW files don't need it. |
 
 **Examples:**
 
@@ -91,6 +92,39 @@ clio gen --from-file desc.txt [--output flow.clio] [--model claude-sonnet-4-6]
 | `--model` | no | `claude-sonnet-4-6` | Anthropic model id. |
 
 The generated source is **always** validated by `check` before being written. If validation fails, the LLM is asked to fix it (up to 3 retries) before falling back to printing the raw output to stderr.
+
+## `doctor` — environment diagnostic (v0.15)
+
+```
+clio doctor [<source.clio>]
+```
+
+Checks the host before you compile or run. Without arguments: Python version,
+`ANTHROPIC_API_KEY`, anthropic SDK importability. With a source file: also
+compiles it and inspects `RESOURCES.mcp_servers` (commands on PATH) and
+`RESOURCES.databases` (URLs parsable, env vars present). Exits **1** if any
+check is FAIL, **0** otherwise.
+
+```bash
+clio doctor                                  # generic checks
+clio doctor examples/critical_pipeline.clio  # plus flow-specific checks
+```
+
+## `status` — last run summary (v0.15)
+
+```
+clio status [--state-file PATH] [--log-file PATH] [--limit N]
+```
+
+Reads a `python` target's `state.json` (cwd or `CLIO_STATE_FILE`) and tails
+the last N events from a `CLIO_LOG_FILE` JSONL log. Useful for "what was the
+last run, where did it stop, what events did it emit" without writing custom
+tooling.
+
+```bash
+clio status
+clio status --state-file ./run-2026-05-14/state.json --log-file ./run-2026-05-14/log.jsonl --limit 20
+```
 
 ## Environment variables
 
