@@ -33,6 +33,7 @@ from clio.ir.graph import (
     RawBodyIR,
     RescueBlockIR,
     ResourcesIR,
+    ResumeIR,
     RestBodyIR,
     RestImplIR,
     RetryPolicyIR,
@@ -573,13 +574,12 @@ def _build_rescue(
     # (6) ErrorAccessIR cross-step and unknown-field validation.
     _validate_error_accesses(body_items, decl.step_name)
 
-    # (5) Body terminal abort (top-level only — abort buried in nested
-    #     IF/MATCH/WHILE/FOR EACH branches does NOT count).
-    if (
-        not body_items
-        or not isinstance(body_items[-1], CallIR)
-        or body_items[-1].step_name != "abort"
-    ):
+    # (5) Body terminal: must be abort(...) or RESUME(<step>.<field>) at the
+    #     top level (T9 will add full semantic validation of RESUME targets).
+    _last = body_items[-1] if body_items else None
+    _is_abort = isinstance(_last, CallIR) and _last.step_name == "abort"
+    _is_resume = isinstance(_last, ResumeIR)
+    if not body_items or not (_is_abort or _is_resume):
         raise IRBuildError(
             f"line {decl.line}: RESCUE body for {decl.step_name!r} must end "
             f"with abort(...) at the top level of the body chain"
@@ -636,11 +636,13 @@ def _build_flow_items(
                 item, steps_by_name, contracts, available, in_rescue=in_rescue,
             ))
             continue
-        # ResumeAst: parsed but not yet lowered to IR (future task T8).
         if isinstance(item, ResumeAst):
-            raise NotImplementedError(
-                f"line {item.line}: ResumeAst lowering not yet implemented (see T8)"
-            )
+            out.append(ResumeIR(
+                fallback_step=item.fallback_step,
+                field_name=item.field_name,
+                line=item.line,
+            ))
+            continue
         # StepCall path
         out.append(_build_call(
             item, steps_by_name, contracts, available, in_rescue=in_rescue,
@@ -1074,6 +1076,9 @@ def _validate_parallel_for_each(graph: FlowGraph) -> None:
 
             if isinstance(elem, WhileBlockIR):
                 _walk(elem.body)
+                continue
+
+            if isinstance(elem, ResumeIR):
                 continue
 
             # ForEachIR

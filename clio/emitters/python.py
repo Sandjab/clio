@@ -41,6 +41,7 @@ from clio.ir.graph import (
     McpServerSpecIR,
     McpToolImplIR,
     RestImplIR,
+    ResumeIR,
     ShellImplIR,
     SqlImplIR,
     StepIR,
@@ -513,7 +514,7 @@ class PythonEmitter(BaseEmitter):
                 _current.append(f"{indent}{call_line}")
 
         def _emit_item(
-            item: CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR,
+            item: CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR | ResumeIR,
             indent: str,
             scope_local: set[str],
         ) -> None:
@@ -593,6 +594,12 @@ class PythonEmitter(BaseEmitter):
                     _current.append(f"{inner_indent}pass")
                 for sub in item.body:
                     _emit_item(sub, inner_indent, scope_local)
+                return
+            if isinstance(item, ResumeIR):
+                # RESUME(<step>.<field>) — use the fallback value as the result.
+                _current.append(
+                    f"{indent}return state[{item.fallback_step!r}].{item.field_name}"
+                )
                 return
             if isinstance(item, CallIR):
                 _emit_call(item, indent, scope_local)

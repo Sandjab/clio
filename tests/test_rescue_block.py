@@ -4,7 +4,7 @@ See docs/superpowers/specs/2026-05-10-rescue-handler-design.md."""
 import pytest
 
 from clio.ir.builder import IRBuildError, build_ir
-from clio.ir.graph import ErrorAccessIR, RescueBlockIR
+from clio.ir.graph import ErrorAccessIR, RescueBlockIR, ResumeIR
 from clio.keywords import Keyword
 from clio.parser.ast_nodes import ErrorAccessExpr, FlowDecl, RescueBlock, ResumeAst, StepCall
 from clio.parser.parser import parse
@@ -560,3 +560,14 @@ RESOURCES
     with pytest.raises(IRBuildError) as exc:
         build_ir(program)
     assert "step.error.<field> is only valid inside a RESCUE handler" in str(exc.value)
+
+
+def test_ir_builds_resume_terminator():
+    """RESUME at the end of a rescue body becomes a ResumeIR in the IR."""
+    program = _parse(RESUME_SRC)
+    graph = build_ir(program)
+    rescue = graph.flow.rescues[0]
+    last = rescue.body[-1]
+    assert isinstance(last, ResumeIR)
+    assert last.fallback_step == "recover"
+    assert last.field_name == "report"
