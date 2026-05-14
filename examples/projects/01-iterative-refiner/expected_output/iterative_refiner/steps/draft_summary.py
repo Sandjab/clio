@@ -72,7 +72,7 @@ def draft_summary(*, article: str) -> str:
             return None
 
     prompt = _PROMPT_TEMPLATE
-    prompt = prompt.replace('${article}', json.dumps(article))
+    prompt = prompt.replace('${article}', json.dumps(article, default=lambda o: o.model_dump() if hasattr(o, 'model_dump') else str(o)))
     prompt = prompt.replace('${schema}', _INLINED_SCHEMA)
 
     model_idx = 0

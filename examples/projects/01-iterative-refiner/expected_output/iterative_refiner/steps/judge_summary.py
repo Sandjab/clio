@@ -72,8 +72,8 @@ def judge_summary(*, article: str, draft: str) -> contracts.SummaryJudgment:
             return None
 
     prompt = _PROMPT_TEMPLATE
-    prompt = prompt.replace('${article}', json.dumps(article))
-    prompt = prompt.replace('${draft}', json.dumps(draft))
+    prompt = prompt.replace('${article}', json.dumps(article, default=lambda o: o.model_dump() if hasattr(o, 'model_dump') else str(o)))
+    prompt = prompt.replace('${draft}', json.dumps(draft, default=lambda o: o.model_dump() if hasattr(o, 'model_dump') else str(o)))
     prompt = prompt.replace('${schema}', _INLINED_SCHEMA)
 
     model_idx = 0

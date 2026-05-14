@@ -1289,11 +1289,13 @@ _PYDANTIC_INPUT_SRC = (
 
 def test_emit_judgment_step_serializes_contract_ref_input(tmp_path):
     """Issue #18: a judgment STEP whose TAKES is a CONTRACT ref must serialize
-    the Pydantic instance via .model_dump() before json.dumps — bare
-    json.dumps on a Pydantic v2 model raises TypeError."""
+    the Pydantic instance via a `default=` handler — bare json.dumps on a
+    Pydantic v2 model raises TypeError. The handler walks any nested
+    BaseModel via .model_dump() at runtime."""
     PythonEmitter().emit(build_ir(parse(_PYDANTIC_INPUT_SRC)), tmp_path)
     body = (tmp_path / "f" / "steps" / "refine.py").read_text()
-    assert "json.dumps(review.model_dump())" in body
+    assert "json.dumps(review, default=" in body
+    assert "o.model_dump() if hasattr(o, 'model_dump')" in body
     # The crash-prone form must NOT appear:
     assert "prompt.replace('${review}', json.dumps(review))" not in body
 
@@ -1389,8 +1391,9 @@ def test_emit_test_with_kwargs_threads_to_first_step(tmp_path, monkeypatch):
 
 
 def test_emit_judgment_step_serializes_list_of_contract_ref(tmp_path):
-    """Issue #18: List<ContractRef> input must be serialized element-wise
-    (each Pydantic item .model_dump()'d before json.dumps)."""
+    """Issue #18: List<ContractRef> input is serialized via the same
+    runtime `default=` handler (json.dumps recurses into list elements
+    automatically; the handler is invoked on each Pydantic item)."""
     src = (
         "CONTRACT verdict\n"
         "  SHAPE: {score: float, label: enum(ok|bad)}\n"
@@ -1406,9 +1409,56 @@ def test_emit_judgment_step_serializes_list_of_contract_ref(tmp_path):
     )
     PythonEmitter().emit(build_ir(parse(src)), tmp_path)
     body = (tmp_path / "f" / "steps" / "combine.py").read_text()
-    # Substitution must iterate and call .model_dump() per item.
-    assert ".model_dump()" in body
+    assert "json.dumps(reviews, default=" in body
     assert "prompt.replace('${reviews}', json.dumps(reviews))" not in body
+
+
+def test_emit_judgment_step_runs_with_list_of_pydantic_input(tmp_path, monkeypatch):
+    """Issue #18 robustness (Gemini follow-up): the runtime `default=`
+    handler walks each Pydantic instance inside a list — the prior
+    compile-time helper covered this only by virtue of an explicit
+    `List<ContractRef>` branch; the `default=` form is uniform."""
+    PythonEmitter().emit(build_ir(parse(
+        "CONTRACT verdict\n"
+        "  SHAPE: {score: float, label: enum(ok|bad)}\n"
+        "STEP collect\n"
+        "  GIVES: reviews: List<verdict>\n"
+        "  MODE: judgment\n"
+        "STEP combine\n"
+        "  TAKES: reviews: List<verdict>\n"
+        "  GIVES: out: str\n"
+        "  MODE: judgment\n"
+        "FLOW f\n"
+        "  collect() -> combine(reviews=reviews)\n"
+    )), tmp_path)
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    try:
+        import anthropic
+
+        class FakeMessages:
+            @staticmethod
+            def create(**kw):
+                return type("M", (), {"content": [type("B", (), {"text": '"ok"'})()]})()
+
+        class FakeClient:
+            def __init__(self, *_a, **_k):
+                self.messages = FakeMessages()
+
+        monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
+
+        from f import contracts as c
+        from f.steps import combine as combine_mod
+
+        reviews = [c.Verdict(score=0.5, label="ok"), c.Verdict(score=0.9, label="bad")]
+        # List of Pydantic instances must not raise TypeError on json.dumps.
+        result = combine_mod.combine(reviews=reviews)
+        assert result == "ok"
+    finally:
+        sys.path.remove(str(tmp_path))
+        for k in list(sys.modules):
+            if k == "f" or k.startswith("f."):
+                del sys.modules[k]
 
 
 # --- FOR EACH emission -----------------------------------------------------

@@ -14,7 +14,6 @@ from pathlib import Path
 from clio.emitters._python_helpers import (
     _emit_attempt_block,
     _gives_validator_expr,
-    _model_id,
     _step_signature,
     emit_contracts,
     emit_default_exact_step,
@@ -26,6 +25,7 @@ from clio.emitters._python_helpers import (
 )
 from clio.emitters._shared_utils import (
     _has_parallel,
+    _model_id,
     _prompt_subst_expr,
     _python_condition_expr,
     _render_system_prompt,
@@ -334,7 +334,7 @@ class PythonEmitter(BaseEmitter):
         )
 
         sub_lines = [
-            f"    prompt = prompt.replace('${{{t.name}}}', {_prompt_subst_expr(t.name, t.type)})"
+            f"    prompt = prompt.replace('${{{t.name}}}', {_prompt_subst_expr(t.name)})"
             for t in step.takes
         ]
         sub_lines.append("    prompt = prompt.replace('${schema}', _INLINED_SCHEMA)")

@@ -99,26 +99,27 @@ def _model_id(short_name: str) -> str:
     return _MODEL_ID_MAP.get(short_name, short_name)
 
 
-def _prompt_subst_expr(name: str, type_expr: TypeExpr) -> str:
-    """Return the Python expression that JSON-serializes a TAKES value for
-    prompt substitution in a judgment step.
+# Lambda inlined into every emitted prompt-substitution `json.dumps(...)`
+# call. Pydantic v2 instances are not natively JSON-serializable, so we
+# pass a `default` handler that walks any nested `BaseModel` via
+# `.model_dump()`. Handles `ContractRef`, `List<ContractRef>`, deeply
+# nested structures, and anonymous records containing contracts uniformly
+# at runtime — no compile-time type walking needed.
+_PROMPT_SUBST_DEFAULT = (
+    "lambda o: o.model_dump() if hasattr(o, 'model_dump') else str(o)"
+)
 
-    A bare `json.dumps(value)` crashes when `value` is a Pydantic v2 instance
-    (i.e. a CONTRACT-typed input), because `BaseModel` is not natively
-    JSON-serializable. ContractRefs and List<ContractRef>s must therefore be
-    walked to call `.model_dump()` first. Everything else (primitives,
-    anonymous record dicts) is already serializable as-is.
 
-    `ConstrainedType(base=...)` only wraps primitives/enums in v0; descend
-    defensively in case that ever changes."""
+def _prompt_subst_expr(name: str) -> str:
+    """Render the `json.dumps(<name>, default=...)` expression used to
+    substitute a TAKES value into a judgment step's prompt template.
+
+    The runtime `default=` handler covers every Pydantic-bearing shape
+    uniformly, including nested ones (`List<List<ContractRef>>`,
+    anonymous records containing contracts), without compile-time
+    type analysis."""
     py_name = _to_field_name(name)
-    if isinstance(type_expr, ConstrainedType):
-        return _prompt_subst_expr(name, type_expr.base)
-    if isinstance(type_expr, ContractRef):
-        return f"json.dumps({py_name}.model_dump())"
-    if isinstance(type_expr, ListType) and isinstance(type_expr.inner, ContractRef):
-        return f"json.dumps([_item.model_dump() for _item in {py_name}])"
-    return f"json.dumps({py_name})"
+    return f"json.dumps({py_name}, default={_PROMPT_SUBST_DEFAULT})"
 
 
 def _uses_contract_refs(step: StepIR) -> bool:

@@ -72,9 +72,9 @@ def refine_summary(*, article: str, draft: str, review: contracts.SummaryJudgmen
             return None
 
     prompt = _PROMPT_TEMPLATE
-    prompt = prompt.replace('${article}', json.dumps(article))
-    prompt = prompt.replace('${draft}', json.dumps(draft))
-    prompt = prompt.replace('${review}', json.dumps(review.model_dump()))
+    prompt = prompt.replace('${article}', json.dumps(article, default=lambda o: o.model_dump() if hasattr(o, 'model_dump') else str(o)))
+    prompt = prompt.replace('${draft}', json.dumps(draft, default=lambda o: o.model_dump() if hasattr(o, 'model_dump') else str(o)))
+    prompt = prompt.replace('${review}', json.dumps(review, default=lambda o: o.model_dump() if hasattr(o, 'model_dump') else str(o)))
     prompt = prompt.replace('${schema}', _INLINED_SCHEMA)
 
     model_idx = 0

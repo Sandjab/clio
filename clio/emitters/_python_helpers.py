@@ -8,7 +8,6 @@ Split out per CLAUDE.md scope-discipline rule (~300-line limit per file).
 
 from clio.emitters._shared_utils import (
     _field_from_schema,
-    _model_id,  # noqa: F401 — re-exported for python.py
     _render_type_short,
     _shape_from_schema,
     _to_class_name,

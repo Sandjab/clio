@@ -58,7 +58,7 @@ def detect_topic(*, text: str) -> str:
             return None
 
     prompt = _PROMPT_TEMPLATE
-    prompt = prompt.replace('${text}', json.dumps(text))
+    prompt = prompt.replace('${text}', json.dumps(text, default=lambda o: o.model_dump() if hasattr(o, 'model_dump') else str(o)))
     prompt = prompt.replace('${schema}', _INLINED_SCHEMA)
 
     model_idx = 0
