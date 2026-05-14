@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Examples
+
+- Add `examples/projects/01-iterative-refiner/` -- full project demonstrating the writer/critic refine loop with `WHILE ... MAX 3` and per-step `invoke.model` overrides. Includes committed `--target python` output and a CI drift guard at `tests/test_examples_projects/`.
+
 ## v0.15.0 — 2026-05-14
 
 OpenProse-inspired sprint: borrows the most defensible ideas from

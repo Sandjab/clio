@@ -1,0 +1,53 @@
+The discovery of penicillin is the story of a chance observation followed by
+sixteen years of unglamorous work that turned a laboratory curiosity into the
+drug that ended the era of routine death from bacterial infection.
+
+In September 1928, Alexander Fleming returned to his laboratory at St Mary's
+Hospital in London after a holiday and noticed that a Petri dish of
+Staphylococcus had been contaminated by a blue-green mould. Around the mould,
+the bacterial colonies were dissolving. Fleming identified the mould as a
+Penicillium species and named the antibacterial substance it secreted
+"penicillin". He published the observation in 1929 in the British Journal of
+Experimental Pathology, then largely set the work aside; the substance was
+unstable, hard to purify, and Fleming was not a chemist.
+
+For nearly a decade penicillin remained an isolated curiosity. The mould juice
+was difficult to concentrate, the active compound degraded within days, and
+the small amounts that could be produced were too dilute to test on animals
+in any rigorous way. Several teams tried; all gave up.
+
+The turning point came at the University of Oxford in 1939, when Howard
+Florey, an Australian pathologist, and Ernst Chain, a German biochemist who
+had fled Nazi Germany, decided to revisit the substance with modern
+biochemical methods. Working with Norman Heatley, they devised freeze-drying
+and back-extraction techniques that allowed them to produce stable, dry
+penicillin powder. In May 1940 they tested it on eight mice infected with a
+lethal dose of streptococci: the four treated mice survived, the four
+untreated died within sixteen hours. The first human trial followed in
+February 1941 on Albert Alexander, a policeman dying of a face infection; he
+improved dramatically until the small supply of the drug ran out, at which
+point the infection returned and he died. The experiment proved efficacy and
+proved that scale was the next problem.
+
+Britain, under wartime conditions, lacked the industrial capacity to scale
+production. In the summer of 1941 Florey and Heatley travelled to the United
+States. With the wartime Office of Scientific Research and Development as
+broker, four American pharmaceutical companies -- Merck, Squibb, Pfizer, and
+Lederle -- were enlisted to develop deep-tank fermentation methods. By 1944,
+penicillin was produced at industrial scale and shipped to Allied front-line
+hospitals. The standard estimate is that penicillin saved between twelve and
+fifteen percent of Allied soldiers who would otherwise have died of wound
+infections during the final year of the war.
+
+In 1945 Fleming, Florey, and Chain shared the Nobel Prize in Physiology or
+Medicine "for the discovery of penicillin and its curative effect in various
+infectious diseases". Fleming, characteristically self-deprecating, used his
+acceptance lecture to warn that the routine use of antibiotics would
+inevitably select for resistant bacteria -- a prediction confirmed within a
+decade. The drug that ended one era opened a slower, still-unfinished problem.
+
+# Sources (paraphrased and rewritten from public material):
+# - Wikipedia, "History of penicillin" (CC BY-SA)
+# - Wikipedia, "Alexander Fleming", "Howard Florey", "Ernst Chain"
+# - Eric Lax, "The Mould in Dr Florey's Coat" (Henry Holt, 2004)
+# - Robert Bud, "Penicillin: Triumph and Tragedy" (Oxford University Press, 2007)

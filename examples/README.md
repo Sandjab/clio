@@ -5,6 +5,17 @@ compile to both targets (`claude-cli` and `python`); the third targets
 `python` only because it uses `invoke.protocol: openai` (LiteLLM bridge) which
 the `claude-cli` target does not implement.
 
+## Project examples
+
+Self-contained example projects live under [`projects/`](projects/). Each
+project bundles its own `README.md`, `flow.clio`, input data, and the
+**compiled `--target python` output committed alongside** -- so you can read
+the result on GitHub before running anything.
+
+- [`projects/01-iterative-refiner/`](projects/01-iterative-refiner/) -- writer + critic refine loop with bounded `WHILE ... MAX 3`. The first project example, and the first end-to-end use of `WHILE` plus per-step `invoke.model` in any CLIO example.
+
+The flat `.clio` files below remain the right format for short, single-concept demos.
+
 ## 1. `mvp.clio` — customer churn detection
 
 Pipeline: load customers from a CSV, detect churn risk via an LLM with a
