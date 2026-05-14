@@ -8,10 +8,12 @@ from clio.emitters._python_helpers import _has_parallel, _python_condition_expr
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
     CallIR,
+    ErrorAccessIR,
     FlowGraph,
     ForEachIR,
     IfBlockIR,
     MatchBlockIR,
+    ResumeIR,
     StepIR,
     WhileBlockIR,
 )
@@ -293,7 +295,16 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
             imported_steps.append(step.name)
         kw_parts = []
         for name, value in call.kwargs:
-            if isinstance(value, str) and value.startswith("@"):
+            if isinstance(value, ErrorAccessIR):
+                if value.field == "message":
+                    kw_parts.append(f"{name}=str(_err)")
+                elif value.field == "type":
+                    kw_parts.append(f"{name}=type(_err).__name__")
+                else:
+                    raise AssertionError(
+                        f"unreachable: ErrorAccessIR field {value.field!r}"
+                    )
+            elif isinstance(value, str) and value.startswith("@"):
                 ref = value[1:]
                 if ref in scope_local:
                     kw_parts.append(f"{name}={ref}")
@@ -329,9 +340,9 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
             chain_lines.append(f"{indent}    {call_line}")
             chain_lines.append(f"{indent}except FlowAborted:")
             chain_lines.append(f"{indent}    raise")
-            chain_lines.append(f"{indent}except Exception:")
+            chain_lines.append(f"{indent}except Exception as _err:")
             chain_lines.append(
-                f"{indent}    await _rescue_{step.name}(state, _session=_session)"
+                f"{indent}    await _rescue_{step.name}(state, _err, _session=_session)"
             )
             chain_lines.append(f"{indent}    raise")
         else:
@@ -414,6 +425,10 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
             for sub in item.body:
                 _emit_item(sub, inner_indent, scope_local)
             return
+        if isinstance(item, ResumeIR):
+            raise NotImplementedError(
+                "RESUME terminator in MCP emitter is not yet supported (T14)"
+            )
         if isinstance(item, CallIR):
             _emit_call(item, indent, scope_local)
             return
@@ -441,7 +456,7 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
             _emit_item(sub, "    ", set())
         rescue_body = "\n".join(chain_lines)
         rescue_helpers.append(
-            f"async def _rescue_{rb.step_name}(state: dict, _session=None) -> None:\n"
+            f"async def _rescue_{rb.step_name}(state: dict, _err: BaseException, _session) -> None:\n"
             + rescue_body
             + "\n"
         )
