@@ -571,3 +571,101 @@ def test_ir_builds_resume_terminator():
     assert isinstance(last, ResumeIR)
     assert last.fallback_step == "recover"
     assert last.field_name == "report"
+
+
+# ---------------------------------------------------------------------------
+# T9: ResumeIR semantic validations
+# ---------------------------------------------------------------------------
+
+
+def test_ir_rejects_resume_fallback_not_in_chain():
+    src = RESUME_SRC.replace(
+        "RESUME(recover.report)",
+        "RESUME(ghost.report)",
+    )
+    program = _parse(src)
+    with pytest.raises(IRBuildError) as exc:
+        build_ir(program)
+    assert "RESUME(ghost.report)" in str(exc.value)
+    assert "is not called in this RESCUE handler" in str(exc.value)
+
+
+def test_ir_rejects_resume_field_not_in_gives():
+    src = RESUME_SRC.replace(
+        "RESUME(recover.report)",
+        "RESUME(recover.nope)",
+    )
+    program = _parse(src)
+    with pytest.raises(IRBuildError) as exc:
+        build_ir(program)
+    assert "is not a field of step 'recover'" in str(exc.value)
+
+
+def test_ir_rejects_resume_type_mismatch():
+    # detect.gives: report: str  /  recover.gives: report: int  → type mismatch
+    src = """
+STEP load
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE:  exact
+
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  judgment
+
+STEP recover
+  TAKES: rows: List<int>
+  GIVES: report: int
+  MODE:  exact
+
+FLOW pipeline
+  load(path="data.csv")
+    -> detect(rows=rows)
+
+  RESCUE detect:
+    -> recover(rows=rows)
+    -> RESUME(recover.report)
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+    program = _parse(src)
+    with pytest.raises(IRBuildError) as exc:
+        build_ir(program)
+    assert "is incompatible with rescued step's GIVES type" in str(exc.value)
+
+
+def test_ir_rejects_rescue_without_terminator():
+    src = """
+STEP load
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE:  exact
+
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  judgment
+
+STEP notify
+  TAKES: channel: str
+  GIVES: sent: bool
+  MODE:  exact
+
+FLOW pipeline
+  load(path="data.csv")
+    -> detect(rows=rows)
+
+  RESCUE detect:
+    -> notify(channel="#a")
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+    program = _parse(src)
+    with pytest.raises(IRBuildError) as exc:
+        build_ir(program)
+    assert "must end with abort(...) or RESUME(...)" in str(exc.value)

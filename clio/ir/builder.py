@@ -575,15 +575,52 @@ def _build_rescue(
     _validate_error_accesses(body_items, decl.step_name)
 
     # (5) Body terminal: must be abort(...) or RESUME(<step>.<field>) at the
-    #     top level (T9 will add full semantic validation of RESUME targets).
+    #     top level.
     _last = body_items[-1] if body_items else None
     _is_abort = isinstance(_last, CallIR) and _last.step_name == "abort"
     _is_resume = isinstance(_last, ResumeIR)
     if not body_items or not (_is_abort or _is_resume):
         raise IRBuildError(
             f"line {decl.line}: RESCUE body for {decl.step_name!r} must end "
-            f"with abort(...) at the top level of the body chain"
+            f"with abort(...) or RESUME(...) at the top level of the body chain"
         )
+
+    # (5b) If RESUME, validate: fallback_step called earlier, field exists,
+    #      and its type matches the rescued step's GIVES type.
+    if _is_resume:
+        assert isinstance(_last, ResumeIR)
+        chain_call_names = [
+            item.step_name for item in body_items[:-1] if isinstance(item, CallIR)
+        ]
+        if _last.fallback_step not in chain_call_names:
+            raise IRBuildError(
+                f"line {_last.line}: RESUME({_last.fallback_step}.{_last.field_name}): "
+                f"step {_last.fallback_step!r} is not called in this RESCUE handler"
+            )
+        fallback_step_ir = steps_by_name[_last.fallback_step]
+        fb_gives = fallback_step_ir.gives
+        if fb_gives is None or fb_gives.name != _last.field_name:
+            known = ([fb_gives.name] if fb_gives is not None else [])
+            raise IRBuildError(
+                f"line {_last.line}: RESUME({_last.fallback_step}.{_last.field_name}): "
+                f"{_last.field_name!r} is not a field of step {_last.fallback_step!r}'s "
+                f"GIVES (got: {sorted(known)})"
+            )
+        rescued_step_ir = steps_by_name[decl.step_name]
+        rescued_gives = rescued_step_ir.gives
+        if rescued_gives is None or rescued_gives.name != _last.field_name:
+            known_r = ([rescued_gives.name] if rescued_gives is not None else [])
+            raise IRBuildError(
+                f"line {_last.line}: RESUME({_last.fallback_step}.{_last.field_name}): "
+                f"rescued step {decl.step_name!r} has no GIVES field "
+                f"{_last.field_name!r} (got: {sorted(known_r)})"
+            )
+        if fb_gives.type != rescued_gives.type:
+            raise IRBuildError(
+                f"line {_last.line}: RESUME({_last.fallback_step}.{_last.field_name}): "
+                f"type {_render(fb_gives.type)} is incompatible with rescued step's "
+                f"GIVES type {_render(rescued_gives.type)}"
+            )
 
     return RescueBlockIR(
         step_name=decl.step_name,
