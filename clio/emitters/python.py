@@ -14,12 +14,8 @@ from pathlib import Path
 from clio.emitters._python_helpers import (
     _emit_attempt_block,
     _gives_validator_expr,
-    _has_parallel,
     _model_id,
-    _python_condition_expr,
     _step_signature,
-    _to_field_name,
-    _type_to_python,
     emit_contracts,
     emit_default_exact_step,
     emit_mcp_tool_step,
@@ -27,6 +23,14 @@ from clio.emitters._python_helpers import (
     emit_rest_step,
     emit_shell_step,
     emit_sql_step,
+)
+from clio.emitters._shared_utils import (
+    _has_parallel,
+    _python_condition_expr,
+    _render_system_prompt,
+    _safe_package_name,
+    _to_field_name,
+    _type_to_python,
 )
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import (
@@ -128,32 +132,6 @@ def _predicate_expr(field: str, pred) -> str:
         # Works for strings, lists, and dicts (key membership).
         return f"{v!r} in ({f} or [])"
     raise ValueError(f"unknown predicate kind: {k}")
-
-
-def _render_system_prompt(step: StepIR) -> list[str]:
-    """Render the `_SYSTEM_PROMPT = (...)` block for a judgment step.
-
-    Always emits the strict JSON-only directive. When the step declares
-    DESCRIPTION or STRATEGIES (v0.15), appends them as a labelled section
-    so the model can use them as judgment context without being misled
-    about the output contract. Output is byte-identical to the pre-v0.15
-    emitter when neither field is set."""
-    legacy = [
-        "_SYSTEM_PROMPT = (",
-        "    'You are a strict JSON-only API. Output exactly one JSON document matching '",
-        "    'the requested schema, with no prose, no markdown code fences, no commentary, '",
-        "    'and no leading or trailing whitespace beyond the JSON itself.'",
-        ")",
-    ]
-    if not step.description and not step.strategies:
-        return legacy
-    extras: list[str] = []
-    if step.description:
-        extras.append("Step intent: " + step.description.replace("\n", " "))
-    if step.strategies:
-        extras.append("Heuristics:\n" + step.strategies)
-    suffix = "\n\n" + "\n\n".join(extras)
-    return [*legacy[:-1], f"    {suffix!r}", legacy[-1]]
 
 
 class PythonEmitter(BaseEmitter):
@@ -911,9 +889,7 @@ class PythonEmitter(BaseEmitter):
 
     @staticmethod
     def _package_name(graph: FlowGraph) -> str:
-        if graph.flow is None:
-            return "clio_flow"
-        return graph.flow.name
+        return _safe_package_name(graph, default="clio_flow")
 
     @staticmethod
     def _pyproject(

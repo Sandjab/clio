@@ -15,6 +15,7 @@ import keyword
 
 from clio.ir.graph import (
     ContractIR,
+    FlowGraph,
     StepIR,
 )
 from clio.parser.ast_nodes import (
@@ -44,6 +45,52 @@ def _to_class_name(name: str) -> str:
 def _to_field_name(name: str) -> str:
     """Identity for valid identifiers; suffixes a `_` for Python keywords."""
     if keyword.iskeyword(name):
+        return f"{name}_"
+    return name
+
+
+def _render_system_prompt(step: StepIR) -> list[str]:
+    """Render the `_SYSTEM_PROMPT = (...)` block for a judgment step.
+
+    Always emits the strict JSON-only directive. When the step declares
+    DESCRIPTION or STRATEGIES (v0.15), appends them as a labelled section
+    so the model can use them as judgment context without being misled
+    about the output contract. Output is byte-identical to the pre-v0.15
+    emitter when neither field is set.
+
+    Shared by the python and mcp-server targets — both emit the same
+    `_SYSTEM_PROMPT` module constant, so the v0.15 enrichment applies
+    uniformly. Was previously python-only; mcp-server compiled the
+    legacy literal, silently dropping DESCRIPTION/STRATEGIES."""
+    legacy = [
+        "_SYSTEM_PROMPT = (",
+        "    'You are a strict JSON-only API. Output exactly one JSON document matching '",
+        "    'the requested schema, with no prose, no markdown code fences, no commentary, '",
+        "    'and no leading or trailing whitespace beyond the JSON itself.'",
+        ")",
+    ]
+    if not step.description and not step.strategies:
+        return legacy
+    extras: list[str] = []
+    if step.description:
+        extras.append("Step intent: " + step.description.replace("\n", " "))
+    if step.strategies:
+        extras.append("Heuristics:\n" + step.strategies)
+    suffix = "\n\n" + "\n\n".join(extras)
+    return [*legacy[:-1], f"    {suffix!r}", legacy[-1]]
+
+
+def _safe_package_name(graph: FlowGraph, default: str) -> str:
+    """Return a Python-importable package name derived from `graph.flow.name`.
+
+    CLIO identifiers accept Python reserved/soft keywords (`class`, `match`, …),
+    but a package literally named `class` produces `from class.flow import …`,
+    which is a SyntaxError. Suffix `_` for the rare collisions; default when
+    no FLOW is declared (e.g. CONTRACT-only sources)."""
+    if graph.flow is None:
+        return default
+    name = graph.flow.name
+    if keyword.iskeyword(name) or keyword.issoftkeyword(name):
         return f"{name}_"
     return name
 
@@ -146,6 +193,89 @@ def _shape_from_schema(schema: dict) -> list[tuple[str, dict]]:
 def _field_from_schema(name: str, schema: dict) -> str:
     py_name = _to_field_name(name)
     py_type = _json_type_to_python(schema)
+    # Build a list of Field(...) kwargs so we can compose alias + max_length
+    # uniformly. Pydantic v2 needs `alias=` (and `validation_alias=`) so the
+    # original CLIO field name still parses from JSON input when py_name was
+    # renamed to avoid a Python-keyword collision.
+    field_kwargs: list[str] = []
+    if py_name != name:
+        field_kwargs.append(f"alias={name!r}")
+        field_kwargs.append(f"validation_alias={name!r}")
     if schema.get("type") == "string" and "maxLength" in schema:
-        return f"{py_name}: {py_type} = Field(max_length={schema['maxLength']})"
+        field_kwargs.append(f"max_length={schema['maxLength']}")
+    if field_kwargs:
+        return f"{py_name}: {py_type} = Field({', '.join(field_kwargs)})"
     return f"{py_name}: {py_type}"
+
+
+# ---------------------------------------------------------------------------
+# Chain helpers used by every emitter that walks a FlowIR.chain (python,
+# mcp-server, langgraph). Live here — and NOT inside an emitter helper
+# module — so that emitter helpers do not need to import from each other
+# (CLAUDE.md: "Emitters never import from each other").
+
+def _has_parallel(chain) -> bool:
+    """Return True if any ForEachIR in the chain (or nested) has parallel=True.
+    Used by emitters to decide whether to emit `import concurrent.futures` /
+    `import asyncio` at module top of the emitted flow.py."""
+    from clio.ir.graph import (  # avoid top-level circular import
+        ForEachIR,
+        IfBlockIR,
+        MatchBlockIR,
+        WhileBlockIR,
+    )
+    for elem in chain:
+        if isinstance(elem, ForEachIR):
+            if elem.parallel:
+                return True
+            if _has_parallel(elem.body):
+                return True
+        elif isinstance(elem, IfBlockIR):
+            if _has_parallel(elem.then_body) or _has_parallel(elem.else_body):
+                return True
+        elif isinstance(elem, MatchBlockIR):
+            for arm in elem.cases:
+                if _has_parallel(arm.body):
+                    return True
+        elif isinstance(elem, WhileBlockIR):
+            if _has_parallel(elem.body):
+                return True
+    return False
+
+
+def _python_condition_expr(condition, scope_local: set[str]) -> str:
+    """Render an IF/WHILE condition as a Python boolean expression.
+
+    Leaf comparisons (`ConditionIR`) read the contract field via attribute
+    access (Pydantic models); the base is a bare name when the state field
+    is in `scope_local` (e.g. inside a FOR EACH body), otherwise it's
+    `state[<name>]`. `BoolOpIR` nodes render as `(<left>) and/or (<right>)`
+    — the parentheses are unconditional so the emitted Python preserves
+    the IR's precedence regardless of nesting."""
+    from clio.ir.graph import BoolOpIR  # avoid top-level circular import
+
+    if isinstance(condition, BoolOpIR):
+        left = _python_condition_expr(condition.left, scope_local)
+        right = _python_condition_expr(condition.right, scope_local)
+        return f"({left}) {condition.op} ({right})"
+    base = (
+        condition.step_name
+        if condition.step_name in scope_local
+        else f"state[{condition.step_name!r}]"
+    )
+    # The CONTRACT field on the Pydantic model has been renamed if its CLIO
+    # name is a Python keyword (`class` → `class_`, `return` → `return_`, …),
+    # so attribute access here must follow the same rename — otherwise the
+    # emitted Python is a SyntaxError on hard keywords or an AttributeError
+    # on softer ones.
+    access = f"{base}.{_to_field_name(condition.field)}"
+    if condition.literal_kind == "int":
+        lit = str(condition.literal_value)
+    elif condition.literal_kind == "float":
+        lit = repr(condition.literal_value)
+    elif condition.literal_kind == "bool":
+        lit = "True" if condition.literal_value else "False"
+    else:
+        # str | ident — both rendered as Python string literals
+        lit = repr(condition.literal_value)
+    return f"{access} {condition.op} {lit}"

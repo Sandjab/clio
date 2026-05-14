@@ -432,6 +432,96 @@ def test_emit_chained_assert_validates_at_runtime(tmp_path):
         Scored.model_validate({"score": 1.1})
 
 
+def test_if_condition_uses_renamed_field_for_python_keyword(tmp_path):
+    """Companion of fix #6: when a CONTRACT field's CLIO name collides with a
+    Python keyword (`class`, `return`, …), the Pydantic model renames it to
+    `<name>_`. An IF condition reading that field via attribute access must
+    use the renamed name; otherwise the emitted Python is a SyntaxError on
+    `state['x'].class` or an AttributeError on `state['x'].return`."""
+    src = (
+        "CONTRACT report\n"
+        "  SHAPE: {class: enum(bug|feature|other)}\n"
+        "STEP load\n"
+        "  GIVES: r: report\n"
+        "  MODE:  exact\n"
+        "STEP route_bug\n"
+        "  TAKES: r: report\n"
+        "  GIVES: dest: str\n"
+        "  MODE:  exact\n"
+        "STEP route_other\n"
+        "  TAKES: r: report\n"
+        "  GIVES: dest: str\n"
+        "  MODE:  exact\n"
+        "FLOW p\n"
+        "  load()\n"
+        "    -> IF r.class == \"bug\":\n"
+        "        route_bug(r=r)\n"
+        "    ELSE:\n"
+        "        route_other(r=r)\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = (tmp_path / "p" / "flow.py").read_text()
+    # The condition must read the Pydantic-side renamed field, not the raw CLIO name.
+    assert "state['r'].class_ == 'bug'" in flow_py
+    assert "state['r'].class ==" not in flow_py
+    # Sanity: emitted Python compiles.
+    compile(flow_py, "<flow.py>", "exec")
+
+
+def test_judgment_attempt_re_raises_non_transient_sdk_errors(tmp_path):
+    """A bad API key (anthropic.AuthenticationError) is not a transient
+    failure — retrying just burns tokens without changing the outcome.
+    The emitted _attempt() must re-raise authentication / permission /
+    bad-request errors instead of swallowing them as `return None`."""
+    src = (FIXTURES / "mvp_v03_onfail.clio").read_text()
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    step_path = tmp_path / "retention" / "steps" / "detect_churn.py"
+    body = step_path.read_text()
+    # The explicit re-raise must come before the generic except Exception
+    # (Python evaluates except clauses top-down, so order matters).
+    assert (
+        "except (anthropic.AuthenticationError, anthropic.PermissionDeniedError, "
+        "anthropic.BadRequestError):\n            raise\n"
+    ) in body
+    # And the generic catch still exists.
+    assert "        except Exception:\n            return None\n" in body
+
+
+def test_emit_field_validator_handles_python_keyword_field_name(tmp_path):
+    """A CONTRACT field whose CLIO name is a Python keyword (`class`,
+    `return`, …) gets renamed to `<name>_` by `_to_field_name`. The
+    emitted @field_validator must target the renamed Python name, not
+    the raw CLIO name, otherwise Pydantic raises PydanticUserError at
+    import time because the targeted field doesn't exist on the model.
+    """
+    src = (
+        "CONTRACT row\n"
+        "  SHAPE:  {return: int}\n"
+        "  ASSERT: return > 0\n"
+        "STEP load\n"
+        "  GIVES: r: List<row>\n"
+        "  MODE:  exact\n"
+        "FLOW f\n"
+        "  load()\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    contracts_path = tmp_path / "f" / "contracts.py"
+    body = contracts_path.read_text()
+    # The decorator must target the renamed Python field name.
+    assert "@field_validator('return_')" in body
+    # And the validator body's local must use the renamed name too.
+    assert "return_ = v" in body
+
+    # End-to-end: importing the module must not raise PydanticUserError,
+    # and the validator must actually fire on out-of-range values.
+    mod = _load_module("clio_kw_field_test", contracts_path)
+    Row = mod.Row
+    assert Row.model_validate({"return": 5}).return_ == 5
+    import pydantic
+    with pytest.raises(pydantic.ValidationError):
+        Row.model_validate({"return": 0})
+
+
 def test_emit_rejects_multifield_assert(tmp_path):
     """Latent #2: ASSERT referencing more than one field would generate a
     @field_validator whose body references idents not in scope at runtime
@@ -2152,3 +2242,33 @@ def test_python_emit_test_files_are_executable_pytest(tmp_path):
     test_path = tmp_path / "tests" / "test_t_collect.py"
     code = test_path.read_text()
     compile(code, str(test_path), "exec")  # raises SyntaxError if invalid
+
+
+def test_emit_with_python_keyword_flow_name_produces_importable_package(tmp_path):
+    """A FLOW named after a Python keyword (e.g. `class`) produces a package
+    whose generated imports (`from class.flow import ...`) would be a SyntaxError.
+    The emitter must sanitize the package directory and import statements.
+    """
+    src = (
+        "STEP greet\n"
+        "  GIVES: msg: str\n"
+        "  MODE: exact\n"
+        "FLOW class\n"
+        "  greet()\n"
+    )
+    graph = build_ir(parse(src))
+    PythonEmitter().emit(graph, tmp_path)
+
+    # The emitted package directory must NOT clash with a Python reserved
+    # keyword; one stable convention is to suffix with `_`.
+    pkg_dir = tmp_path / "class_"
+    assert pkg_dir.is_dir(), (
+        f"expected sanitized package dir 'class_' under {tmp_path}, got: "
+        f"{sorted(p.name for p in tmp_path.iterdir())}"
+    )
+
+    # Every emitted .py file must be syntactically valid Python (no
+    # `from class import ...` lurking inside).
+    for py in pkg_dir.rglob("*.py"):
+        code = py.read_text()
+        compile(code, str(py), "exec")  # raises SyntaxError if any import is broken

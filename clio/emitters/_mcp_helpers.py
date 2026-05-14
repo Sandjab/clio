@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import json as _json
 
-from clio.emitters._python_helpers import _has_parallel, _python_condition_expr
+from clio.emitters._shared_utils import (
+    _has_parallel,
+    _python_condition_expr,
+    _render_system_prompt,
+)
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
     CallIR,
@@ -779,11 +783,7 @@ def emit_judgment_step_via_sampling(
         "\n"
         f"_PROMPT_TEMPLATE = {prompt_template!r}\n"
         f"_INLINED_SCHEMA = {inlined_json!r}\n"
-        "_SYSTEM_PROMPT = (\n"
-        "    'You are a strict JSON-only API. Output exactly one JSON document matching '\n"
-        "    'the requested schema, with no prose, no markdown code fences, no commentary, '\n"
-        "    'and no leading or trailing whitespace beyond the JSON itself.'\n"
-        ")\n"
+        f"{chr(10).join(_render_system_prompt(step))}\n"
         "_MAX_TOKENS = 4096\n"
         f"{retry_max_line}"
         "\n"

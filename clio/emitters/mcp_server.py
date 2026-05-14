@@ -23,6 +23,7 @@ from clio.emitters._python_helpers import (
     emit_shell_step,
     emit_sql_step,
 )
+from clio.emitters._shared_utils import _safe_package_name
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import (
     ApiInvokeIR,
@@ -40,7 +41,7 @@ class MCPServerEmitter(BaseEmitter):
         self._validate_for_mcp(graph)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        pkg_name = graph.flow.name if graph.flow is not None else "clio_mcp"
+        pkg_name = _safe_package_name(graph, default="clio_mcp")
         pkg_dir = output_dir / pkg_name
         steps_dir = pkg_dir / "steps"
         pkg_dir.mkdir(parents=True, exist_ok=True)

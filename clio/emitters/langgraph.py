@@ -31,6 +31,7 @@ from clio.emitters._python_helpers import (
     emit_rest_step,
     emit_shell_step,
 )
+from clio.emitters._shared_utils import _safe_package_name
 from clio.emitters.base import BaseEmitter
 from clio.emitters.python import PythonEmitter
 from clio.ir.graph import (
@@ -52,7 +53,7 @@ class LangGraphEmitter(BaseEmitter):
         self._validate_for_langgraph(graph)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        pkg_name = graph.flow.name if graph.flow is not None else "clio_langgraph"
+        pkg_name = _safe_package_name(graph, default="clio_langgraph")
         pkg_dir = output_dir / pkg_name
         steps_dir = pkg_dir / "steps"
         runtime_dir = pkg_dir / "clio_runtime"

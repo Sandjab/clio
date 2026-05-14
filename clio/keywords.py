@@ -26,6 +26,7 @@ class Keyword(StrEnum):
     CLAUDE_CLI = "claude-cli"
     MCP_SERVER = "mcp-server"
     LANGGRAPH = "langgraph"
+    CLAUDE_SKILL = "claude-skill"
     HAIKU = "haiku"
     SONNET = "sonnet"
     OPUS = "opus"

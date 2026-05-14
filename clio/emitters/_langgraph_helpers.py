@@ -13,9 +13,11 @@ rejected at compile time with clear messages. Cache and `retry(N)` are
 honoured (the latter via `RetryPolicy`)."""
 from __future__ import annotations
 
-import keyword
-
-from clio.emitters._python_helpers import _python_condition_expr, _type_to_python
+from clio.emitters._shared_utils import (
+    _python_condition_expr,
+    _to_field_name,
+    _type_to_python,
+)
 from clio.ir.graph import (
     CallIR,
     ContractIR,
@@ -41,12 +43,6 @@ def _collect_all_calls(chain) -> list[CallIR]:
             for arm in item.cases:
                 out.extend(_collect_all_calls(arm.body))
     return out
-
-
-def _to_field_name(name: str) -> str:
-    if keyword.iskeyword(name):
-        return f"{name}_"
-    return name
 
 
 def _step_state_key(step: StepIR) -> str:
