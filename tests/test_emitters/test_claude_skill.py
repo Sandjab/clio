@@ -319,3 +319,144 @@ def test_input_schema_has_no_external_refs(tmp_path):
     for schema_file in (tmp_path / "schemas").glob("*.input.json"):
         schema = json.loads(schema_file.read_text())
         _assert_no_external_refs(schema, schema_file.name)
+
+
+# ----- Task 7: IF / MATCH conditional sub-flows in SKILL.md ------------------
+
+_IF_DECLS = (
+    "CONTRACT classification\n"
+    "  SHAPE: {category: str(max=20), confidence: float}\n"
+    "\n"
+    "CONTRACT routing_decision\n"
+    "  SHAPE: {dest: str(max=40)}\n"
+    "\n"
+    "STEP classify\n"
+    "  TAKES: email: str\n"
+    "  GIVES: report: classification\n"
+    "  MODE:  judgment\n"
+    "\n"
+    "STEP human_review\n"
+    "  TAKES: report: classification\n"
+    "  GIVES: decision: routing_decision\n"
+    "  MODE:  judgment\n"
+    "\n"
+    "STEP auto_route\n"
+    "  TAKES: report: classification\n"
+    "  GIVES: decision: routing_decision\n"
+    "  MODE:  judgment\n"
+)
+
+_IF_FLOW = (
+    'FLOW main\n'
+    '    classify(email="hi")\n'
+    '    -> IF report.confidence < 0.7:\n'
+    '        human_review(report)\n'
+    '    ELSE:\n'
+    '        auto_route(report)\n'
+)
+
+_MATCH_DECLS = (
+    "CONTRACT classification\n"
+    "  SHAPE: {category: enum(spam|support|sales), confidence: float}\n"
+    "\n"
+    "CONTRACT routing_decision\n"
+    "  SHAPE: {dest: str(max=40)}\n"
+    "\n"
+    "STEP classify\n"
+    "  TAKES: email: str\n"
+    "  GIVES: report: classification\n"
+    "  MODE:  judgment\n"
+    "\n"
+    "STEP archive\n"
+    "  TAKES: report: classification\n"
+    "  GIVES: decision: routing_decision\n"
+    "  MODE:  judgment\n"
+    "\n"
+    "STEP route_support\n"
+    "  TAKES: report: classification\n"
+    "  GIVES: decision: routing_decision\n"
+    "  MODE:  judgment\n"
+    "\n"
+    "STEP route_sales\n"
+    "  TAKES: report: classification\n"
+    "  GIVES: decision: routing_decision\n"
+    "  MODE:  judgment\n"
+    "\n"
+    "STEP route_general\n"
+    "  TAKES: report: classification\n"
+    "  GIVES: decision: routing_decision\n"
+    "  MODE:  judgment\n"
+)
+
+_MATCH_FLOW = (
+    'FLOW main\n'
+    '    classify(email="hi")\n'
+    '    -> MATCH report.category:\n'
+    '        CASE spam:    archive(report)\n'
+    '        CASE support: route_support(report)\n'
+    '        CASE sales:   route_sales(report)\n'
+    '        DEFAULT:      route_general(report)\n'
+)
+
+
+def test_if_branches_appear_in_skill_md(tmp_path):
+    """IF/ELSE in the FLOW chain produces a ### IF section in SKILL.md."""
+    graph = build_ir(parse(_IF_DECLS + _IF_FLOW))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    # Section header for the IF block
+    assert "### IF " in body or "### Si " in body
+    # Both true and false branches are mentioned
+    assert ("True branch" in body or "Branche Vrai" in body)
+    assert ("False branch" in body or "Branche Faux" in body)
+    # Condition rendered into the header
+    assert "report.confidence" in body
+    # Existing flat step sections are still present
+    assert "## Step 01" in body or "## Étape 01" in body
+
+
+def test_match_branches_appear_in_skill_md(tmp_path):
+    """MATCH/CASE in the FLOW chain produces a ### MATCH section in SKILL.md."""
+    graph = build_ir(parse(_MATCH_DECLS + _MATCH_FLOW))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    # Section header for the MATCH block
+    assert "### MATCH " in body or "### Cas " in body
+    # Discriminator rendered
+    assert "report.category" in body
+    # Named cases and DEFAULT appear
+    assert "spam" in body
+    assert "support" in body
+    assert "DEFAULT" in body
+    # Flat step sections preserved
+    assert "## Step 01" in body or "## Étape 01" in body
+
+
+def test_if_no_else_only_true_branch_mentioned(tmp_path):
+    """IF without ELSE: only True branch count appears; False branch omitted."""
+    src = (
+        _IF_DECLS
+        + 'FLOW main\n'
+        '    classify(email="hi")\n'
+        '    -> IF report.confidence < 0.7:\n'
+        '        human_review(report)\n'
+    )
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    assert "### IF " in body or "### Si " in body
+    # True branch always present; False branch absent when ELSE is missing
+    assert "True branch" in body or "Branche Vrai" in body
+    assert "False branch" not in body and "Branche Faux" not in body
+
+
+def test_flat_step_sections_preserved_with_control_flow(tmp_path):
+    """Tasks 4/5 step sections survive the render_skill_md refactor."""
+    graph = build_ir(parse(_IF_DECLS + _IF_FLOW))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    # All 3 STEPs must appear (classify=01, human_review=02, auto_route=03)
+    assert "01" in body
+    assert "classify" in body
+    assert "human_review" in body
+    assert "auto_route" in body

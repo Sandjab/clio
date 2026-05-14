@@ -10,7 +10,7 @@ import json
 from collections.abc import Callable
 
 from clio.ir.contracts import type_to_json_schema
-from clio.ir.graph import FlowGraph, StepIR
+from clio.ir.graph import BoolOpIR, FlowGraph, IfBlockIR, MatchBlockIR, StepIR
 from clio.parser.ast_nodes import (
     ConstrainedType,
     ContractRef,
@@ -359,12 +359,74 @@ def render_judgment_step_section(step: StepIR, idx: int, lang: str = "en") -> st
     return title + doc_block + body
 
 
+def _render_condition(cond) -> str:
+    """Render a ConditionIR leaf or BoolOpIR tree to a human-readable string.
+
+    Mirrors the ``_format_condition_label`` helper in ``graph_render.py``.
+    """
+    if isinstance(cond, BoolOpIR):
+        left = _render_condition(cond.left)
+        right = _render_condition(cond.right)
+        return f"({left}) {cond.op} ({right})"
+    # ConditionIR leaf
+    lit_repr = repr(cond.literal_value)
+    return f"{cond.step_name}.{cond.field} {cond.op} {lit_repr}"
+
+
+def render_if_section(if_node: IfBlockIR, idx_label: str, lang: str = "en") -> str:
+    """Render an IF/ELSE block as a SKILL.md sub-section.
+
+    Sub-steps inside then_body / else_body have already been emitted (via the
+    flat graph.steps walk). This section narrates the control flow only.
+    """
+    title = {"en": "IF", "fr": "Si"}[lang]
+    cond = _render_condition(if_node.condition)
+    a_label = {"en": "True branch", "fr": "Branche Vrai"}[lang]
+    b_label = {"en": "False branch", "fr": "Branche Faux"}[lang]
+    n_then = len(if_node.then_body)
+    n_else = len(if_node.else_body)
+    head = (
+        f"### {title} {cond}  (source line {if_node.line})\n\n"
+        f"Evaluate the condition. If true, proceed with branch A. "
+        f"Otherwise, branch B.\n\n"
+        f"- **{a_label}**: {n_then} sub-step(s) (see ordinal sections above/below)\n"
+    )
+    if n_else:
+        head += f"- **{b_label}**: {n_else} sub-step(s)\n"
+    head += "\n"
+    return head
+
+
+def render_match_section(match_node: MatchBlockIR, idx_label: str, lang: str = "en") -> str:
+    """Render a MATCH/CASE block as a SKILL.md sub-section."""
+    title = {"en": "MATCH", "fr": "Cas"}[lang]
+    discriminator = f"{match_node.state_field}.{match_node.sub_field}"
+    head = (
+        f"### {title} {discriminator}  (source line {match_node.line})\n\n"
+        f"Evaluate the discriminator and follow the matching case below.\n\n"
+    )
+    for case in match_node.cases:
+        pattern = case.value if case.value is not None else "DEFAULT"
+        n_body = len(case.body)
+        head += f"- **Case `{pattern}`**: {n_body} sub-step(s)\n"
+    head += "\n"
+    return head
+
+
 def render_skill_md(
     graph: FlowGraph,
     *,
     warn: Callable[[str], None] | None = None,
 ) -> str:
-    """Render the full SKILL.md content for a flow."""
+    """Render the full SKILL.md content for a flow.
+
+    Strategy: emit flat step sections first (preserving Tasks 4/5 behaviour),
+    then append narrative control-structure sections from graph.flow.chain.
+    The flat graph.steps list already contains every STEP regardless of nesting;
+    the chain walk adds IF/MATCH headings that describe the branching logic and
+    reference the steps by count. This keeps the two concerns separate and
+    avoids rewriting the step-enumeration logic.
+    """
     lang = detect_skill_language(graph)
     parts = [render_frontmatter(graph, warn=warn), f"\n# {_flow_name(graph)}\n"]
     for idx, step in enumerate(graph.steps, start=1):
@@ -372,6 +434,18 @@ def render_skill_md(
             parts.append(render_exact_step_section(step, idx, lang=lang))
         elif step.mode == "judgment":
             parts.append(render_judgment_step_section(step, idx, lang=lang))
+
+    # Append control-structure narrative from the structured chain.
+    flow = getattr(graph, "flow", None)
+    if flow is not None:
+        chain = getattr(flow, "chain", None) or ()
+        for item_idx, item in enumerate(chain, start=1):
+            if isinstance(item, IfBlockIR):
+                parts.append(render_if_section(item, f"{item_idx:02d}", lang=lang))
+            elif isinstance(item, MatchBlockIR):
+                parts.append(render_match_section(item, f"{item_idx:02d}", lang=lang))
+            # WhileBlockIR / ForEachIR / RescueBlockIR: deferred to later tasks.
+
     return "".join(parts)
 
 
