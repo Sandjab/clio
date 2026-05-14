@@ -494,6 +494,73 @@ exit.
 **Targets:** `python` and `mcp-server`. `claude-cli` and `langgraph` are
 rejected at compile time in v0.11.
 
+## 14. Fallback via RESUME — recover from a judgment step failure
+
+**Pattern:** when a judgment step fails after `ON_FAIL` exhausts, run a
+rule-based fallback and inject its result so the flow continues normally.
+
+**Reference:** [`examples/critical_pipeline.clio`](../../examples/critical_pipeline.clio)
+(see also the v0.13 variant `examples/critical_pipeline_resume.clio`)
+
+```
+CONTRACT churn_report
+  SHAPE: {risks: List<{client: str, score: float}>}
+
+STEP detect
+  TAKES:   rows: List<int>
+  GIVES:   report: churn_report
+  MODE:    judgment
+  ON_FAIL: retry(3) then escalate
+
+STEP fallback_detect
+  TAKES: rows: List<int>
+  GIVES: report: churn_report
+  MODE:  exact
+
+STEP notify
+  TAKES: channel: str, reason: str, err_type: str
+  GIVES: sent: bool
+  MODE:  exact
+
+STEP route_alerts
+  TAKES: report: churn_report
+  GIVES: alerts: int
+  MODE:  exact
+
+FLOW pipeline
+  load(path="data.csv")
+    -> detect(rows=rows)
+    -> route_alerts(report=report)
+
+  RESCUE detect:
+    -> notify(channel="#alerts", reason=detect.error.message, err_type=detect.error.type)
+    -> fallback_detect(rows=rows)
+    -> RESUME(fallback_detect.report)
+```
+
+**What this does** at runtime:
+
+1. `load` runs.
+2. `detect` runs. If it raises, `ON_FAIL`'s `retry(3)` then `escalate` fire first.
+3. If those exhaust, the `RESCUE` body runs:
+   - `notify` posts to Slack — `detect.error.message` is the string of the
+     captured exception, `detect.error.type` is its Python class name.
+   - `fallback_detect` runs a deterministic rule-based version of the analysis.
+   - `RESUME(fallback_detect.report)` injects `fallback_detect`'s result into
+     `state["report"]`, replacing the failed step's output slot.
+4. The flow continues normally: `route_alerts(report=report)` reads the injected
+   fallback value.
+
+**When to prefer RESUME over `abort("...")`:** when a deterministic fallback
+produces an acceptable answer (rules-based analysis, a cached previous result, a
+safe default) and the downstream steps can run usefully on top of it. Use
+`abort("...")` when no acceptable fallback exists and the pipeline must stop.
+
+Key idea: the compiler validates at build time that `fallback_detect.report`'s
+type matches `detect`'s `GIVES` type exactly. A type mismatch is a compile error,
+not a runtime surprise. Compiles to `python` and `mcp-server`; `claude-cli` and
+`langgraph` reject RESCUE at compile time (v0.13).
+
 ## What's not in the cookbook (yet)
 
 - **Multi-field ASSERT** — accept `a > b` between two fields. Specced, planned.
