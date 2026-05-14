@@ -13,6 +13,7 @@ from clio.emitters._claude_skill_helpers import (
     render_bundled_cache_key_script,
     render_bundled_validate_script,
     render_exact_script,
+    render_input_schema,
     render_judgment_prompt,
     render_output_schema,
     render_process_flow_dot,
@@ -44,6 +45,12 @@ class ClaudeSkillEmitter(BaseEmitter):
                 )
                 (output_dir / "schemas" / f"{idx:02d}_{step.name}.output.json").write_text(
                     render_output_schema(step, contracts)
+                )
+            input_schema = render_input_schema(step, contracts)
+            if input_schema is not None:
+                (output_dir / "schemas").mkdir(exist_ok=True)
+                (output_dir / "schemas" / f"{idx:02d}_{step.name}.input.json").write_text(
+                    input_schema
                 )
         (output_dir / "SKILL.md").write_text(render_skill_md(graph, warn=warn))
         (output_dir / "process_flow.dot").write_text(render_process_flow_dot(graph))

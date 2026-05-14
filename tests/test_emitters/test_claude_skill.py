@@ -298,3 +298,24 @@ def test_output_schema_has_no_external_refs(tmp_path):
     for schema_file in (tmp_path / "schemas").glob("*.output.json"):
         schema = json.loads(schema_file.read_text())
         _assert_no_external_refs(schema, schema_file.name)
+
+
+def test_step_with_takes_emits_input_schema(tmp_path):
+    """When a STEP has TAKES <contract>, schemas/NN_<name>.input.json is emitted."""
+    src = (FIXTURES / "mvp_v03_contracts.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    input_schemas = sorted((tmp_path / "schemas").glob("*.input.json"))
+    assert len(input_schemas) >= 1
+    schema = json.loads(input_schemas[0].read_text())
+    assert schema.get("type") == "object" or "$ref" in str(schema) or "properties" in schema
+
+
+def test_input_schema_has_no_external_refs(tmp_path):
+    """No external $ref must survive inlining in emitted input schemas."""
+    src = (FIXTURES / "mvp_v03_contracts.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    for schema_file in (tmp_path / "schemas").glob("*.input.json"):
+        schema = json.loads(schema_file.read_text())
+        _assert_no_external_refs(schema, schema_file.name)

@@ -246,6 +246,29 @@ def render_judgment_prompt(step: StepIR) -> str:
     )
 
 
+def render_input_schema(step: StepIR, contracts_by_name: dict | None = None) -> str | None:
+    """JSON Schema for the step's input contract (TAKES).
+
+    Returns None if the step has no TAKES fields (caller skips file emission).
+    When present, emits an object schema with one property per TAKES field,
+    all required. Same inlining strategy as render_output_schema — no external
+    $refs survive into the output.
+    """
+    if not step.takes:
+        return None
+    cb = contracts_by_name or {}
+    properties = {}
+    for field in step.takes:
+        raw = type_to_json_schema(field.type)
+        properties[field.name] = _inline_contract_refs(raw, cb)
+    schema = {
+        "type": "object",
+        "properties": properties,
+        "required": [f.name for f in step.takes],
+    }
+    return json.dumps(schema, indent=2) + "\n"
+
+
 def render_output_schema(step: StepIR, contracts_by_name: dict | None = None) -> str:
     """Build a self-contained JSON Schema for the step's output contract.
 
