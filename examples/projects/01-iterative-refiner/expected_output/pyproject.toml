@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "iterative_refiner"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.40",
+    "pydantic>=2",
+]
+
+[project.scripts]
+iterative_refiner = "iterative_refiner.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["iterative_refiner*"]
