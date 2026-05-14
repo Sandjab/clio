@@ -601,13 +601,11 @@ def _build_flow_items(
                 item, steps_by_name, contracts, available, in_rescue=in_rescue,
             ))
             continue
-        # ResumeAst: parsed but not yet lowered to IR (future task).
-        # Append as-is so the body list length stays consistent; the terminal
-        # abort check in _build_rescue_handler will need to be updated when
-        # the IR node for RESUME is added.
+        # ResumeAst: parsed but not yet lowered to IR (future task T8).
         if isinstance(item, ResumeAst):
-            out.append(item)
-            continue
+            raise NotImplementedError(
+                f"line {item.line}: ResumeAst lowering not yet implemented (see T8)"
+            )
         # StepCall path
         out.append(_build_call(
             item, steps_by_name, contracts, available, in_rescue=in_rescue,
