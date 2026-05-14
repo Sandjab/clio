@@ -6,6 +6,7 @@ No filesystem I/O. No imports from other emitter modules.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 
 from clio.ir.graph import FlowGraph
@@ -85,3 +86,35 @@ def render_skill_md(
     """Render the full SKILL.md content for a flow."""
     raw_name = _flow_name(graph)
     return render_frontmatter(graph, warn=warn) + f"\n# {raw_name}\n"
+
+
+def render_process_flow_dot(graph: FlowGraph) -> str:
+    """Render the flow as DOT (reuses the existing `clio graph --format dot` renderer)."""
+    from clio.graph_render import to_dot
+
+    return to_dot(graph)
+
+
+def render_state_example(graph: FlowGraph) -> str:
+    """Initial-state template. One empty namespace per top-level STEP.
+
+    Format: {"step01": {}, "step02": {}, ...} — keyed by top-level step name,
+    in source order.
+    """
+    state = {step.name: {} for step in graph.steps}
+    return json.dumps(state, indent=2) + "\n"
+
+
+def render_readme(graph: FlowGraph) -> str:
+    """Render a brief README.md for the emitted skill directory."""
+    raw_name = _flow_name(graph)
+    return (
+        f"# {raw_name} — claude-skill\n\n"
+        f"Compiled from a CLIO `.clio` source for the `claude-skill` target.\n\n"
+        "## How to install\n\n"
+        "Copy this directory to `~/.claude/skills/<name>/`, then invoke from any Claude Code session.\n\n"
+        "## Caveats\n\n"
+        "This skill is executed by the LLM host. Fidelity of execution is conditioned on the "
+        "rigor of the host — the TodoWrite checklist in `SKILL.md` provides the main anchor "
+        "against drift.\n"
+    )

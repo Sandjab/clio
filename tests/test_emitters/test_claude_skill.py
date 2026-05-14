@@ -8,6 +8,7 @@ To regenerate goldens after intentional changes:
         --target claude-skill --output tests/fixtures/expected_skill/<name>
 """
 
+import json
 from pathlib import Path
 
 from clio.cli import _cmd_compile
@@ -102,3 +103,36 @@ def test_frontmatter_allowed_tools_baseline(tmp_path):
     assert "Read" in tools
     assert "Write" in tools
     assert "TodoWrite" in tools
+
+
+def test_emits_process_flow_dot(tmp_path):
+    src = (FIXTURES / "mvp_phase2.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    dot = (tmp_path / "process_flow.dot").read_text()
+    assert dot.startswith("digraph "), "DOT output must start with 'digraph '"
+    # Last non-empty line should contain the closing brace
+    non_empty = [ln for ln in dot.splitlines() if ln.strip()]
+    assert non_empty[-1].strip().endswith("}")
+
+
+def test_emits_state_example_json_valid(tmp_path):
+    src = (FIXTURES / "mvp_phase2.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    state = json.loads((tmp_path / "state.example.json").read_text())
+    assert isinstance(state, dict)
+    # Each top-level step name should be a key with an empty dict value
+    for step in graph.steps:
+        assert step.name in state, f"Missing step {step.name!r} in state.example.json"
+        assert state[step.name] == {}, f"Expected empty dict for step {step.name!r}"
+
+
+def test_emits_readme(tmp_path):
+    src = (FIXTURES / "mvp_phase2.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    readme = (tmp_path / "README.md").read_text()
+    # Should mention "claude-skill" and be non-trivial
+    assert "claude-skill" in readme.lower()
+    assert len(readme.strip()) >= 100, "README should be a few sentences"
