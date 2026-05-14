@@ -792,3 +792,49 @@ def test_mcp_emitter_rescue_error_access_async(tmp_path):
     assert "except Exception as _err:" in flow_py
     assert "await _rescue_detect(state, _err, _session=_session)" in flow_py
     assert "reason=str(_err)" in flow_py
+
+
+# T14: async RESUME case — helper return + wrapper assign (v0.13)
+# ---------------------------------------------------------------------------
+
+_RESCUE_RESUME_SRC = """
+STEP load
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE:  exact
+
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  judgment
+
+STEP recover
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  exact
+
+STEP downstream
+  TAKES: report: str
+  GIVES: ok: bool
+  MODE:  exact
+
+FLOW pipeline
+  load(path="x") -> detect(rows=rows) -> downstream(report=report)
+
+  RESCUE detect:
+    -> recover(rows=rows)
+    -> RESUME(recover.report)
+
+RESOURCES
+  target: mcp-server
+  models: [haiku]
+"""
+
+
+def test_mcp_emitter_rescue_resume_terminator_async(tmp_path):
+    """RESUME terminator: wrapper assigns result, helper returns state field, -> object annotation."""
+    MCPServerEmitter().emit(build_ir(parse(_RESCUE_RESUME_SRC)), tmp_path)
+    flow_py = (tmp_path / "pipeline" / "flow.py").read_text()
+    assert "state['report'] = await _rescue_detect(state, _err, _session=_session)" in flow_py
+    assert "return state['report']" in flow_py
+    assert "async def _rescue_detect(state: dict, _err: BaseException, _session) -> object:" in flow_py

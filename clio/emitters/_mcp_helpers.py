@@ -288,6 +288,7 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
     # emit the async _rescue_<name> helper functions). Mirror of the python
     # target's pattern in clio/emitters/python.py:413.
     rescue_target_names = {rb.step_name for rb in graph.flow.rescues}
+    rescues_by_step = {rb.step_name: rb for rb in graph.flow.rescues}
 
     def _emit_call(call: CallIR, indent: str, scope_local: set[str]) -> None:
         step = next(s for s in graph.steps if s.name == call.step_name)
@@ -336,15 +337,25 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
         # FOR EACH / IF / MATCH / WHILE body. We still gate on
         # `not scope_local` for defence in depth (matches python.py:450).
         if step.name in rescue_target_names and not scope_local:
+            rb = rescues_by_step[step.name]
+            terminator = rb.body[-1]
             chain_lines.append(f"{indent}try:")
             chain_lines.append(f"{indent}    {call_line}")
             chain_lines.append(f"{indent}except FlowAborted:")
             chain_lines.append(f"{indent}    raise")
             chain_lines.append(f"{indent}except Exception as _err:")
-            chain_lines.append(
-                f"{indent}    await _rescue_{step.name}(state, _err, _session=_session)"
-            )
-            chain_lines.append(f"{indent}    raise")
+            if isinstance(terminator, ResumeIR):
+                assert step.gives is not None  # T9 validates: RESUME requires GIVES
+                rescued_gives_field = step.gives.name
+                chain_lines.append(
+                    f"{indent}    state[{rescued_gives_field!r}] = "
+                    f"await _rescue_{step.name}(state, _err, _session=_session)"
+                )
+            else:
+                chain_lines.append(
+                    f"{indent}    await _rescue_{step.name}(state, _err, _session=_session)"
+                )
+                chain_lines.append(f"{indent}    raise")
         else:
             chain_lines.append(f"{indent}{call_line}")
 
@@ -426,9 +437,8 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
                 _emit_item(sub, inner_indent, scope_local)
             return
         if isinstance(item, ResumeIR):
-            raise NotImplementedError(
-                "RESUME terminator in MCP emitter is not yet supported (T14)"
-            )
+            chain_lines.append(f"{indent}return state[{item.field_name!r}]")
+            return
         if isinstance(item, CallIR):
             _emit_call(item, indent, scope_local)
             return
@@ -455,8 +465,10 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
         for sub in rb.body:
             _emit_item(sub, "    ", set())
         rescue_body = "\n".join(chain_lines)
+        terminator = rb.body[-1]
+        ret_ann = "object" if isinstance(terminator, ResumeIR) else "None"
         rescue_helpers.append(
-            f"async def _rescue_{rb.step_name}(state: dict, _err: BaseException, _session) -> None:\n"
+            f"async def _rescue_{rb.step_name}(state: dict, _err: BaseException, _session) -> {ret_ann}:\n"
             + rescue_body
             + "\n"
         )
