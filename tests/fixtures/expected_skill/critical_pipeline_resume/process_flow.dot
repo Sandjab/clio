@@ -1,0 +1,9 @@
+digraph clio {
+    rankdir=TB;
+    node [fontname="Helvetica"];
+    load_clients [label="load_clients\nexact", shape=box];
+    detect_churn [label="detect_churn\njudgment", shape=parallelogram];
+    load_clients -> detect_churn;
+    route_alerts [label="route_alerts\nexact", shape=box];
+    detect_churn -> route_alerts;
+}

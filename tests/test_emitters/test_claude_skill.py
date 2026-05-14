@@ -11,6 +11,8 @@ To regenerate goldens after intentional changes:
 import json
 from pathlib import Path
 
+import pytest
+
 from clio.cli import _cmd_compile
 from clio.emitters.claude_skill import ClaudeSkillEmitter
 from clio.ir.builder import build_ir
@@ -823,6 +825,61 @@ def test_existing_warn_for_no_description_still_works(tmp_path, capsys):
 # ---------------------------------------------------------------------------
 # Task 12 — Layer 2: emitted exact-step script runs against state.example.json
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Task 14 — End-to-end golden-snapshot regression tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("fixture,fixture_dir", [
+    ("mvp_phase1", FIXTURES),
+    ("mvp_phase2", FIXTURES),
+    ("critical_pipeline_resume", Path(__file__).parent.parent.parent / "examples"),
+])
+def test_emit_golden(tmp_path, fixture, fixture_dir):
+    """Full-tree golden snapshot for representative fixtures.
+
+    To regenerate after intentional changes:
+
+        for f in mvp_phase1 mvp_phase2; do
+            rm -rf tests/fixtures/expected_skill/$f
+            python -m clio compile tests/fixtures/$f.clio --target claude-skill \\
+                --output tests/fixtures/expected_skill/$f
+        done
+        rm -rf tests/fixtures/expected_skill/critical_pipeline_resume
+        python -m clio compile examples/critical_pipeline_resume.clio --target claude-skill \\
+            --output tests/fixtures/expected_skill/critical_pipeline_resume
+    """
+    src = (fixture_dir / f"{fixture}.clio").read_text()
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    expected_root = FIXTURES / "expected_skill" / fixture
+    actual = _read_tree(tmp_path)
+    expected = _read_tree(expected_root)
+    assert actual == expected, _diff_summary(actual, expected)
+
+
+def _read_tree(root: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for p in sorted(root.rglob("*")):
+        if p.is_file():
+            out[str(p.relative_to(root))] = p.read_text()
+    return out
+
+
+def _diff_summary(actual: dict, expected: dict) -> str:
+    """Produce a useful diff message — keys only, no full content."""
+    a_keys = set(actual.keys())
+    e_keys = set(expected.keys())
+    only_actual = a_keys - e_keys
+    only_expected = e_keys - a_keys
+    differing = sorted(k for k in (a_keys & e_keys) if actual[k] != expected[k])
+    return (
+        f"Tree mismatch.\n"
+        f"  Extra in actual: {sorted(only_actual)}\n"
+        f"  Missing in actual: {sorted(only_expected)}\n"
+        f"  Content differs: {differing}"
+    )
+
 
 def test_emitted_exact_script_runs_against_state_example(tmp_path):
     """The emitted exact-step script reads state.example.json on stdin and
