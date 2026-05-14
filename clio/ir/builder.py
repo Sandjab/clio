@@ -615,7 +615,10 @@ def _build_rescue(
                 f"rescued step {decl.step_name!r} has no GIVES field "
                 f"{_last.field_name!r} (got: {sorted(known_r)})"
             )
-        if fb_gives.type != rescued_gives.type:
+        if not (
+            types_equal(fb_gives.type, rescued_gives.type, contracts)
+            or names_equal(fb_gives.type, rescued_gives.type)
+        ):
             raise IRBuildError(
                 f"line {_last.line}: RESUME({_last.fallback_step}.{_last.field_name}): "
                 f"type {_render(fb_gives.type)} is incompatible with rescued step's "

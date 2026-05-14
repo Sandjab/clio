@@ -669,3 +669,52 @@ RESOURCES
     with pytest.raises(IRBuildError) as exc:
         build_ir(program)
     assert "must end with abort(...) or RESUME(...)" in str(exc.value)
+
+
+def test_ir_accepts_resume_contract_ref_type_match():
+    """RESUME where both fallback and rescued GIVES are the same CONTRACT ref must succeed.
+
+    This is a regression test for the bug where ContractRef instances with
+    different source locations (line/col) compared unequal via raw !=, causing
+    a false type-mismatch rejection.
+    """
+    src = """
+CONTRACT churn_report
+  SHAPE: {risks: List<{client: str, score: float}>}
+
+STEP load
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE:  exact
+
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: report: churn_report
+  MODE:  judgment
+
+STEP recover
+  TAKES: rows: List<int>
+  GIVES: report: churn_report
+  MODE:  exact
+
+FLOW pipeline
+  load(path="data.csv")
+    -> detect(rows=rows)
+
+  RESCUE detect:
+    -> recover(rows=rows)
+    -> RESUME(recover.report)
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+    program = _parse(src)
+    graph = build_ir(program)
+    rescue = graph.flow.rescues[0]
+    last = rescue.body[-1]
+    # No exception means the type-equality check accepted the two ContractRefs
+    # despite their different line/col.
+    assert isinstance(last, ResumeIR)
+    assert last.fallback_step == "recover"
+    assert last.field_name == "report"

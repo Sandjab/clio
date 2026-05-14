@@ -18,17 +18,17 @@ STEP load_clients
 
 STEP detect_churn
   TAKES:   rows:   List<int>
-  GIVES:   report: {risks: List<{client: str, score: float}>}
+  GIVES:   report: churn_report
   MODE:    judgment
   ON_FAIL: retry(3) then escalate
 
 STEP fallback_detect_churn
   TAKES: rows:   List<int>
-  GIVES: report: {risks: List<{client: str, score: float}>}
+  GIVES: report: churn_report
   MODE:  exact
 
 STEP route_alerts
-  TAKES: report: {risks: List<{client: str, score: float}>}
+  TAKES: report: churn_report
   GIVES: alerts: int
   MODE:  exact
 
