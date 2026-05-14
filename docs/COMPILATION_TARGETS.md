@@ -8,6 +8,7 @@ Each target is an emitter module that transforms the IR graph into a runnable pr
 |---|---|---|---|---|
 | `claude-cli` | Implemented | Claude Code project (bash + `claude -p` subprocess) | Prototype + reference target | — |
 | `python` | Implemented | Python package (Anthropic SDK + Pydantic v2) | Production-grade Python deployment | — |
+| `claude-skill` | Implemented | Claude Code skill directory (`SKILL.md` + `scripts/` + `schemas/` + `prompts/`) | Turn a `.clio` into an LLM-host-orchestrated skill; no external runtime or API key needed after install | — |
 | `local` | Future | Same as `python`, with Ollama/vLLM | Offline / data-privacy constraints | High (Outlines/Guidance) |
 | `rust` | Future | Cargo async project | Performance-critical `exact` steps | High |
 | `go` | Future | Go module with goroutines + `net/http` | Concurrent `exact` steps, single static binary | Medium |
@@ -193,6 +194,67 @@ These work identically to the `python` target (shared helpers in `_python_helper
 **Logging** (v0.4+): same event taxonomy as `python` target. `model` field
 comes from the MCP sampling response. `tokens_in`/`tokens_out` emitted iff the
 sampling response carries `usage`.
+
+---
+
+## `target: claude-skill`
+
+Produces a Claude Code skill directory. The emitted skill is **LLM-host-orchestrated**: the Claude Code host reads `SKILL.md` and drives the flow, calling emitted scripts for exact steps and producing judgment outputs inline. No external runtime, no CLIO binary, and no API key are required after the skill is installed.
+
+### Layout
+
+```
+output/
+  SKILL.md                          # orchestration manifest: step checklist + contracts
+  README.md                         # install instructions + invocation guide
+  process_flow.dot                  # Graphviz DOT — visual representation of the flow
+  state.example.json                # example state object for testing
+  scripts/
+    NN_<step_name>.py               # exact step: NotImplementedError stub (user fills body)
+    _validate.py                    # bundled: JSON Schema validation (stdlib fallback)
+    _cache_key.py                   # bundled: deterministic SHA256 cache-key generator
+  prompts/
+    NN_<step_name>.md               # judgment step prompt template ({{variable}} placeholders)
+  schemas/
+    NN_<step_name>.input.json       # JSON Schema for step TAKES
+    NN_<step_name>.output.json      # JSON Schema for step GIVES (judgment steps only)
+```
+
+### Mapping
+
+| IR element       | Emitted artifact                                                  |
+|------------------|-------------------------------------------------------------------|
+| STEP `exact`     | `scripts/NN_<name>.py` — stub with `raise NotImplementedError`   |
+| STEP `judgment`  | `prompts/NN_<name>.md` + `schemas/NN_<name>.output.json`         |
+| CONTRACT         | Inline JSON Schema in `schemas/*.input.json` / `*.output.json`   |
+| FLOW             | `SKILL.md` orchestration manifest (TodoWrite checklist per step)  |
+| PARALLEL FOR EACH | Serialised in the manifest — see key behaviors below            |
+| CACHE            | Noted in `SKILL.md`; `scripts/_cache_key.py` helper bundled      |
+| RETRY / ON_FAIL  | Documented in `SKILL.md` step entry as an OnFail strategy note   |
+| RESOURCES        | Noted in `SKILL.md` header; no runtime dependency on CLIO        |
+
+### Use
+
+```bash
+python -m clio compile flow.clio --target claude-skill --output ./skill-out
+```
+
+Then:
+1. Fill in the bodies of `scripts/NN_*.py` (they are `NotImplementedError` stubs by default).
+2. Copy the output directory to `~/.claude/skills/<skill-name>/`.
+3. Invoke the skill from Claude Code — the host reads `SKILL.md` and orchestrates the flow.
+
+### Key behaviors
+
+**Exact-step stubs.** `scripts/NN_<name>.py` files are stubs that `raise NotImplementedError("fill me in")`. This mirrors the `python` target's behavior. After compilation, fill in the function body: it receives the step's TAKES fields as kwargs and must return a `dict` matching the GIVES contract. The bundled `_validate.py` helper can be used to check the return value against the emitted `schemas/NN_<name>.output.json`.
+
+**No FLOW description warning.** If the source FLOW has no description string, the emitter prints a warning to stderr and writes a placeholder in `SKILL.md`. The skill still compiles — add a description in the source to produce a more useful manifest.
+
+**Unsupported exact languages.** Exact steps with a `LANG` other than `python` or `bash` raise a compile-time error. Rewrite the step in Python or Bash, or use `--target python` / `--target mcp-server`.
+
+**PARALLEL FOR EACH serialisation.** The emitter cannot emit concurrent iteration — the LLM host does not execute tasks in parallel. A warning is printed to stderr; the emitted skill still runs correctly (iterations are serialised). If genuine parallelism is required, use `--target python` or `--target mcp-server`.
+
+**Runtime dependency.** Python (for the bundled helpers in `scripts/`). The host that reads `SKILL.md` drives all judgment steps directly — no `anthropic` SDK, no `pydantic` install required.
 
 ---
 

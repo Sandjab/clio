@@ -20,7 +20,7 @@ def main(argv: list[str] | None = None) -> int:
     compile_p.add_argument("source")
     compile_p.add_argument(
         "--target", required=True,
-        choices=["claude-cli", "python", "mcp-server", "langgraph"],
+        choices=["claude-cli", "python", "mcp-server", "langgraph", "claude-skill"],
     )
     compile_p.add_argument("--output", required=True)
 
@@ -78,6 +78,9 @@ def _cmd_compile(source: str, target: str, output: str) -> int:
     elif target == "langgraph":
         from clio.emitters.langgraph import LangGraphEmitter
         LangGraphEmitter().emit(graph, out_path)
+    elif target == "claude-skill":
+        from clio.emitters.claude_skill import ClaudeSkillEmitter
+        ClaudeSkillEmitter().emit(graph, out_path)
     else:
         return 2
     return 0

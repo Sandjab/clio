@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- `target: claude-skill` — new compilation target that emits a Claude Code skill directory
+  (`SKILL.md` + `scripts/` + `schemas/` + `prompts/` + `process_flow.dot`). The emitted
+  skill is LLM-host-orchestrated (no external runtime, no API key, no CLIO binary
+  required after install). Parity with v0.13 features: RESCUE handlers, `step.error.*`,
+  RESUME terminator, CACHE, RETRY (via OnFail strategy notes), RESOURCES annex.
+- `clio/emitters/_shared_utils.py` — type-utility helpers extracted from `_python_helpers.py`
+  to be shared by `python`, `mcp-server`, and `claude-skill` emitters.
+- Bundled runtime helpers in every emitted skill: `scripts/_validate.py` (JSON Schema
+  validation with stdlib fallback) and `scripts/_cache_key.py` (deterministic SHA256
+  cache-key generator).
+- `examples/skill_minimal.clio` — minimal example that compiles cleanly to `--target claude-skill`.
+
+---
+
 ## v0.13.0 — 2026-05-14
 
 ### Language

@@ -1,0 +1,5 @@
+digraph clio {
+    rankdir=TB;
+    node [fontname="Helvetica"];
+    foo [label="foo\nexact", shape=box];
+}

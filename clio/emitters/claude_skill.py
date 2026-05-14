@@ -1,0 +1,85 @@
+"""target: claude-skill — emits a Claude Code skill directory.
+
+See docs/superpowers/specs/2026-05-14-target-claude-skill-design.md
+for the validated design.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from typing import ClassVar
+
+from clio.emitters._claude_skill_helpers import (
+    render_bundled_cache_key_script,
+    render_bundled_validate_script,
+    render_exact_script,
+    render_input_schema,
+    render_judgment_prompt,
+    render_output_schema,
+    render_process_flow_dot,
+    render_readme,
+    render_skill_md,
+    render_state_example,
+)
+from clio.emitters.base import BaseEmitter
+from clio.ir.graph import FlowGraph, ForEachIR
+
+
+class ClaudeSkillEmitter(BaseEmitter):
+    SUPPORTED_EXACT_LANGUAGES: ClassVar[set[str]] = {"python", "bash"}
+
+    def _validate(self, graph: FlowGraph, warn) -> None:
+        """Compile-time checks that surface user-facing errors/warnings."""
+        # 1. Unsupported exact languages — hard error with source line.
+        for step in graph.steps:
+            if step.mode == "exact":
+                lang = step.lang or "python"
+                if lang not in self.SUPPORTED_EXACT_LANGUAGES:
+                    raise ValueError(
+                        f"claude-skill v1 supports python and bash for exact steps; "
+                        f"got '{lang}' at line {step.line}"
+                    )
+        # 2. Parallel construct — warning, emitter still produces serialized output.
+        flow = graph.flow
+        if flow is not None:
+            for item in flow.chain:
+                if isinstance(item, ForEachIR) and item.parallel:
+                    warn(
+                        "claude-skill warning: source flow contains PARALLEL FOR EACH; "
+                        "the emitted skill serializes iterations "
+                        "(the LLM host does not execute concurrently)."
+                    )
+                    break
+
+    def emit(self, graph: FlowGraph, output_dir: Path) -> None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "scripts").mkdir(exist_ok=True)
+        (output_dir / "scripts" / "_validate.py").write_text(render_bundled_validate_script())
+        (output_dir / "scripts" / "_cache_key.py").write_text(render_bundled_cache_key_script())
+        warn = lambda m: print(m, file=sys.stderr)  # noqa: E731
+        self._validate(graph, warn)
+        contracts = {c.name: c for c in (graph.contracts or ())}
+        for idx, step in enumerate(graph.steps, start=1):
+            if step.mode == "exact":
+                script = render_exact_script(step, contracts, idx)
+                (output_dir / "scripts" / f"{idx:02d}_{step.name}.py").write_text(script)
+            elif step.mode == "judgment":
+                (output_dir / "prompts").mkdir(exist_ok=True)
+                (output_dir / "schemas").mkdir(exist_ok=True)
+                (output_dir / "prompts" / f"{idx:02d}_{step.name}.md").write_text(
+                    render_judgment_prompt(step)
+                )
+                (output_dir / "schemas" / f"{idx:02d}_{step.name}.output.json").write_text(
+                    render_output_schema(step, contracts)
+                )
+            input_schema = render_input_schema(step, contracts)
+            if input_schema is not None:
+                (output_dir / "schemas").mkdir(exist_ok=True)
+                (output_dir / "schemas" / f"{idx:02d}_{step.name}.input.json").write_text(
+                    input_schema
+                )
+        (output_dir / "SKILL.md").write_text(render_skill_md(graph, warn=warn))
+        (output_dir / "process_flow.dot").write_text(render_process_flow_dot(graph))
+        (output_dir / "state.example.json").write_text(render_state_example(graph))
+        (output_dir / "README.md").write_text(render_readme(graph))

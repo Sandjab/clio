@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "properties": {
+    "channel": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "err_type": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "channel",
+    "reason",
+    "err_type"
+  ]
+}
