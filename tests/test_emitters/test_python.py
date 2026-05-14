@@ -1231,6 +1231,236 @@ def test_emit_anthropic_invoke_with_overrides(tmp_path):
     assert "temperature=0.5" in body
 
 
+def test_emit_anthropic_invoke_alias_resolves_to_versioned_id(tmp_path):
+    """Issue #17: when `invoke.model` is a short alias (sonnet/haiku/opus), the
+    emitter must resolve it to the versioned Anthropic model ID — otherwise
+    the alias reaches the API and is rejected with BadRequestError."""
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE: judgment\n"
+        "  invoke:\n"
+        "    mode: api\n"
+        "    protocol: anthropic\n"
+        "    model: sonnet\n"
+        "FLOW f\n"
+        "  s()\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "f" / "steps" / "s.py").read_text()
+    assert "_MODELS = ('claude-sonnet-4-6',)" in body
+    assert "_MODELS = ('sonnet',)" not in body
+
+
+def test_emit_anthropic_invoke_haiku_alias_resolves(tmp_path):
+    """Issue #17: same as above for the `haiku` alias."""
+    src = (
+        "STEP s\n"
+        "  GIVES: r: str\n"
+        "  MODE: judgment\n"
+        "  invoke:\n"
+        "    mode: api\n"
+        "    protocol: anthropic\n"
+        "    model: haiku\n"
+        "FLOW f\n"
+        "  s()\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "f" / "steps" / "s.py").read_text()
+    assert "_MODELS = ('claude-haiku-4-5-20251001',)" in body
+
+
+# --- Issue #18: Pydantic ContractRef in prompt substitution ----------------
+
+_PYDANTIC_INPUT_SRC = (
+    "CONTRACT verdict\n"
+    "  SHAPE: {score: float, label: enum(ok|bad)}\n"
+    "STEP judge\n"
+    "  GIVES: review: verdict\n"
+    "  MODE: judgment\n"
+    "STEP refine\n"
+    "  TAKES: review: verdict\n"
+    "  GIVES: out: str\n"
+    "  MODE: judgment\n"
+    "FLOW f\n"
+    "  judge() -> refine(review=review)\n"
+)
+
+
+def test_emit_judgment_step_serializes_contract_ref_input(tmp_path):
+    """Issue #18: a judgment STEP whose TAKES is a CONTRACT ref must serialize
+    the Pydantic instance via a `default=` handler — bare json.dumps on a
+    Pydantic v2 model raises TypeError. The handler walks any nested
+    BaseModel via .model_dump() at runtime."""
+    PythonEmitter().emit(build_ir(parse(_PYDANTIC_INPUT_SRC)), tmp_path)
+    body = (tmp_path / "f" / "steps" / "refine.py").read_text()
+    assert "json.dumps(review, default=" in body
+    assert "o.model_dump() if hasattr(o, 'model_dump')" in body
+    # The crash-prone form must NOT appear:
+    assert "prompt.replace('${review}', json.dumps(review))" not in body
+
+
+def test_emit_judgment_step_runs_with_pydantic_input(tmp_path, monkeypatch):
+    """Issue #18 smoke: the emitted step actually executes with a Pydantic
+    instance without TypeError on json.dumps."""
+    PythonEmitter().emit(build_ir(parse(_PYDANTIC_INPUT_SRC)), tmp_path)
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    try:
+        import anthropic
+
+        class FakeMessages:
+            @staticmethod
+            def create(**kw):
+                return type("M", (), {"content": [type("B", (), {"text": '"refined"'})()]})()
+
+        class FakeClient:
+            def __init__(self, *_a, **_k):
+                self.messages = FakeMessages()
+
+        monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
+
+        from f import contracts as c
+        from f.steps import refine as refine_mod
+
+        review = c.Verdict(score=0.5, label="ok")
+        # Must not raise TypeError on the Pydantic input.
+        result = refine_mod.refine(review=review)
+        assert result == "refined"
+    finally:
+        sys.path.remove(str(tmp_path))
+        for k in list(sys.modules):
+            if k == "f" or k.startswith("f."):
+                del sys.modules[k]
+
+
+def test_emit_first_step_identifier_kwarg_reads_from_state(tmp_path):
+    """Issue #19: when the first step's TAKES is bound to an identifier
+    (e.g. `load_article(file=file)`), the emitted flow must read the value
+    from `state[<name>]` so that `run(**initial)` kwargs reach the call.
+    Without auto-promotion the IR builder rejects this; without the right
+    emit shape, `run(file=...)` would have no effect on the call."""
+    src = (
+        "STEP load_article\n"
+        "  TAKES: file: str\n"
+        "  GIVES: article: str\n"
+        "  MODE:  exact\n"
+        "FLOW p\n"
+        "  load_article(file=file)\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow = (tmp_path / "p" / "flow.py").read_text()
+    assert "load_article_mod.load_article(file=state['file'])" in flow
+
+
+def test_emit_test_with_kwargs_threads_to_first_step(tmp_path, monkeypatch):
+    """Issue #19 smoke: a TEST WITH-kwarg actually reaches the first step
+    via state — not lost as it was when the first step took a literal."""
+    src = (
+        "STEP load_article\n"
+        "  TAKES: file: str\n"
+        "  GIVES: article: str\n"
+        "  MODE:  exact\n"
+        "FLOW p\n"
+        "  load_article(file=file)\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    try:
+        from p.steps import load_article as la_mod
+        seen: list[str] = []
+
+        def fake(*, file):
+            seen.append(file)
+            return f"loaded:{file}"
+
+        monkeypatch.setattr(la_mod, "load_article", fake)
+
+        from p.flow import run
+
+        monkeypatch.setenv("CLIO_STATE_FILE", str(tmp_path / "state.json"))
+        result = run(file="data/article.txt")
+        assert seen == ["data/article.txt"]
+        assert result["article"] == "loaded:data/article.txt"
+    finally:
+        sys.path.remove(str(tmp_path))
+        for k in list(sys.modules):
+            if k == "p" or k.startswith("p."):
+                del sys.modules[k]
+
+
+def test_emit_judgment_step_serializes_list_of_contract_ref(tmp_path):
+    """Issue #18: List<ContractRef> input is serialized via the same
+    runtime `default=` handler (json.dumps recurses into list elements
+    automatically; the handler is invoked on each Pydantic item)."""
+    src = (
+        "CONTRACT verdict\n"
+        "  SHAPE: {score: float, label: enum(ok|bad)}\n"
+        "STEP collect\n"
+        "  GIVES: reviews: List<verdict>\n"
+        "  MODE: judgment\n"
+        "STEP combine\n"
+        "  TAKES: reviews: List<verdict>\n"
+        "  GIVES: out: str\n"
+        "  MODE: judgment\n"
+        "FLOW f\n"
+        "  collect() -> combine(reviews=reviews)\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    body = (tmp_path / "f" / "steps" / "combine.py").read_text()
+    assert "json.dumps(reviews, default=" in body
+    assert "prompt.replace('${reviews}', json.dumps(reviews))" not in body
+
+
+def test_emit_judgment_step_runs_with_list_of_pydantic_input(tmp_path, monkeypatch):
+    """Issue #18 robustness (Gemini follow-up): the runtime `default=`
+    handler walks each Pydantic instance inside a list — the prior
+    compile-time helper covered this only by virtue of an explicit
+    `List<ContractRef>` branch; the `default=` form is uniform."""
+    PythonEmitter().emit(build_ir(parse(
+        "CONTRACT verdict\n"
+        "  SHAPE: {score: float, label: enum(ok|bad)}\n"
+        "STEP collect\n"
+        "  GIVES: reviews: List<verdict>\n"
+        "  MODE: judgment\n"
+        "STEP combine\n"
+        "  TAKES: reviews: List<verdict>\n"
+        "  GIVES: out: str\n"
+        "  MODE: judgment\n"
+        "FLOW f\n"
+        "  collect() -> combine(reviews=reviews)\n"
+    )), tmp_path)
+    import sys
+    sys.path.insert(0, str(tmp_path))
+    try:
+        import anthropic
+
+        class FakeMessages:
+            @staticmethod
+            def create(**kw):
+                return type("M", (), {"content": [type("B", (), {"text": '"ok"'})()]})()
+
+        class FakeClient:
+            def __init__(self, *_a, **_k):
+                self.messages = FakeMessages()
+
+        monkeypatch.setattr(anthropic, "Anthropic", FakeClient)
+
+        from f import contracts as c
+        from f.steps import combine as combine_mod
+
+        reviews = [c.Verdict(score=0.5, label="ok"), c.Verdict(score=0.9, label="bad")]
+        # List of Pydantic instances must not raise TypeError on json.dumps.
+        result = combine_mod.combine(reviews=reviews)
+        assert result == "ok"
+    finally:
+        sys.path.remove(str(tmp_path))
+        for k in list(sys.modules):
+            if k == "f" or k.startswith("f."):
+                del sys.modules[k]
+
+
 # --- FOR EACH emission -----------------------------------------------------
 
 _FOREACH_SRC = (

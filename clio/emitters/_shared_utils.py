@@ -99,6 +99,29 @@ def _model_id(short_name: str) -> str:
     return _MODEL_ID_MAP.get(short_name, short_name)
 
 
+# Lambda inlined into every emitted prompt-substitution `json.dumps(...)`
+# call. Pydantic v2 instances are not natively JSON-serializable, so we
+# pass a `default` handler that walks any nested `BaseModel` via
+# `.model_dump()`. Handles `ContractRef`, `List<ContractRef>`, deeply
+# nested structures, and anonymous records containing contracts uniformly
+# at runtime — no compile-time type walking needed.
+_PROMPT_SUBST_DEFAULT = (
+    "lambda o: o.model_dump() if hasattr(o, 'model_dump') else str(o)"
+)
+
+
+def _prompt_subst_expr(name: str) -> str:
+    """Render the `json.dumps(<name>, default=...)` expression used to
+    substitute a TAKES value into a judgment step's prompt template.
+
+    The runtime `default=` handler covers every Pydantic-bearing shape
+    uniformly, including nested ones (`List<List<ContractRef>>`,
+    anonymous records containing contracts), without compile-time
+    type analysis."""
+    py_name = _to_field_name(name)
+    return f"json.dumps({py_name}, default={_PROMPT_SUBST_DEFAULT})"
+
+
 def _uses_contract_refs(step: StepIR) -> bool:
     """True iff the step's TAKES or GIVES type tree references any ContractRef.
     Determines whether the emitted step module needs `from .. import contracts`

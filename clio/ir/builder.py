@@ -493,6 +493,25 @@ def _build_flow(
     contracts: dict[str, ContractIR],
 ) -> FlowIR:
     available: dict[str, TypeExpr] = {}
+    # Issue #19: auto-promote the first step's identifier kwargs that don't
+    # match an upstream produced field as FLOW-level inputs. They are passed
+    # at runtime via `run(**initial)` and seeded into `state[]`, so the IR
+    # builder must accept them here even though no prior step produced them.
+    # Only the FIRST step gets this treatment — every later call still
+    # strictly validates against produced fields. Type is taken from the
+    # matching TAKES entry on the first step so downstream type-checks work.
+    if decl.chain and isinstance(decl.chain[0], StepCall):
+        first = decl.chain[0]
+        first_step = steps_by_name.get(first.name)
+        if first_step is not None:
+            takes_by_name = {t.name: t.type for t in first_step.takes}
+            for kw_name, kw_value in first.kwargs:
+                if not (isinstance(kw_value, str) and kw_value.startswith("@")):
+                    continue
+                ref = kw_value[1:]
+                taken_type = takes_by_name.get(kw_name)
+                if taken_type is not None and ref not in available:
+                    available[ref] = taken_type
     items = _build_flow_items(decl.chain, steps_by_name, contracts, available)
     # The set of step names that appear directly in the top-level chain —
     # used by _build_rescue to enforce the v0.8 "top-level only" rule.

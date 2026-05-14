@@ -27,7 +27,7 @@ _SYSTEM_PROMPT = (
     'and no leading or trailing whitespace beyond the JSON itself.'
     '\n\nStep intent: Revise the draft to address review.missing_points while keeping it faithful to the article and within ~200 words.\n\nHeuristics:\nRead review.missing_points and integrate each item in the revised draft. Do not invent supporting details. If a missing_point cannot be supported by the article, omit it rather than fabricate. Ignore review.score; the loop terminates on it, the writer does not need to react to it.'
 )
-_MODELS = ('sonnet',)
+_MODELS = ('claude-sonnet-4-6',)
 
 
 def _serialize(response):
@@ -72,9 +72,9 @@ def refine_summary(*, article: str, draft: str, review: contracts.SummaryJudgmen
             return None
 
     prompt = _PROMPT_TEMPLATE
-    prompt = prompt.replace('${article}', json.dumps(article))
-    prompt = prompt.replace('${draft}', json.dumps(draft))
-    prompt = prompt.replace('${review}', json.dumps(review))
+    prompt = prompt.replace('${article}', json.dumps(article, default=lambda o: o.model_dump() if hasattr(o, 'model_dump') else str(o)))
+    prompt = prompt.replace('${draft}', json.dumps(draft, default=lambda o: o.model_dump() if hasattr(o, 'model_dump') else str(o)))
+    prompt = prompt.replace('${review}', json.dumps(review, default=lambda o: o.model_dump() if hasattr(o, 'model_dump') else str(o)))
     prompt = prompt.replace('${schema}', _INLINED_SCHEMA)
 
     model_idx = 0

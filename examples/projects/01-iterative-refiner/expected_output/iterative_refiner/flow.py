@@ -55,7 +55,7 @@ def run(*, start_at: int = 0, **initial: object) -> dict:
     _t0 = time.monotonic()
     try:
         if start_at < 1:
-            state['article'] = load_article_mod.load_article(file='article.txt')
+            state['article'] = load_article_mod.load_article(file=state['file'])
             _persist_state(1, state)
         if start_at < 2:
             state['draft'] = draft_summary_mod.draft_summary(article=state['article'])

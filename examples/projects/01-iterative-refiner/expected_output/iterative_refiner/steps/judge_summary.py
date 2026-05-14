@@ -27,7 +27,7 @@ _SYSTEM_PROMPT = (
     'and no leading or trailing whitespace beyond the JSON itself.'
     "\n\nStep intent: Score the draft against the article on fidelity (no hallucination) and coverage (key facts represented).\n\nHeuristics:\nscore = mean(fidelity, coverage). Fidelity = 1 if no claim in the draft is absent from the article; deduct for each unsupported claim. Coverage = 1 if every key fact of the article appears; deduct for each missing key fact. verdict = 'accept' iff score >= 0.85, else 'refine'. missing_points lists up to 5 short labels of facts the writer should add or correct."
 )
-_MODELS = ('haiku',)
+_MODELS = ('claude-haiku-4-5-20251001',)
 
 
 def _serialize(response):
@@ -72,8 +72,8 @@ def judge_summary(*, article: str, draft: str) -> contracts.SummaryJudgment:
             return None
 
     prompt = _PROMPT_TEMPLATE
-    prompt = prompt.replace('${article}', json.dumps(article))
-    prompt = prompt.replace('${draft}', json.dumps(draft))
+    prompt = prompt.replace('${article}', json.dumps(article, default=lambda o: o.model_dump() if hasattr(o, 'model_dump') else str(o)))
+    prompt = prompt.replace('${draft}', json.dumps(draft, default=lambda o: o.model_dump() if hasattr(o, 'model_dump') else str(o)))
     prompt = prompt.replace('${schema}', _INLINED_SCHEMA)
 
     model_idx = 0

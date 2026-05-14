@@ -27,7 +27,7 @@ _SYSTEM_PROMPT = (
     'and no leading or trailing whitespace beyond the JSON itself.'
     '\n\nStep intent: Write the first draft of a faithful 150-200 word summary of the article.\n\nHeuristics:\nCover the main historical facts (who, when, what, why it mattered). Do not introduce claims absent from the source.'
 )
-_MODELS = ('sonnet',)
+_MODELS = ('claude-sonnet-4-6',)
 
 
 def _serialize(response):
@@ -72,7 +72,7 @@ def draft_summary(*, article: str) -> str:
             return None
 
     prompt = _PROMPT_TEMPLATE
-    prompt = prompt.replace('${article}', json.dumps(article))
+    prompt = prompt.replace('${article}', json.dumps(article, default=lambda o: o.model_dump() if hasattr(o, 'model_dump') else str(o)))
     prompt = prompt.replace('${schema}', _INLINED_SCHEMA)
 
     model_idx = 0

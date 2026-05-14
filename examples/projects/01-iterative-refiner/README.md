@@ -55,35 +55,11 @@ The compiled package's CLI entry point is named after the flow
 (`iterative_refiner`). State is written to `state.json` in the current
 directory; `--from-step <name>` resumes a partial run.
 
-## Known limitations (v0.15)
+## Caveat
 
-The committed `expected_output/` faithfully reflects what `clio compile
---target python` produces today. Two compiler bugs identified during this
-project's code review currently prevent it from running end-to-end:
-
-1. **Per-step `invoke.model` aliases are not resolved.** Symbolic names
-   (`sonnet`, `haiku`) are passed verbatim to the Anthropic API, which
-   requires versioned model IDs (e.g. `claude-sonnet-4-6`). The fix is in
-   the python emitter's `ApiInvokeIR` path -- the existing `_model_id()`
-   resolver needs to be applied there. Until fixed, the API will reject
-   the request with `BadRequestError`.
-
-2. **Pydantic inputs are not `.model_dump()`'d before JSON prompt
-   substitution.** When `refine_summary` receives the `review:
-   summary_judgment` record, the emitter calls `json.dumps(review)` which
-   raises `TypeError` on the Pydantic model. The fix is symmetric to the
-   one already in `_serialize()` for cache writes.
-
-Both bugs are tracked separately and will be fixed in a follow-up PR. The
-project ships now because its **structural** value (a runnable shape on
-GitHub showing the writer + critic refine loop in CLIO source, with the
-compiled python target alongside) is independent of those runtime bugs --
-and because the drift-guard CI test ensures `expected_output/` will
-regenerate cleanly the moment the emitter is fixed.
-
-A separate caveat: the emitted `tests/test_*.py` calls the flow end-to-end
-and will fail with `NotImplementedError` until you write the bodies of the
-`exact` steps (`load_article`, `finalize`) in `expected_output/iterative_refiner/steps/`.
+The emitted `tests/test_*.py` calls the flow end-to-end and will fail with
+`NotImplementedError` until you write the bodies of the `exact` steps
+(`load_article`, `finalize`) in `expected_output/iterative_refiner/steps/`.
 This is intended scaffolding -- exact steps are deliberately left for the
 user to implement, just like in `mvp.clio` / `entities.clio`.
 
@@ -93,7 +69,7 @@ The whole point of `expected_output/` being committed is that you can
 read the result before running it.
 
 - `expected_output/iterative_refiner/flow.py` -- the orchestrator. Look for the `for _i in range(3)` loop with `if not cond: break` -- that's the `WHILE ... MAX 3:` primitive after compilation.
-- `expected_output/iterative_refiner/steps/judge_summary.py` -- typed Pydantic body, contract enforcement, `anthropic.Anthropic().messages.create(...)` call. The `_MODELS` tuple holds the per-step model override (`('haiku',)`).
+- `expected_output/iterative_refiner/steps/judge_summary.py` -- typed Pydantic body, contract enforcement, `anthropic.Anthropic().messages.create(...)` call. The `_MODELS` tuple holds the per-step model override resolved to a versioned ID (`('claude-haiku-4-5-20251001',)`).
 - `expected_output/iterative_refiner/steps/draft_summary.py` -- the writer prompt embedded as `_SYSTEM_PROMPT`, with the DESCRIPTION and STRATEGIES text from the source.
 - `expected_output/iterative_refiner/contracts.py` -- two Pydantic models (`SummaryJudgment`, `FinalSummary`) with the field validators from the `.clio` ASSERTs.
 - `expected_output/tests/test_refine_loop_terminates_with_known_article.py` -- the pytest emitted from the `TEST` block.

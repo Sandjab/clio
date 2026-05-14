@@ -942,3 +942,87 @@ def test_ir_test_appears_in_graph_tests_tuple():
     assert len(g.tests) == 1
     assert g.tests[0].name == "t1"
     assert g.tests[0].flow_name == "p"
+
+
+# --- Issue #19: first-step identifier kwargs as FLOW inputs ----------------
+
+def test_first_step_identifier_kwarg_auto_promoted_to_flow_input():
+    """Issue #19: the FIRST step's identifier kwargs that don't match an
+    upstream produced field are auto-promoted to FLOW-level inputs (passed
+    via run(**initial) at runtime). Without this, `load_article(file=file)`
+    crashes with 'state reference not produced by any previous step'."""
+    src = (
+        "STEP load_article\n"
+        "  TAKES: file: str\n"
+        "  GIVES: article: str\n"
+        "  MODE:  exact\n"
+        "FLOW p\n"
+        "  load_article(file=file)\n"
+    )
+    # Must build without raising — the `file` identifier on the first step
+    # is recognized as an external FLOW input.
+    graph = build_ir(parse(src))
+    assert graph.flow is not None
+    assert graph.flow.name == "p"
+
+
+def test_first_step_identifier_kwarg_threaded_to_downstream_step():
+    """Issue #19: a downstream step can reference the same name and the
+    builder still type-checks it correctly."""
+    src = (
+        "STEP load_article\n"
+        "  TAKES: file: str\n"
+        "  GIVES: article: str\n"
+        "  MODE:  exact\n"
+        "STEP echo_path\n"
+        "  TAKES: file: str\n"
+        "  GIVES: copy: str\n"
+        "  MODE:  exact\n"
+        "FLOW p\n"
+        "  load_article(file=file)\n"
+        "    -> echo_path(file=file)\n"
+    )
+    graph = build_ir(parse(src))
+    assert graph.flow is not None
+
+
+def test_non_first_step_unknown_identifier_still_rejected():
+    """Issue #19 regression guard: only the first step gets auto-promotion.
+    A later step referencing an undefined identifier must still raise."""
+    src = (
+        "STEP load\n"
+        "  GIVES: data: str\n"
+        "  MODE:  exact\n"
+        "STEP next\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "FLOW p\n"
+        "  load()\n"
+        "    -> next(x=undefined_name)\n"
+    )
+    with pytest.raises(IRBuildError, match="not produced by any previous step"):
+        build_ir(parse(src))
+
+
+def test_test_with_kwargs_match_first_step_takes():
+    """Issue #19: TEST WITH-kwargs become run(**initial) values at runtime;
+    they must therefore match a FLOW input — i.e. an identifier kwarg on
+    the first step. This test compiles and runs through to graph.tests."""
+    src = (
+        "STEP load_article\n"
+        "  TAKES: file: str\n"
+        "  GIVES: article: str\n"
+        "  MODE:  exact\n"
+        "FLOW p\n"
+        "  load_article(file=file)\n"
+        "TEST t:\n"
+        '  FLOW: p\n'
+        "  WITH:\n"
+        '    file: "data/article.txt"\n'
+        "  EXPECTS:\n"
+        "    article: not_empty\n"
+    )
+    graph = build_ir(parse(src))
+    assert len(graph.tests) == 1
+    assert graph.tests[0].with_kwargs == (("file", "data/article.txt"),)

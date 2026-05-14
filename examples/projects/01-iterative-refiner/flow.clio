@@ -63,7 +63,7 @@ STEP finalize
   MODE:  exact
 
 FLOW iterative_refiner
-    load_article(file="article.txt")
+    load_article(file=file)
     -> draft_summary(article=article)
     -> judge_summary(article=article, draft=draft)
     -> WHILE review.score < 0.85 and review.verdict == "refine" MAX 3:

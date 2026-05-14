@@ -71,7 +71,7 @@ def detect_churn(*, customers: list[dict]) -> list[contracts.CustomerRisk]:
             return None
 
     prompt = _PROMPT_TEMPLATE
-    prompt = prompt.replace('${customers}', json.dumps(customers))
+    prompt = prompt.replace('${customers}', json.dumps(customers, default=lambda o: o.model_dump() if hasattr(o, 'model_dump') else str(o)))
     prompt = prompt.replace('${schema}', _INLINED_SCHEMA)
 
     model_idx = 0
