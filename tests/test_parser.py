@@ -1849,3 +1849,35 @@ RESOURCES
         parse(src)
     assert "unknown 2-segment kwarg value 'a.report'" in str(exc.value)
     assert "<step>.error.<message|type>" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "src_body, expected_msg_fragment",
+    [
+        ("    -> RESUME(foo)",                 "expected DOT"),
+        ('    -> RESUME("literal")',           "RESUME requires '<step>.<field>'"),
+        ("    -> RESUME()",                    "RESUME requires '<step>.<field>'"),
+        ("    -> RESUME(a.b.c)",               "RESUME accepts exactly '<step>.<field>'"),
+        ("    -> RESUME(a.b, c.d)",            "RESUME takes a single '<step>.<field>'"),
+    ],
+)
+def test_parse_error_malformed_resume(src_body, expected_msg_fragment):
+    src = f"""
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE: judgment
+
+FLOW pipeline
+  detect(rows=rows)
+
+  RESCUE detect:
+{src_body}
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+    with pytest.raises(ParseError) as exc:
+        parse(src)
+    assert expected_msg_fragment in str(exc.value)
