@@ -38,7 +38,7 @@ python_files = ["test_*.py"]
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-extend-exclude = ["tests/fixtures/expected"]
+extend-exclude = ["tests/fixtures/expected", "examples/projects"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "RUF"]
