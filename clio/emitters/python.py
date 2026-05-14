@@ -26,6 +26,7 @@ from clio.emitters._python_helpers import (
 )
 from clio.emitters._shared_utils import (
     _has_parallel,
+    _prompt_subst_expr,
     _python_condition_expr,
     _render_system_prompt,
     _safe_package_name,
@@ -302,7 +303,10 @@ class PythonEmitter(BaseEmitter):
         models_full: tuple[str, ...]
         if isinstance(invoke, ApiInvokeIR):
             models = (invoke.model,)
-            models_full = (invoke.model,)  # invoke.model is the raw provider ID
+            # Route through `_model_id` so short CLIO aliases (`sonnet`,
+            # `haiku`, `opus`) resolve to versioned Anthropic IDs. Unknown
+            # names (e.g. raw OpenAI/Bedrock IDs) pass through unchanged.
+            models_full = (_model_id(invoke.model),)
         else:
             models = (
                 graph.resources.models
@@ -330,7 +334,7 @@ class PythonEmitter(BaseEmitter):
         )
 
         sub_lines = [
-            f"    prompt = prompt.replace('${{{t.name}}}', json.dumps({_to_field_name(t.name)}))"
+            f"    prompt = prompt.replace('${{{t.name}}}', {_prompt_subst_expr(t.name, t.type)})"
             for t in step.takes
         ]
         sub_lines.append("    prompt = prompt.replace('${schema}', _INLINED_SCHEMA)")

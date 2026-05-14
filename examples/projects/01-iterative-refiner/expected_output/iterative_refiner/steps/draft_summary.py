@@ -27,7 +27,7 @@ _SYSTEM_PROMPT = (
     'and no leading or trailing whitespace beyond the JSON itself.'
     '\n\nStep intent: Write the first draft of a faithful 150-200 word summary of the article.\n\nHeuristics:\nCover the main historical facts (who, when, what, why it mattered). Do not introduce claims absent from the source.'
 )
-_MODELS = ('sonnet',)
+_MODELS = ('claude-sonnet-4-6',)
 
 
 def _serialize(response):

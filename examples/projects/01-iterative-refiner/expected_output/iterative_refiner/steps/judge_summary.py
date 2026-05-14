@@ -27,7 +27,7 @@ _SYSTEM_PROMPT = (
     'and no leading or trailing whitespace beyond the JSON itself.'
     "\n\nStep intent: Score the draft against the article on fidelity (no hallucination) and coverage (key facts represented).\n\nHeuristics:\nscore = mean(fidelity, coverage). Fidelity = 1 if no claim in the draft is absent from the article; deduct for each unsupported claim. Coverage = 1 if every key fact of the article appears; deduct for each missing key fact. verdict = 'accept' iff score >= 0.85, else 'refine'. missing_points lists up to 5 short labels of facts the writer should add or correct."
 )
-_MODELS = ('haiku',)
+_MODELS = ('claude-haiku-4-5-20251001',)
 
 
 def _serialize(response):
