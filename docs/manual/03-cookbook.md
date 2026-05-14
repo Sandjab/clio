@@ -712,21 +712,38 @@ the canonical CLIO pattern is two judgment steps in a bounded `WHILE` loop:
 one writer step, one critic step.
 
 ```
+# Sketch (compilable). See examples/projects/01-iterative-refiner/flow.clio
+# for the full source.
+
 CONTRACT verdict
   SHAPE:  {score: float, missing_points: List<str(max=200)>, verdict: enum(accept|refine)}
   ASSERT: 0.0 <= score <= 1.0
 
-STEP draft   ... MODE: judgment   invoke: { mode: api, protocol: anthropic, model: sonnet }
-STEP judge   ... GIVES: review: verdict   MODE: judgment   invoke: { mode: api, protocol: anthropic, model: haiku }
-STEP refine  ... TAKES: ..., review: verdict   MODE: judgment   invoke: { mode: api, protocol: anthropic, model: sonnet }
+STEP draft
+  TAKES:  article: str
+  GIVES:  draft:   str
+  MODE:   judgment
+  invoke: {mode: api, protocol: anthropic, model: sonnet}
+
+STEP judge
+  TAKES:  article: str, draft: str
+  GIVES:  review:  verdict
+  MODE:   judgment
+  invoke: {mode: api, protocol: anthropic, model: haiku}
+
+STEP refine
+  TAKES:  article: str, draft: str, review: verdict
+  GIVES:  draft:   str
+  MODE:   judgment
+  invoke: {mode: api, protocol: anthropic, model: sonnet}
 
 FLOW refine_loop
-    draft(...)
-    -> judge(...)
+    draft(article=article)
+    -> judge(article=article, draft=draft)
     -> WHILE review.score < 0.85 and review.verdict == "refine" MAX 3:
-        refine(..., review=review)
-        -> judge(...)
-    -> finalize(...)
+        refine(article=article, draft=draft, review=review)
+        -> judge(article=article, draft=draft)
+    -> finalize(draft=draft, review=review)
 ```
 
 **Three things to notice:**

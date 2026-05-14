@@ -47,8 +47,8 @@ process -- just a Python virtualenv and an Anthropic key.
 ```bash
 cd examples/projects/01-iterative-refiner
 uv pip install ./expected_output
-iterative_refiner --file data/article.txt
-cat state.json | jq .result
+iterative_refiner --kwargs '{"file": "data/article.txt"}'
+cat state.json | jq .state.result
 ```
 
 The compiled package's CLI entry point is named after the flow

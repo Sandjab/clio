@@ -93,7 +93,7 @@ STEP draft_summary
 
 STEP judge_summary
   TAKES:       article: str, draft: str
-  GIVES:       judgment: summary_judgment
+  GIVES:       review: summary_judgment
   MODE:        judgment
   DESCRIPTION: "Score the draft against the article on fidelity (no hallucination) and coverage (key facts represented)."
   STRATEGIES:  "score = mean(fidelity, coverage). Fidelity = 1 if no claim in the draft is absent from the article; deduct for each unsupported claim. Coverage = 1 if every key fact of the article appears; deduct for each missing key fact. verdict = 'accept' iff score >= 0.85, else 'refine'. missing_points lists up to 5 short labels of facts the writer should add or correct."
@@ -104,11 +104,11 @@ STEP judge_summary
     model: haiku
 
 STEP refine_summary
-  TAKES:       article: str, draft: str, judgment: summary_judgment
+  TAKES:       article: str, draft: str, review: summary_judgment
   GIVES:       draft:    str
   MODE:        judgment
-  DESCRIPTION: "Revise the draft to address judgment.missing_points while keeping it faithful to the article and within ~200 words."
-  STRATEGIES:  "Read judgment.missing_points and integrate each item in the revised draft. Do not invent supporting details. If a missing_point cannot be supported by the article, omit it rather than fabricate. Ignore judgment.score; the loop terminates on it, the writer does not need to react to it."
+  DESCRIPTION: "Revise the draft to address review.missing_points while keeping it faithful to the article and within ~200 words."
+  STRATEGIES:  "Read review.missing_points and integrate each item in the revised draft. Do not invent supporting details. If a missing_point cannot be supported by the article, omit it rather than fabricate. Ignore review.score; the loop terminates on it, the writer does not need to react to it."
   CACHE:       ttl(7d)
   ON_FAIL:     retry(3) then escalate then abort("refine_summary failed")
   invoke:
@@ -116,7 +116,7 @@ STEP refine_summary
     model: sonnet
 
 STEP finalize
-  TAKES: draft:    str, judgment: summary_judgment
+  TAKES: draft:    str, review: summary_judgment
   GIVES: result:   final_summary
   MODE:  exact
 
@@ -124,10 +124,10 @@ FLOW iterative_refiner
     load_article(file="article.txt")
     -> draft_summary(article=article)
     -> judge_summary(article=article, draft=draft)
-    -> WHILE judgment.score < 0.85 and judgment.verdict == "refine" MAX 3:
-        refine_summary(article=article, draft=draft, judgment=judgment)
+    -> WHILE review.score < 0.85 and review.verdict == "refine" MAX 3:
+        refine_summary(article=article, draft=draft, review=review)
         -> judge_summary(article=article, draft=draft)
-    -> finalize(draft=draft, judgment=judgment)
+    -> finalize(draft=draft, review=review)
 
 TEST refine_loop_terminates_with_known_article
   FLOW: iterative_refiner
@@ -136,7 +136,7 @@ TEST refine_loop_terminates_with_known_article
   EXPECTS:
     result:   not_empty
     draft:    not_empty
-    judgment: not_empty
+    review:   not_empty
 
 RESOURCES
   target: python
@@ -146,11 +146,11 @@ RESOURCES
 ### Notes on the source
 
 - **Two `judgment` invocations, two models.** `draft_summary` and `refine_summary` use `sonnet` (richer writer); `judge_summary` uses `haiku` (fast scorer). The per-step `invoke: { mode: api, model: ... }` overrides the cheaper default that would otherwise be inferred from `RESOURCES.models`. This makes the cost/quality split visible in the source — a thing the reader can change in one line and observe.
-- **`refine_summary` takes the whole `judgment`, not just `missing_points`.** CLIO's flow-level step calls require simple identifiers as kwarg values; dotted access (`judgment.missing_points`) is grammatically permitted only inside RESCUE bodies. Passing the whole `judgment: summary_judgment` is the idiomatic way to give a step access to a sub-field — and arguably more honest: the writer receives the critic's full verdict, not a pre-extracted slice. The STRATEGIES line is explicit about which sub-field to read and which to ignore.
-- **The body of the `WHILE` is two steps.** `refine_summary` then `judge_summary`. The compiler does **not** validate that the body updates `judgment.score` (caller-side invariant, per spec); the example is a clean illustration of how to keep that invariant honest — re-judge at the end of each pass so the loop has a chance to terminate.
+- **`refine_summary` takes the whole `review`, not just `missing_points`.** CLIO's flow-level step calls require simple identifiers as kwarg values; dotted access (`review.missing_points`) is grammatically permitted only inside RESCUE bodies. Passing the whole `review: summary_judgment` is the idiomatic way to give a step access to a sub-field — and arguably more honest: the writer receives the critic's full verdict, not a pre-extracted slice. The STRATEGIES line is explicit about which sub-field to read and which to ignore.
+- **The body of the `WHILE` is two steps.** `refine_summary` then `judge_summary`. The compiler does **not** validate that the body updates `review.score` (caller-side invariant, per spec); the example is a clean illustration of how to keep that invariant honest — re-judge at the end of each pass so the loop has a chance to terminate.
 - **`CACHE: ttl(7d)` on every judgment step.** Cheap reproducibility: a reader running the example twice within a week pays for one API round, not two. The hash includes `missing_points`, so each refine pass is its own cache entry — no accidental cross-iteration collapse.
 - **`ON_FAIL: retry(3) then escalate then abort(...)`.** Same chain on every judgment step. Lets the reader see the canonical resilience pattern; escalation traverses `RESOURCES.models = [haiku, sonnet, opus]` so a transient haiku failure on the critic falls through to sonnet then opus.
-- **`TEST` block, minimal.** We assert that the loop terminated and produced all three top-level state fields (`result`, `draft`, `judgment`). We **do not** assert `final_score >= 0.85` — that would couple the test to LLM determinism we don't have, **and** `TEST EXPECTS` accepts top-level state fields only (no dotted sub-field access in v0.15 — confirmed against the parser test suite). The point of the TEST block in the source is to prove the loop *exits* and the contract path is exercised; the emitted pytest file is what readers actually run.
+- **`TEST` block, minimal.** We assert that the loop terminated and produced all three top-level state fields (`result`, `draft`, `review`). We **do not** assert `final_score >= 0.85` — that would couple the test to LLM determinism we don't have, **and** `TEST EXPECTS` accepts top-level state fields only (no dotted sub-field access in v0.15 — confirmed against the parser test suite). The point of the TEST block in the source is to prove the loop *exits* and the contract path is exercised; the emitted pytest file is what readers actually run.
 
 ## Article — `data/article.txt`
 
@@ -242,9 +242,9 @@ Outline (we write the prose during the implementation plan, not here):
    ```bash
    cd examples/projects/01-iterative-refiner
    uv pip install ./expected_output
-   ANTHROPIC_API_KEY=... iterative_refiner --file data/article.txt
+   ANTHROPIC_API_KEY=... iterative_refiner --kwargs '{"file": "data/article.txt"}'
    ```
-5. **Inspect the compiled output** — pointer to `expected_output/flow.py` (the WHILE), `expected_output/steps/judge_summary.py` (the contract enforcement), `expected_output/prompts/judge_summary.md` (the critic system prompt).
+5. **Inspect the compiled output** — pointer to `expected_output/iterative_refiner/flow.py` (the WHILE), `expected_output/iterative_refiner/steps/judge_summary.py` (the contract enforcement and embedded `_SYSTEM_PROMPT`). (Note: the emitter inlines the system prompt into the step file rather than emitting a separate `prompts/` dir as initially expected; the realised layout under `iterative_refiner/` is documented in the implementation plan.)
 6. **Tweak the source** — three suggested edits with one-line answers: raise the threshold to `0.95`, swap critic to `sonnet`, add a `fluency` field to the judgment contract.
 7. **Cross-reference** — link to `docs/manual/03-cookbook.md` "Refine loop" recipe.
 
