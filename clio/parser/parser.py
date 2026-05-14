@@ -13,6 +13,7 @@ from clio.parser.ast_nodes import (
     ContractRef,
     DatabaseSpec,
     EnumType,
+    ErrorAccessExpr,
     Field,
     FieldRefExpr,
     FileBody,
@@ -2288,10 +2289,41 @@ class _Parser:
                 txt = value_tok.value
                 return (name_tok.value, float(txt) if "." in txt else int(txt))
             if value_tok.type == TokenType.IDENT:
-                # State reference: kwarg=identifier resolves to state[identifier]
-                # at runtime. Same convention as the shorthand `step(name)` form.
-                self.advance()
-                return (name_tok.value, f"@{value_tok.value}")
+                # Single IDENT: state-ref shorthand returned as "@<name>".
+                # Two-segment "<step>.<field>" is NOT accepted here (kwarg values
+                # don't reference sub-fields in v0.12).
+                # Three-segment "<step>.error.<field>" IS accepted in v0.13:
+                # it produces an ErrorAccessExpr (validated by the IR builder
+                # to be inside a RESCUE body referencing the rescued step).
+                step_tok = self.advance()
+                if self.peek().type != TokenType.DOT:
+                    # plain shorthand
+                    return (name_tok.value, f"@{step_tok.value}")
+                # Saw a DOT — must be exactly "<step>.error.<field>"
+                self.advance()  # consume DOT
+                mid = self.expect(TokenType.IDENT)
+                if mid.value != "error":
+                    raise ParseError(
+                        f"unknown 2-segment kwarg value '{step_tok.value}.{mid.value}'; "
+                        f"only <step>.error.<message|type> is supported as a dotted kwarg value",
+                        step_tok.line, step_tok.col,
+                    )
+                if self.peek().type != TokenType.DOT:
+                    raise ParseError(
+                        f"incomplete error access '{step_tok.value}.error'; "
+                        f"expected '.message' or '.type'",
+                        step_tok.line, step_tok.col,
+                    )
+                self.advance()  # consume DOT
+                field_tok = self.expect(TokenType.IDENT)
+                return (
+                    name_tok.value,
+                    ErrorAccessExpr(
+                        step_name=step_tok.value,
+                        field=field_tok.value,
+                        line=step_tok.line,
+                    ),
+                )
             raise ParseError(
                 f"expected literal value or state reference for kwarg, "
                 f"got {value_tok.type.value}",

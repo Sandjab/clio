@@ -228,6 +228,20 @@ class FieldRefExpr(ExprNode):
 
 
 @dataclass(frozen=True)
+class ErrorAccessExpr(ExprNode):
+    """`<step_name>.error.<field>` — kwarg value reference to the captured
+    error of a step protected by a RESCUE handler. Valid only as a kwarg
+    value inside a step call that itself lives in a RESCUE body. Bound to
+    the rescued step's identity by the IR builder.
+
+    `field` is parsed as-is; the IR builder validates membership in
+    {"message", "type"}."""
+    step_name: str
+    field: str
+    line: int
+
+
+@dataclass(frozen=True)
 class CompareExpr(ExprNode):
     left: "ExprNode"
     op: str                         # one of: ==, !=, >=, <=, >, <

@@ -6,7 +6,7 @@ import pytest
 from clio.ir.builder import IRBuildError, build_ir
 from clio.ir.graph import RescueBlockIR
 from clio.keywords import Keyword
-from clio.parser.ast_nodes import FlowDecl, RescueBlock, StepCall
+from clio.parser.ast_nodes import ErrorAccessExpr, FlowDecl, RescueBlock, StepCall
 from clio.parser.parser import parse
 
 
@@ -403,3 +403,46 @@ FLOW p
     rescues = graph.flow.rescues
     assert len(rescues) == 1
     assert rescues[0].step_name == "b"
+
+
+ERROR_ACCESS_SRC = """
+STEP load
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE:  exact
+
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  judgment
+
+STEP notify
+  TAKES: channel: str, reason: str, err_type: str
+  GIVES: sent: bool
+  MODE:  exact
+
+FLOW pipeline
+  load(path="x") -> detect(rows=rows)
+
+  RESCUE detect:
+    -> notify(channel="#a", reason=detect.error.message, err_type=detect.error.type)
+    -> abort("detection failed")
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+
+
+def test_parse_error_access_in_kwarg():
+    """`step.error.message` and `step.error.type` parse as ErrorAccessExpr kwarg values."""
+    program = _parse(ERROR_ACCESS_SRC)
+    flow = next(d for d in program.decls if isinstance(d, FlowDecl))
+    rescue = flow.rescues[0]
+    notify_call = rescue.body[0]
+    kwargs = dict(notify_call.kwargs)
+    assert isinstance(kwargs["reason"], ErrorAccessExpr)
+    assert kwargs["reason"].step_name == "detect"
+    assert kwargs["reason"].field == "message"
+    assert isinstance(kwargs["err_type"], ErrorAccessExpr)
+    assert kwargs["err_type"].field == "type"
