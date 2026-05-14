@@ -12,12 +12,15 @@ from collections.abc import Callable
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
     BoolOpIR,
+    CallIR,
     FlowGraph,
     ForEachIR,
     IfBlockIR,
     MatchBlockIR,
     OnFailChainIR,
+    RescueBlockIR,
     ResourcesIR,
+    ResumeIR,
     StepIR,
     WhileBlockIR,
 )
@@ -533,6 +536,63 @@ def render_retry_block(step: StepIR, lang: str = "en") -> str:
     return body
 
 
+def render_rescue_section(rescue_block: RescueBlockIR, lang: str = "en") -> str:
+    """Render a RESCUE handler block as a SKILL.md sub-section.
+
+    Renders:
+    - A header naming the protected step.
+    - A note that `<step>.error.message` and `<step>.error.type` are
+      accessible expressions inside the handler body.
+    - The chain of handler actions (CallIR sub-steps narrated briefly).
+    - The terminator: RESUME ("set state.X.Y ← ...") or implicit abort.
+    """
+    rescued = rescue_block.step_name
+    head_label = {"en": "If", "fr": "Si"}[lang]
+    rescue_label = {"en": "RESCUE", "fr": "RESCUE"}[lang]
+    head = (
+        f"### {rescue_label}: {head_label} step `{rescued}` fails\n\n"
+        f"Available expressions in the handler body: "
+        f"`{rescued}.error.message` (str), `{rescued}.error.type` (str — Python "
+        f"exception class name).\n\n"
+    )
+
+    body_lines: list[str] = []
+    terminator: ResumeIR | None = None
+
+    for sub in rescue_block.body:
+        if isinstance(sub, ResumeIR):
+            terminator = sub
+        elif isinstance(sub, CallIR):
+            body_lines.append(f"1. Call `{sub.step_name}(…)`\n")
+        elif isinstance(sub, ForEachIR):
+            body_lines.append(f"1. FOR EACH `{sub.loop_var}` IN `{sub.collection}`\n")
+        elif isinstance(sub, IfBlockIR):
+            cond = _render_condition(sub.condition)
+            body_lines.append(f"1. IF `{cond}`\n")
+        elif isinstance(sub, MatchBlockIR):
+            body_lines.append(
+                f"1. MATCH `{sub.state_field}.{sub.sub_field}`\n"
+            )
+        elif isinstance(sub, WhileBlockIR):
+            cond = _render_condition(sub.condition)
+            body_lines.append(f"1. WHILE `{cond}`\n")
+        else:
+            body_lines.append(f"1. {type(sub).__name__}\n")
+
+    body_md = "".join(body_lines)
+
+    if terminator is not None:
+        term_md = (
+            f"\n**RESUME**: set `state.{rescued}.{terminator.field_name}` ← "
+            f"`state.{terminator.fallback_step}.{terminator.field_name}`, "
+            f"then continue with the step after `{rescued}`.\n\n"
+        )
+    else:
+        term_md = "\n**Abort**: stop the flow (no RESUME declared).\n\n"
+
+    return head + body_md + term_md
+
+
 def render_resources_annex(graph: FlowGraph, lang: str = "en") -> str:
     """Annex at the end of SKILL.md listing flow-level RESOURCES.
 
@@ -612,7 +672,11 @@ def render_skill_md(
                 parts.append(render_for_each_section(item, f"{item_idx:02d}", lang=lang))
             elif isinstance(item, WhileBlockIR):
                 parts.append(render_while_section(item, f"{item_idx:02d}", lang=lang))
-            # RescueBlockIR: deferred to later tasks.
+
+        # Append RESCUE sections from FlowIR.rescues (separate from chain).
+        rescues = getattr(flow, "rescues", None) or ()
+        for rescue in rescues:
+            parts.append(render_rescue_section(rescue, lang=lang))
 
     parts.append(render_resources_annex(graph, lang=lang))
     return "".join(parts)

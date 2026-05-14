@@ -707,3 +707,54 @@ def test_resources_annex_with_multiple_models(tmp_path):
     body = (tmp_path / "SKILL.md").read_text()
     for model in graph.resources.models:
         assert model in body, f"Model {model!r} not found in SKILL.md"
+
+
+# ---------------------------------------------------------------------------
+# Task 10 — RESCUE handlers + step.error.* + RESUME (v0.13 parity)
+# ---------------------------------------------------------------------------
+
+_RESUME_FIXTURE = (
+    Path(__file__).parent.parent.parent / "examples" / "critical_pipeline_resume.clio"
+)
+
+
+def _load_resume_graph():
+    """Parse and build the IR for examples/critical_pipeline_resume.clio.
+
+    Returns the FlowGraph, or raises pytest.skip if the file is absent.
+    """
+    if not _RESUME_FIXTURE.exists():
+        import pytest
+        pytest.skip("examples/critical_pipeline_resume.clio not present")
+    src = _RESUME_FIXTURE.read_text()
+    return build_ir(parse(src))
+
+
+def test_rescue_section_emits_for_step_with_rescue(tmp_path):
+    """A flow with a RESCUE handler produces a RESCUE section in SKILL.md."""
+    graph = _load_resume_graph()
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    # Some kind of section header indicating a rescue handler
+    assert "RESCUE" in body or "Rescue" in body or "rescue" in body
+    # The rescued step name appears somewhere in the body
+    rescue_step = graph.flow.rescues[0].step_name
+    assert rescue_step in body
+
+
+def test_rescue_section_mentions_error_message_and_type(tmp_path):
+    """The RESCUE section must mention step.error.message and step.error.type."""
+    graph = _load_resume_graph()
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    assert ".error.message" in body
+    assert ".error.type" in body
+
+
+def test_resume_terminator_rendered(tmp_path):
+    """The RESUME terminator appears in the SKILL.md instruction."""
+    graph = _load_resume_graph()
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    # The RESUME keyword or its rendered "set state.X.Y ← ..." form appears
+    assert "RESUME" in body or "← " in body or "set state." in body
