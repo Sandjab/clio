@@ -19,6 +19,11 @@ def test_rescue_keyword_present():
     assert Keyword.RESCUE.value == "RESCUE"
 
 
+def test_resume_keyword_present():
+    """RESUME must be registered as a closed keyword of the lexer."""
+    assert Keyword.RESUME.value == "RESUME"
+
+
 def test_rescue_block_ast_shape():
     """RescueBlock must be a frozen dataclass with step_name / body / line / col."""
     rb = RescueBlock(
