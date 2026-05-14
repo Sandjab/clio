@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import sys
+from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -91,8 +92,11 @@ def status_summary(
 
 
 def _tail_jsonl(path: Path, limit: int) -> list[dict]:
-    """Return the last `limit` JSON lines, oldest-first. Skips malformed."""
-    lines: list[dict] = []
+    """Return the last `limit` JSON lines, oldest-first. Skips malformed.
+
+    Uses `deque(maxlen=limit)` so memory stays bounded by `limit` even on
+    multi-gigabyte log files."""
+    lines: deque[dict] = deque(maxlen=limit)
     try:
         with path.open() as f:
             for raw in f:
@@ -105,7 +109,7 @@ def _tail_jsonl(path: Path, limit: int) -> list[dict]:
                     continue
     except OSError:
         return []
-    return lines[-limit:]
+    return list(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -113,9 +117,11 @@ def _tail_jsonl(path: Path, limit: int) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def run_doctor(source: Path | None) -> tuple[int, str]:
+def run_doctor(source: Path | None, flow_name: str | None = None) -> tuple[int, str]:
     """Run environment checks. If `source` is set, also derive flow-specific
-    checks from its RESOURCES block. Returns (exit_code, report_text).
+    checks from its RESOURCES block. When the source declares multiple
+    FLOWs, pass `flow_name` to select one (matches `clio compile --flow`).
+    Returns (exit_code, report_text).
     """
     checks: list[CheckResult] = []
 
@@ -130,11 +136,12 @@ def run_doctor(source: Path | None) -> tuple[int, str]:
                 detail=f"not found: {source}",
             ))
             return checks_exit_code(checks), _format_doctor(checks)
-        # Lazy import to keep `clio status` cheap.
+        # Lazy import to keep `clio status` cheap (status doesn't need parser/IR).
+        # Matches the lazy-emitter pattern in clio/cli.py:_cmd_compile.
         from clio.ir.builder import IRBuildError, build_ir
         from clio.parser.parser import ParseError, parse
         try:
-            graph = build_ir(parse(source.read_text()))
+            graph = build_ir(parse(source.read_text()), flow_name=flow_name)
         except (ParseError, IRBuildError) as e:
             checks.append(CheckResult(
                 name="source compiles",

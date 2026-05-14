@@ -221,6 +221,38 @@ def test_doctor_with_source_judgment_fails_without_api_key(tmp_path, monkeypatch
     assert rc == 1
 
 
+def test_doctor_multi_flow_without_selector_reports_fail(tmp_path, monkeypatch, capsys):
+    """Regression: clio doctor used to crash on multi-FLOW sources because
+    build_ir requires --flow when more than one flow is declared
+    (Gemini PR #13 review). Now it surfaces as a clean FAIL line."""
+    src = tmp_path / "two.clio"
+    src.write_text(
+        "STEP foo\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n"
+        "FLOW alpha\n  foo(x=\"a\")\n"
+        "FLOW beta\n  foo(x=\"b\")\n"
+    )
+    rc = main(["doctor", str(src)])
+    out = capsys.readouterr().out
+    assert "FAIL" in out
+    assert "2 FLOWs" in out
+    assert rc == 1
+
+
+def test_doctor_multi_flow_with_selector_passes(tmp_path, monkeypatch, capsys):
+    src = tmp_path / "two.clio"
+    src.write_text(
+        "STEP foo\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n"
+        "FLOW alpha\n  foo(x=\"a\")\n"
+        "FLOW beta\n  foo(x=\"b\")\n"
+    )
+    rc = main(["doctor", str(src), "--flow", "beta"])
+    out = capsys.readouterr().out
+    assert "source compiles" in out
+    # No FAIL when the right flow is selected and there are no judgment steps.
+    assert "FAIL" not in out
+    assert rc == 0
+
+
 def test_doctor_source_compile_error_reports_fail(tmp_path, monkeypatch, capsys):
     src = tmp_path / "bad.clio"
     src.write_text("STEP\n  MODE: bogus\n")  # missing IDENT after STEP

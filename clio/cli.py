@@ -48,6 +48,10 @@ def main(argv: list[str] | None = None) -> int:
 
     doctor_p = sub.add_parser("doctor")
     doctor_p.add_argument("source", nargs="?", default=None)
+    doctor_p.add_argument(
+        "--flow", dest="flow", default=None,
+        help="select a FLOW by name when the source declares more than one",
+    )
 
     status_p = sub.add_parser("status")
     status_p.add_argument("--state-file", dest="state_file", default=None)
@@ -69,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
             model=args.model,
         )
     if args.cmd == "doctor":
-        return _cmd_doctor(args.source)
+        return _cmd_doctor(args.source, args.flow)
     if args.cmd == "status":
         return _cmd_status(args.state_file, args.log_file, args.limit)
     return 2
@@ -196,10 +200,10 @@ def _cmd_gen(
     return 0
 
 
-def _cmd_doctor(source: str | None) -> int:
+def _cmd_doctor(source: str | None, flow: str | None = None) -> int:
     from clio.diagnostics import run_doctor
     src = Path(source) if source else None
-    code, report = run_doctor(src)
+    code, report = run_doctor(src, flow_name=flow)
     sys.stdout.write(report)
     return code
 
