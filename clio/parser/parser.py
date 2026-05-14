@@ -42,6 +42,7 @@ from clio.parser.ast_nodes import (
     RecordType,
     RescueBlock,
     ResourcesDecl,
+    ResumeAst,
     RestBody,
     RestImpl,
     RetryPolicy,
@@ -1818,7 +1819,7 @@ class _Parser:
         self.expect(TokenType.NEWLINE)
         self.expect(TokenType.INDENT)
 
-        chain: list[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock] = [self.parse_flow_item()]
+        chain: list[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock | ResumeAst] = [self.parse_flow_item()]
         # Skip newlines and indent/dedent changes between chain elements,
         # then look for ARROW. The -> may appear on a more-indented continuation line.
         # Track the net INDENT count consumed here so we can pair each one
@@ -1878,8 +1879,8 @@ class _Parser:
             line=kw.line, col=kw.col,
         )
 
-    def parse_flow_item(self) -> "StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock":
-        """A FLOW (or any nested body) item: step call, FOR EACH, IF/ELSE, MATCH, or WHILE."""
+    def parse_flow_item(self) -> "StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock | ResumeAst":
+        """A FLOW (or any nested body) item: step call, FOR EACH, IF/ELSE, MATCH, WHILE, or RESUME."""
         t = self.peek()
         if t.type == TokenType.KEYWORD and t.value == "FOR":
             return self.parse_for_each()
@@ -1930,7 +1931,7 @@ class _Parser:
         self.expect(TokenType.NEWLINE)
         self.expect(TokenType.INDENT)
 
-        body: list[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock] = [self.parse_flow_item()]
+        body: list[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock | ResumeAst] = [self.parse_flow_item()]
         while True:
             while self.peek().type in (TokenType.NEWLINE, TokenType.INDENT):
                 self.advance()
@@ -2244,15 +2245,22 @@ class _Parser:
 
         return CompareExpr(left=left, op=op, right=right)
 
-    def parse_step_call(self) -> StepCall:
+    def parse_step_call(self) -> "StepCall | ResumeAst":
         # `abort` is a reserved keyword (see clio/keywords.py), but inside
         # a rescue body it appears as a synthetic step call. The parser is
         # permissive about where it can appear; the IR builder restricts
         # it to rescue bodies. The single positional STRING argument is
         # synthesised as `message=<str>` so downstream stages can treat
         # abort uniformly with other step calls.
+        #
+        # `RESUME(<step>.<field>)` is a sibling syntactic form: it takes a
+        # dotted path rather than kwargs, so we branch to a dedicated helper
+        # before touching IDENT expectations.
         tok = self.peek()
         is_abort = tok.type == TokenType.KEYWORD and tok.value == "abort"
+        is_resume = tok.type == TokenType.KEYWORD and tok.value == "RESUME"
+        if is_resume:
+            return self._parse_resume_call()
         if is_abort:
             name_tok = self.advance()
         else:
@@ -2273,6 +2281,39 @@ class _Parser:
             kwargs=tuple(kwargs),
             line=name_tok.line,
             col=name_tok.col,
+        )
+
+    def _parse_resume_call(self) -> ResumeAst:
+        """`RESUME ( IDENT . IDENT )` — terminator of a rescue chain.
+        Caller has already peeked the RESUME keyword."""
+        kw_tok = self.expect(TokenType.KEYWORD, "RESUME")
+        self.expect(TokenType.LPAREN)
+        step_tok = self.peek()
+        if step_tok.type != TokenType.IDENT:
+            raise ParseError(
+                f"RESUME requires '<step>.<field>', got {step_tok.type.value} {step_tok.value!r}",
+                kw_tok.line, kw_tok.col,
+            )
+        self.advance()
+        self.expect(TokenType.DOT)
+        field_tok = self.expect(TokenType.IDENT)
+        # Allow exactly one (step.field) pair: refuse extra args / extra dots.
+        if self.peek().type == TokenType.DOT:
+            raise ParseError(
+                "RESUME accepts exactly '<step>.<field>'; no further dotted path",
+                kw_tok.line, kw_tok.col,
+            )
+        if self.peek().type == TokenType.COMMA:
+            raise ParseError(
+                "RESUME takes a single '<step>.<field>' argument; remove the comma",
+                kw_tok.line, kw_tok.col,
+            )
+        self.expect(TokenType.RPAREN)
+        return ResumeAst(
+            fallback_step=step_tok.value,
+            field_name=field_tok.value,
+            line=kw_tok.line,
+            col=kw_tok.col,
         )
 
     def _parse_call_arg(self) -> tuple[str, object]:

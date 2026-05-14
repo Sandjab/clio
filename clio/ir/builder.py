@@ -81,6 +81,7 @@ from clio.parser.ast_nodes import (
     RestBody,
     RestImpl,
     RetryPolicy,
+    ResumeAst,
     ShellImpl,
     SqlImpl,
     SseServerSpec,
@@ -557,7 +558,7 @@ def _build_rescue(
 
 
 def _build_flow_items(
-    chain: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock, ...]",
+    chain: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock | ResumeAst, ...]",
     steps_by_name: dict[str, StepIR],
     contracts: dict[str, ContractIR],
     available: dict[str, TypeExpr],
@@ -599,6 +600,13 @@ def _build_flow_items(
             out.append(_build_while_block(
                 item, steps_by_name, contracts, available, in_rescue=in_rescue,
             ))
+            continue
+        # ResumeAst: parsed but not yet lowered to IR (future task).
+        # Append as-is so the body list length stays consistent; the terminal
+        # abort check in _build_rescue_handler will need to be updated when
+        # the IR node for RESUME is added.
+        if isinstance(item, ResumeAst):
+            out.append(item)
             continue
         # StepCall path
         out.append(_build_call(

@@ -6,7 +6,7 @@ import pytest
 from clio.ir.builder import IRBuildError, build_ir
 from clio.ir.graph import RescueBlockIR
 from clio.keywords import Keyword
-from clio.parser.ast_nodes import ErrorAccessExpr, FlowDecl, RescueBlock, StepCall
+from clio.parser.ast_nodes import ErrorAccessExpr, FlowDecl, RescueBlock, ResumeAst, StepCall
 from clio.parser.parser import parse
 
 
@@ -446,3 +446,48 @@ def test_parse_error_access_in_kwarg():
     assert kwargs["reason"].field == "message"
     assert isinstance(kwargs["err_type"], ErrorAccessExpr)
     assert kwargs["err_type"].field == "type"
+
+
+# ---------------------------------------------------------------------------
+# RESUME(<step>.<field>) terminator (Task 4)
+# ---------------------------------------------------------------------------
+
+RESUME_SRC = """
+STEP load
+  TAKES: path: str
+  GIVES: rows: List<int>
+  MODE:  exact
+
+STEP detect
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  judgment
+
+STEP recover
+  TAKES: rows: List<int>
+  GIVES: report: str
+  MODE:  exact
+
+FLOW pipeline
+  load(path="data.csv")
+    -> detect(rows=rows)
+
+  RESCUE detect:
+    -> recover(rows=rows)
+    -> RESUME(recover.report)
+
+RESOURCES
+  target: python
+  models: [haiku]
+"""
+
+
+def test_parse_resume_terminator():
+    """RESUME(<step>.<field>) parses as a ResumeAst at the end of the rescue body."""
+    program = _parse(RESUME_SRC)
+    flow = next(d for d in program.decls if isinstance(d, FlowDecl))
+    rescue = flow.rescues[0]
+    last = rescue.body[-1]
+    assert isinstance(last, ResumeAst)
+    assert last.fallback_step == "recover"
+    assert last.field_name == "report"
