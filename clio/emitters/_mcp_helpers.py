@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json as _json
 
-from clio.emitters._python_helpers import _has_parallel, _python_condition_expr
+from clio.emitters._shared_utils import _has_parallel, _python_condition_expr
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
     CallIR,

@@ -7,6 +7,8 @@ Split out per CLAUDE.md scope-discipline rule (~300-line limit per file).
 """
 
 from clio.emitters._shared_utils import (
+    _has_parallel,
+    _python_condition_expr,
     _field_from_schema,
     _model_id,  # noqa: F401 — re-exported for python.py
     _render_type_short,
@@ -990,61 +992,9 @@ def emit_parallel_for_each_python(
     )
 
 
-def _has_parallel(chain) -> bool:
-    """Return True if any ForEachIR in the chain (or nested) has parallel=True.
-    Used by emitters to decide whether to emit `import concurrent.futures` /
-    `import asyncio` at module top of the emitted flow.py."""
-    from clio.ir.graph import (  # avoid top-level circular import
-        ForEachIR,
-        IfBlockIR,
-        MatchBlockIR,
-        WhileBlockIR,
-    )
-    for elem in chain:
-        if isinstance(elem, ForEachIR):
-            if elem.parallel:
-                return True
-            if _has_parallel(elem.body):
-                return True
-        elif isinstance(elem, IfBlockIR):
-            if _has_parallel(elem.then_body) or _has_parallel(elem.else_body):
-                return True
-        elif isinstance(elem, MatchBlockIR):
-            for arm in elem.cases:
-                if _has_parallel(arm.body):
-                    return True
-        elif isinstance(elem, WhileBlockIR):
-            if _has_parallel(elem.body):
-                return True
-    return False
-
-
-def _python_condition_expr(condition, scope_local: set[str]) -> str:
-    """Render an IF/WHILE condition as a Python boolean expression.
-
-    Leaf comparisons (`ConditionIR`) read the contract field via attribute
-    access (Pydantic models); the base is a bare name when the state field
-    is in `scope_local` (e.g. inside a FOR EACH body), otherwise it's
-    `state[<name>]`. `BoolOpIR` nodes render as `(<left>) and/or (<right>)`
-    — the parentheses are unconditional so the emitted Python preserves
-    the IR's precedence regardless of nesting."""
-    if isinstance(condition, BoolOpIR):
-        left = _python_condition_expr(condition.left, scope_local)
-        right = _python_condition_expr(condition.right, scope_local)
-        return f"({left}) {condition.op} ({right})"
-    base = (
-        condition.step_name
-        if condition.step_name in scope_local
-        else f"state[{condition.step_name!r}]"
-    )
-    access = f"{base}.{condition.field}"
-    if condition.literal_kind == "int":
-        lit = str(condition.literal_value)
-    elif condition.literal_kind == "float":
-        lit = repr(condition.literal_value)
-    elif condition.literal_kind == "bool":
-        lit = "True" if condition.literal_value else "False"
-    else:
-        # str | ident — both rendered as Python string literals
-        lit = repr(condition.literal_value)
-    return f"{access} {condition.op} {lit}"
+# _has_parallel and _python_condition_expr were relocated to
+# clio.emitters._shared_utils so the mcp-server emitter helpers (and any
+# future emitter) can use them without importing from this module — which
+# would violate the CLAUDE.md rule "emitters never import from each other".
+# They remain re-exported here for any consumer that already imported them
+# from this module's public surface.

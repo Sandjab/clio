@@ -165,3 +165,71 @@ def _field_from_schema(name: str, schema: dict) -> str:
     if schema.get("type") == "string" and "maxLength" in schema:
         return f"{py_name}: {py_type} = Field(max_length={schema['maxLength']})"
     return f"{py_name}: {py_type}"
+
+
+# ---------------------------------------------------------------------------
+# Chain helpers used by every emitter that walks a FlowIR.chain (python,
+# mcp-server, langgraph). Live here — and NOT inside an emitter helper
+# module — so that emitter helpers do not need to import from each other
+# (CLAUDE.md: "Emitters never import from each other").
+
+def _has_parallel(chain) -> bool:
+    """Return True if any ForEachIR in the chain (or nested) has parallel=True.
+    Used by emitters to decide whether to emit `import concurrent.futures` /
+    `import asyncio` at module top of the emitted flow.py."""
+    from clio.ir.graph import (  # avoid top-level circular import
+        ForEachIR,
+        IfBlockIR,
+        MatchBlockIR,
+        WhileBlockIR,
+    )
+    for elem in chain:
+        if isinstance(elem, ForEachIR):
+            if elem.parallel:
+                return True
+            if _has_parallel(elem.body):
+                return True
+        elif isinstance(elem, IfBlockIR):
+            if _has_parallel(elem.then_body) or _has_parallel(elem.else_body):
+                return True
+        elif isinstance(elem, MatchBlockIR):
+            for arm in elem.cases:
+                if _has_parallel(arm.body):
+                    return True
+        elif isinstance(elem, WhileBlockIR):
+            if _has_parallel(elem.body):
+                return True
+    return False
+
+
+def _python_condition_expr(condition, scope_local: set[str]) -> str:
+    """Render an IF/WHILE condition as a Python boolean expression.
+
+    Leaf comparisons (`ConditionIR`) read the contract field via attribute
+    access (Pydantic models); the base is a bare name when the state field
+    is in `scope_local` (e.g. inside a FOR EACH body), otherwise it's
+    `state[<name>]`. `BoolOpIR` nodes render as `(<left>) and/or (<right>)`
+    — the parentheses are unconditional so the emitted Python preserves
+    the IR's precedence regardless of nesting."""
+    from clio.ir.graph import BoolOpIR  # avoid top-level circular import
+
+    if isinstance(condition, BoolOpIR):
+        left = _python_condition_expr(condition.left, scope_local)
+        right = _python_condition_expr(condition.right, scope_local)
+        return f"({left}) {condition.op} ({right})"
+    base = (
+        condition.step_name
+        if condition.step_name in scope_local
+        else f"state[{condition.step_name!r}]"
+    )
+    access = f"{base}.{condition.field}"
+    if condition.literal_kind == "int":
+        lit = str(condition.literal_value)
+    elif condition.literal_kind == "float":
+        lit = repr(condition.literal_value)
+    elif condition.literal_kind == "bool":
+        lit = "True" if condition.literal_value else "False"
+    else:
+        # str | ident — both rendered as Python string literals
+        lit = repr(condition.literal_value)
+    return f"{access} {condition.op} {lit}"
