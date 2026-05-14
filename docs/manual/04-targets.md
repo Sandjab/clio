@@ -1,6 +1,6 @@
 # Compilation targets
 
-CLIO emits a runnable project for **one of four targets** today, selected via `--target`:
+CLIO emits a runnable project for **one of five targets** today, selected via `--target`:
 
 | Target | Output | Best for |
 |---|---|---|
@@ -8,6 +8,7 @@ CLIO emits a runnable project for **one of four targets** today, selected via `-
 | `python` | Python package (Anthropic / OpenAI SDK) | Production, integration with other Python code, CI pipelines |
 | `mcp-server` | Python MCP server using the official `mcp` SDK | Exposing the flow as a tool to Claude Desktop / IDE / any MCP client |
 | `langgraph` | Python package whose `flow.py` builds a `langgraph.graph.StateGraph` | Bridging into LangChain ecosystems; using LangGraph's runtime features (persistence, human-in-the-loop) with CLIO-defined logic |
+| `claude-skill` | Claude Code skill directory (`SKILL.md` + `scripts/` + `schemas/` + `prompts/`) | LLM-host-orchestrated skills; ship a flow as a Claude Code skill with no external runtime or API key after install |
 
 The `RESOURCES.target:` field in the `.clio` source is **informational** — the `--target` flag at compile time is what actually selects the emitter.
 
@@ -98,26 +99,49 @@ Each `STEP` becomes a node function `(state: State) -> dict`. The State is a `Ty
 - You need `invoke.mode: cli` — LangGraph runs server-side. Use `--target claude-cli`.
 - You need `ON_FAIL escalate` or `fallback(<step>)` — only `retry(N)` and `abort(...)` are wired in v0. Use `--target python` for the full retry chain.
 
+### `claude-skill`
+
+```bash
+uv run python -m clio compile flow.clio --target claude-skill --output ./skill-out
+cp -r ./skill-out ~/.claude/skills/my-skill
+```
+
+You get a Claude Code skill directory: a `SKILL.md` orchestration manifest (with a TodoWrite checklist the host follows), per-step `scripts/NN_<name>.py` Python stubs you fill in for `exact` steps, `prompts/NN_<name>.md` templates for `judgment` steps, and `schemas/*.json` for typed inputs/outputs. Bundled helpers (`_validate.py`, `_cache_key.py`) ship inside `scripts/`.
+
+The emitted skill is **LLM-host-orchestrated**: Claude Code reads `SKILL.md` and drives the flow — no `anthropic` SDK install, no API key, no CLIO binary after install. Exact steps are real Python scripts the host invokes; judgment steps are inline LLM calls the host produces.
+
+**Use when:**
+- You want to package a flow as a Claude Code skill that another user can install without setting up a Python environment, an API key, or any external service.
+- You want the LLM host (Claude Code) to drive the orchestration directly, reading the step list from `SKILL.md`.
+- The flow is small enough that LLM-host fidelity is acceptable (the TodoWrite checklist is the main drift anchor).
+
+**Don't use when:**
+- You need parallelism — `FOR EACH ... PARALLEL` is serialised in the emitted skill (the host doesn't execute concurrently). Use `--target python` or `--target mcp-server`.
+- You need a language other than Python or Bash for `exact` steps — only `python` and `bash` are supported in v1 (a `LANG: ruby` step is a compile-time error).
+- You need a runtime entrypoint outside Claude Code (Python entry point, CLI command, MCP tool). Pick `python` / `mcp-server` instead.
+
 ## Cross-target feature support
 
-| Feature | claude-cli | python | mcp-server | langgraph |
-|---|:-:|:-:|:-:|:-:|
-| `MODE: exact` (code stub) | ✅ | ✅ | ✅ | ✅ |
-| `MODE: exact` + `impl.shell` | ✅ | ✅ | ✅ | ✅ |
-| `MODE: exact` + `impl.shell` + `parse: json` | ⚠️ silently ignored | ✅ | ✅ | ✅ |
-| `MODE: exact` + `impl.rest` | ✅ (uses `requests` at runtime) | ✅ | ✅ | ✅ |
-| `MODE: judgment` + `invoke: cli` (default) | ✅ | ❌ rejected | ❌ rejected | ❌ rejected |
-| `MODE: judgment` + `invoke.api.anthropic` | (uses `RESOURCES.models` chain) | ✅ | ❌ rejected | ✅ |
-| `MODE: judgment` + `invoke.api.openai` | ❌ | ✅ | ❌ | ❌ rejected (v0) |
-| `MODE: judgment` + `invoke.api.bedrock`/`vertex` | ❌ | ❌ | ❌ | ❌ |
-| `CACHE: ttl(...)` | ✅ | ✅ | ✅ | ✅ (reuses python runtime) |
-| `ON_FAIL: retry(N)` | ✅ | ✅ | ✅ | ✅ via `RetryPolicy` |
-| `ON_FAIL: escalate / fallback` | ✅ | ✅ | ✅ minimum-compliance | ❌ rejected (v0) |
-| `ON_FAIL: abort` | ✅ | ✅ | ✅ | ✅ |
-| `FOR EACH` (sequential) | ✅ | ✅ | ✅ | ❌ rejected (v0; v0.7) |
-| `FOR EACH ... PARALLEL AS` | ❌ rejected | ✅ ThreadPool | ✅ asyncio.gather | ❌ rejected (v0; v0.7 via Send) |
-| `--from-step N` resume | ❌ | ✅ | ❌ | ❌ (use LangGraph checkpointers) |
-| `clio graph --format html` | n/a (graph is target-independent) | n/a | n/a | n/a |
+| Feature | claude-cli | python | mcp-server | langgraph | claude-skill |
+|---|:-:|:-:|:-:|:-:|:-:|
+| `MODE: exact` (code stub) | ✅ | ✅ | ✅ | ✅ | ✅ (`scripts/NN.py` stub) |
+| `MODE: exact` + `impl.shell` | ✅ | ✅ | ✅ | ✅ | ✅ (Python or Bash only) |
+| `MODE: exact` + `impl.shell` + `parse: json` | ⚠️ silently ignored | ✅ | ✅ | ✅ | ✅ |
+| `MODE: exact` + `impl.rest` | ✅ (uses `requests` at runtime) | ✅ | ✅ | ✅ | ✅ |
+| `MODE: judgment` + `invoke: cli` (default) | ✅ | ❌ rejected | ❌ rejected | ❌ rejected | ✅ host-driven |
+| `MODE: judgment` + `invoke.api.anthropic` | (uses `RESOURCES.models` chain) | ✅ | ❌ rejected | ✅ | ✅ host-driven |
+| `MODE: judgment` + `invoke.api.openai` | ❌ | ✅ | ❌ | ❌ rejected (v0) | ✅ host-driven |
+| `MODE: judgment` + `invoke.api.bedrock`/`vertex` | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `CACHE: ttl(...)` | ✅ | ✅ | ✅ | ✅ (reuses python runtime) | ⚠️ documented in `SKILL.md`; helper bundled |
+| `ON_FAIL: retry(N)` | ✅ | ✅ | ✅ | ✅ via `RetryPolicy` | ⚠️ documented in `SKILL.md` (host-followed) |
+| `ON_FAIL: escalate / fallback` | ✅ | ✅ | ✅ minimum-compliance | ❌ rejected (v0) | ⚠️ documented in `SKILL.md` |
+| `ON_FAIL: abort` | ✅ | ✅ | ✅ | ✅ | ⚠️ documented in `SKILL.md` |
+| `RESCUE` + `step.error.*` + `RESUME` | ❌ rejected | ✅ | ✅ | ❌ rejected | ⚠️ documented in `SKILL.md` |
+| `FOR EACH` (sequential) | ✅ | ✅ | ✅ | ❌ rejected (v0; v0.7) | ✅ |
+| `FOR EACH ... PARALLEL AS` | ❌ rejected | ✅ ThreadPool | ✅ asyncio.gather | ❌ rejected (v0; v0.7 via Send) | ⚠️ serialised with warning |
+| `TEST` blocks (v0.15) | ⚠️ ignored | ✅ pytest emitted | ⚠️ ignored | ⚠️ ignored | ⚠️ ignored |
+| `--from-step N` resume | ❌ | ✅ | ❌ | ❌ (use LangGraph checkpointers) | ❌ |
+| `clio graph --format html` | n/a (graph is target-independent) | n/a | n/a | n/a | n/a |
 
 ## A common workflow: `python` for production, `claude-cli` for sketches
 
@@ -127,7 +151,8 @@ A `.clio` file is target-independent (modulo the limitations above). A common pa
 2. **Test** at scale with `--target python` once the prompts are stable.
 3. **Distribute** as `--target mcp-server` if you want it consumable by other AI clients.
 4. **Bridge** to `--target langgraph` if you need to plug into LangChain runtime features (checkpointers, human-in-the-loop, streaming). Subset features today, full parity is on the v0.7+ roadmap.
+5. **Ship as a Claude Code skill** with `--target claude-skill` when the audience is Claude Code users who want a zero-runtime install (no API key, no Python env).
 
-The same source compiles all four (within each target's scope).
+The same source compiles all five (within each target's scope).
 
 Next: [CLI reference](05-cli-reference.md) for every command and flag.

@@ -627,7 +627,7 @@ Ask Claude Code to run the skill by name. The host reads `SKILL.md`, calls `scri
 - `FOR EACH ... PARALLEL` is serialised in the emitted skill (the host does not execute concurrently). If you need parallelism, use `--target python` or `--target mcp-server`.
 - Only `python` and `bash` are supported as exact-step languages in `claude-skill` v1.
 
-## 12. Declarative TEST against a flow (v0.15)
+## 16. Declarative TEST against a flow (v0.15)
 
 Use `TEST` to assert end-to-end behaviour without writing pytest by hand.
 The `python` target emits `<output>/tests/test_<name>.py` for each block.
@@ -661,7 +661,7 @@ Predicates: `not_empty`, `empty`, `== <lit>`, `!= <lit>`, `> N`, `>= N`,
 name (no nested paths in v0.15). Other targets ignore TEST blocks
 silently.
 
-## 13. Adding judgment intent with DESCRIPTION / STRATEGIES (v0.15)
+## 17. Adding judgment intent with DESCRIPTION / STRATEGIES (v0.15)
 
 Both fields ride into the judgment step's system prompt without
 changing the strict JSON-only output contract. Use when a prompt
@@ -683,7 +683,7 @@ The emitter appends a "Step intent: …" / "Heuristics: …" suffix to
 `_SYSTEM_PROMPT`. When neither field is set, the python emitter output
 is byte-identical to v0.14.
 
-## 14. Multiple FLOWs per file (v0.15)
+## 18. Multiple FLOWs per file (v0.15)
 
 ```
 STEP load

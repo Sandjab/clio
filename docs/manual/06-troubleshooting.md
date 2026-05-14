@@ -4,11 +4,11 @@ Errors you're likely to hit, organised by where they happen in the pipeline.
 
 ## At parse time (`clio check` / `clio compile`)
 
-### `ParseError: target 'rust' is not supported (valid targets: claude-cli, python, mcp-server)`
+### `ParseError: target 'rust' is not supported (valid targets: claude-cli, python, mcp-server, langgraph)`
 
-Your `RESOURCES target:` value isn't recognised. The three valid values are listed in the error message itself.
+Your `RESOURCES target:` value isn't recognised. The valid values are listed in the error message itself.
 
-**Fix:** change `target: rust` to one of `claude-cli`, `python`, or `mcp-server`. The `target:` field is informational anyway — `--target` at compile time is what selects the emitter.
+**Fix:** change `target: rust` to one of `claude-cli`, `python`, `mcp-server`, or `langgraph`. The `target:` field is informational — `--target` at compile time is what selects the emitter, and `--target` additionally accepts `claude-skill` (which is not yet a valid `RESOURCES target:` value; leave the field unset or set it to any of the four above when you intend to compile to `claude-skill`).
 
 ### `ParseError: RESOURCES with target: claude-cli requires a 'models' field`
 

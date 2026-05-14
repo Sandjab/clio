@@ -23,6 +23,28 @@ STEP classify_ticket
 
 **Rule of thumb:** if a senior engineer can name the function that does it, it's `exact`. If they'd say "ask the model", it's `judgment`.
 
+### DESCRIPTION and STRATEGIES (v0.15)
+
+Two optional free-text fields carry author intent into the prompt the
+model sees, without touching the JSON-only output contract:
+
+```
+STEP score_risk
+  DESCRIPTION: "Score churn risk on a customer cohort"
+  STRATEGIES: |
+    - prefer high-recency signals over volume
+    - tie-break on open tickets in the last 30 days
+    - never promote a customer with no signal to "high"
+  TAKES: rows: List<{name: str, ca: float}>
+  GIVES: risks: List<{name: str, level: str}>
+  MODE:  judgment
+```
+
+The python emitter appends `Step intent: …` and `Heuristics: …` to the
+step's `_SYSTEM_PROMPT`. When neither field is set, the emitter output
+is byte-identical to v0.14. Both fields accept a single-line `"..."`
+string or a `|` block scalar.
+
 ### Implementation declarations
 
 `exact` steps optionally take an `impl:` block describing *how* the code is reached:
@@ -146,13 +168,14 @@ load_text(file="input.txt")      # literal value
 
 A step's `TAKES` parameters are passed by keyword; the literal forms (`"input.txt"`, integers, booleans) are inlined into the call site at compile time.
 
-## RESCUE — multi-step failure handler (v0.8)
+## RESCUE — multi-step failure handler (v0.8, extended in v0.13)
 
 `RESCUE step_a:` declares a top-level handler that runs if `step_a` raises
 after its `ON_FAIL` retry/escalate/fallback chain exhausts. Unlike
 `ON_FAIL: abort(...)` (which is a single declarative clause), the RESCUE
-body is a **chain of step calls** ending in `abort("message")`, so you can
-notify, log, or otherwise side-effect before aborting:
+body is a **chain of step calls** ending in either `abort("message")` or
+`RESUME(<step>.<field>)` (v0.13), so you can notify, log, or run a
+deterministic fallback before deciding how to terminate:
 
 ```
 STEP detect_churn
@@ -163,7 +186,7 @@ FLOW pipeline
   load_csv(...) -> detect_churn(...) -> route(...)
 
   RESCUE detect_churn:
-    -> notify_slack(channel="#alerts")
+    -> notify_slack(channel="#alerts", reason=detect_churn.error.message)
     -> abort("churn detection failed")
 ```
 
@@ -173,10 +196,83 @@ When `detect_churn` raises:
 3. `abort` raises `FlowAborted("...")`. The chain item after `detect_churn`
    (`route`) is skipped.
 
+### Inspecting the captured error (v0.13)
+
+Inside the body, `<rescued_step>.error.message` (the exception string) and
+`<rescued_step>.error.type` (the Python class name) are valid kwarg values.
+They are validated at compile time: only the protected step is reachable,
+and only `message` / `type` are exposed.
+
+### RESUME — typed drop-in fallback (v0.13)
+
+If a deterministic fallback step can produce an acceptable answer, the
+body can terminate with `RESUME(<fallback_step>.<field>)` instead of
+`abort(...)`. The injected value lands in `state[<rescued_field>]` and
+the downstream chain continues normally:
+
+```
+RESCUE detect_churn:
+  -> notify_slack(channel="#alerts", reason=detect_churn.error.message)
+  -> fallback_detect(rows=rows)
+  -> RESUME(fallback_detect.report)
+```
+
+The compiler checks at build time that `fallback_detect.report`'s type
+structurally equals `detect_churn`'s GIVES type — a mismatch is a compile
+error, not a runtime surprise.
+
 **One RESCUE per STEP**; the handler attaches to a STEP that appears in
 the top-level FLOW chain (not nested inside FOR EACH / IF / MATCH /
-WHILE). Compiles to **python** and **mcp-server**; **langgraph** and
-**claude-cli** reject at compile time.
+WHILE). Compiles to **python**, **mcp-server**, and **claude-skill**
+(rendered as a RESCUE sub-section in `SKILL.md` for the LLM host to
+follow); **langgraph** and **claude-cli** reject at compile time.
+
+## Multiple FLOWs per file (v0.15)
+
+A source file may declare any number of `FLOW`s. `clio compile` and
+`clio graph` accept `--flow <name>` to pick one; single-FLOW files
+don't need the flag.
+
+```
+FLOW ingest_only
+  load(file="data.csv")
+
+FLOW analyze_only
+  load(file="cached.csv") -> classify(rows=rows)
+```
+
+```bash
+clio compile two_flows.clio --target python --output ./out --flow analyze_only
+```
+
+Duplicate FLOW names are rejected at IR build time with a source-line message.
+
+## TEST — declarative end-to-end tests (v0.15)
+
+A top-level `TEST <name>:` block asserts behaviour against a named FLOW
+without writing pytest by hand. The `python` target emits one
+`<output>/tests/test_<name>.py` per block; other targets ignore TESTs
+silently.
+
+```
+TEST scores_at_least_one_row:
+  FLOW: pipeline
+  WITH:
+    rows: "[{\"name\":\"Acme\",\"ca\":100}]"
+  EXPECTS:
+    risks: not_empty
+  EXPECTS_NOT:
+    error: not_empty
+```
+
+Predicates: `not_empty`, `empty`, `== <literal>`, `!= <literal>`,
+`> N`, `>= N`, `< N`, `<= N`, `contains <literal>`. The state path is a
+top-level field name — nested paths are not yet supported.
+
+```bash
+clio compile risk.clio --target python --output ./out
+cd ./out && pytest tests/ -v
+```
 
 ## Putting it together
 
