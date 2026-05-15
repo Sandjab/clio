@@ -960,6 +960,8 @@ def emit_parallel_for_each_python(
     for a sub-flow body so consumers can distinguish them.
     """
     inner = elem.body[0]
+    # IR validator enforces this — assert so mypy can narrow the Union.
+    assert isinstance(inner, (CallIR, FlowCallIR))
 
     # Render kwargs using the @-prefix disambiguation. Loop var is in scope.
     scope_local = {elem.loop_var}

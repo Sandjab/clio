@@ -975,6 +975,8 @@ def emit_parallel_for_each_mcp(
     collector receives `list[dict[str, ...]]` of the sub-flow's GIVES.
     """
     inner = elem.body[0]
+    # IR validator enforces this — assert so mypy can narrow the Union.
+    assert isinstance(inner, (CallIR, FlowCallIR))
 
     scope_local = {elem.loop_var}
     kw_parts: list[str] = []

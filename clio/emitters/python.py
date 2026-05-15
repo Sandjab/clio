@@ -48,6 +48,7 @@ from clio.ir.graph import (
     MatchBlockIR,
     McpServerSpecIR,
     McpToolImplIR,
+    RescueBlockIR,
     RestImplIR,
     ResumeIR,
     ShellImplIR,
@@ -574,7 +575,7 @@ class PythonEmitter(BaseEmitter):
         # `_set_flow_ctx`. Mutable dicts so the closures pick up the active
         # flow's rescues without re-binding the closure.
         rescue_target_names: set[str] = set()
-        rescues_by_step: dict[str, object] = {}
+        rescues_by_step: dict[str, RescueBlockIR] = {}
 
         def _set_flow_ctx(flow: FlowIR) -> None:
             rescue_target_names.clear()
