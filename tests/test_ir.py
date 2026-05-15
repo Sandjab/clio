@@ -11,6 +11,7 @@ from clio.ir.graph import (
     SseServerSpecIR,
     StdioServerSpecIR,
 )
+from clio.parser.ast_nodes import ListType, PrimitiveType
 from clio.parser.parser import parse
 
 
@@ -1026,3 +1027,99 @@ def test_test_with_kwargs_match_first_step_takes():
     graph = build_ir(parse(src))
     assert len(graph.tests) == 1
     assert graph.tests[0].with_kwargs == (("file", "data/article.txt"),)
+
+
+# ---------------------------------------------------------------------------
+# v0.16 — FLOW.TAKES seeded into chain scope (closes #21)
+# ---------------------------------------------------------------------------
+
+def test_flow_with_declared_takes_compiles_when_chain_starts_with_for_each():
+    """Closes #21 — top-level FOR EACH over an external input now compiles
+    when FLOW.TAKES declares the input."""
+    src = (
+        "STEP classify\n"
+        "  TAKES: item:  str\n"
+        "  GIVES: label: str\n"
+        "  MODE:  judgment\n"
+        "\n"
+        "FLOW pipeline\n"
+        "  TAKES: items: List<str>\n"
+        "  FOR EACH item IN items PARALLEL AS labels:\n"
+        "    classify(item=item)\n"
+    )
+    graph = build_ir(parse(src))
+    assert graph.flow is not None
+    assert len(graph.flow.takes) == 1
+    assert graph.flow.takes[0].name == "items"
+    assert isinstance(graph.flow.takes[0].type, ListType)
+    assert isinstance(graph.flow.takes[0].type.inner, PrimitiveType)
+    assert graph.flow.takes[0].type.inner.name == "str"
+
+
+def test_flow_with_declared_takes_disables_autopromote():
+    """When FLOW.TAKES is declared, a first-step identifier kwarg whose
+    referent is not in TAKES must be rejected — no implicit auto-promote."""
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW pipeline\n"
+        "  TAKES: a: str\n"
+        "  s(x=x)\n"
+    )
+    with pytest.raises(IRBuildError):
+        build_ir(parse(src))
+
+
+def test_flow_without_takes_keeps_autopromote_v0_15_behaviour():
+    """Backward-compat: no FLOW.TAKES → the first-step StepCall auto-promote
+    from PR #20 still fires, so this compiles (x is promoted)."""
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW pipeline\n"
+        "  s(x=x)\n"
+    )
+    graph = build_ir(parse(src))
+    assert graph.flow is not None
+    assert graph.flow.takes == ()    # nothing declared
+
+
+def test_flow_with_declared_takes_rejects_top_level_for_each_over_undeclared():
+    """Top-level FOR EACH over an identifier that is not in FLOW.TAKES is
+    still rejected — the #21 error pattern stays for genuinely undefined names."""
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW pipeline\n"
+        "  TAKES: a: List<str>\n"
+        "  FOR EACH x IN items:\n"
+        "    s(x=x)\n"
+    )
+    with pytest.raises(IRBuildError):
+        build_ir(parse(src))
+
+
+def test_flow_duplicate_takes_field_rejected_at_ir_build():
+    """The parser does not deduplicate fields inside a single TAKES line
+    (parse_field_list accepts a, b, a). The IR builder rejects."""
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW pipeline\n"
+        "  TAKES: a: str, b: int, a: float\n"
+        "  s(x=\"hi\")\n"
+    )
+    with pytest.raises(IRBuildError, match="duplicate TAKES field"):
+        build_ir(parse(src))
