@@ -123,15 +123,28 @@ def render_frontmatter(
 
 def detect_skill_language(graph: FlowGraph) -> str:
     """Heuristic: FR if any common French diacritic appears in flow description
-    or step docstrings; otherwise EN."""
+    or step docstrings; otherwise EN. Both lowercase and uppercase diacritics
+    are recognised — descriptions written as a single sentence naturally open
+    with a capital, and a marker set that only saw lowercase variants would
+    misclassify a perfectly French `Évaluer le risque...` as EN (issue #40).
+
+    The marker set is intentionally restricted to diacritics that are
+    strong FR signals. We include `â` (château, âme), `ù` (où — essentially
+    French-only in modern usage), and `ë` (Noël) alongside the original
+    `éèàçôîêûïü`. We deliberately omit the ligatures `œ` / `æ` because they
+    also appear in archaic / scientific English (`encyclopædia`, `fœtus`,
+    quoted French loans like `œuvre`) and would risk false positives on
+    EN skill descriptions. The heuristic is a hint, not a classifier — it
+    is fine for an edge-case "Où aller ?" to slip through; the cost is
+    EN labels in a FR skill, not an error."""
     samples = []
     flow = getattr(graph, "flow", None)
     if flow is not None:
         samples.append(getattr(flow, "description", "") or "")
     for step in graph.steps:
         samples.append(getattr(step, "description", "") or "")
-    text = " ".join(samples)
-    fr_markers = set("éèàçôîêûïü")
+    text = " ".join(samples).lower()
+    fr_markers = set("éèàçâôîêûïüùë")  # â / ù / ë added per Gemini PR #42 medium feedback
     return "fr" if any(c in fr_markers for c in text) else "en"
 
 

@@ -90,6 +90,49 @@ def test_frontmatter_uses_flow_description_when_present(tmp_path):
     assert front["description"] == graph.flow.description.strip()
 
 
+@pytest.mark.parametrize(
+    "description",
+    [
+        # Capital first-letter diacritics (issue #40 — pre-fix all classified as EN)
+        "Évaluer le risque de churn.",
+        "Être ou ne pas être, telle est la question.",
+        "Âme et conscience d'un système.",
+        # Marker expansion (Gemini PR #42 medium feedback)
+        "Château pour évasion estivale.",  # â
+        "Où dois-je router cette requête ?",  # ù
+        "Noël arrive bientôt et bouscule l'agenda.",  # ë
+        # Lowercase baseline (was already working pre-#40)
+        "évaluer le risque de churn.",
+    ],
+)
+def test_detect_skill_language_handles_french_diacritics(description: str):
+    """Issue #40 + Gemini PR #42 feedback — `detect_skill_language` must
+    recognise both lowercase AND uppercase French diacritics, and cover
+    the common letters that appear at sentence start in natural French
+    (`É`, `Ê`, `Â`) plus the diacritics that mark uniquely French words
+    (`ù` in `où`, `ë` in `Noël`)."""
+    import pytest  # noqa: F401 — silence unused-import warning if collected without param
+
+    from clio.emitters._claude_skill_helpers import detect_skill_language
+
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE: exact\n"
+        "\n"
+        "FLOW pipeline\n"
+        f'  DESCRIPTION: "{description}"\n'
+        '  s(x="hi")\n'
+    )
+    graph = build_ir(parse(src))
+    assert detect_skill_language(graph) == "fr", (
+        f"FR must be detected from {description!r}; got `en`. The heuristic "
+        "must either case-fold the samples (issue #40 fix) or include uppercase "
+        "and broader-coverage markers (PR #42 expansion)."
+    )
+
+
 def test_frontmatter_no_warning_when_flow_description_set(tmp_path, capsys):
     """v0.17.x — when FLOW.DESCRIPTION is provided, the "weak auto-trigger"
     warning must NOT fire. The complementary case (warning fires when
@@ -653,12 +696,11 @@ def test_cache_block_uses_fr_label_when_flow_is_french(tmp_path):
     the assertion is tightened to `"Mise en cache" in body` only — the
     old `"Mise en cache" in body or "Cache" in body` would have passed
     even when FR detection silently regressed."""
-    # The DESCRIPTION must carry a LOWERCASE French diacritic to be picked
-    # up by `detect_skill_language` — its `fr_markers` set is currently
-    # `set("éèàçôîêûïü")` (no uppercase variants). A real French sentence
-    # naturally fits, but a description that opens with `Évaluer` (capital
-    # É) would silently miss detection. Tracked as a follow-up: extend the
-    # marker set to include uppercase + ÉÈÀÇÔÎÊÛÏÜ.
+    # DESCRIPTION opens with a CAPITAL diacritic (`Évaluer`) — a natural
+    # French sentence opener. The heuristic (issue #40 fix) now case-folds
+    # samples via `text.lower()` before scanning, so capital É is detected
+    # just like lowercase é. Pre-fix this exact description would have
+    # silently classified as EN.
     fr_src = (
         "CONTRACT customer_risk\n"
         "  SHAPE: {client: str, risk: enum(low|mid|high), reason: str}\n"
@@ -670,7 +712,7 @@ def test_cache_block_uses_fr_label_when_flow_is_french(tmp_path):
         "  CACHE: ttl(24h)\n"
         "\n"
         "FLOW retention_clients\n"
-        '  DESCRIPTION: "Score le risque de churn à partir des données client."\n'
+        '  DESCRIPTION: "Évaluer le risque de churn du portefeuille client."\n'
         "  detecter_clients(customers=customers)\n"
     )
     graph = build_ir(parse(fr_src))

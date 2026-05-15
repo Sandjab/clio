@@ -163,3 +163,99 @@ def test_keyword_flow_name_compiles_to_valid_python(
     graph = build_ir(parse(_KEYWORD_FLOW_NAME_SRC))
     emitter_cls().emit(graph, tmp_path)
     _assert_all_py_parses(tmp_path, target_label)
+
+
+# Two more cross-emitter sanitization gaps surfaced by the mcp-server PR #36
+# Gemini review and tracked in issue #37: when an `item.collection` (FOR EACH
+# inner) or an `item.state_field` / `item.sub_field` (MATCH) lands as a Python
+# identifier post-emission, it must route through `_to_field_name`. The mcp
+# side was fixed in `47e2d7b`; the python and langgraph emitters share the
+# same dispatch shape and have the same bugs. `claude-skill` is unaffected —
+# its dispatch is a per-script orchestrator that doesn't walk FOR EACH /
+# MATCH the same way.
+
+# Nested FOR EACH where the inner collection references an outer loop var
+# whose name collides with a Python keyword. Outer `class` is sanitized to
+# `class_` at the loop-var definition (existing v0.17.1 fix); the inner
+# `for y in class:` must also reference `class_`. langgraph rejects FOR EACH
+# at compile time, so it's excluded here.
+_KEYWORD_FOR_EACH_COLLECTION_SRC = (
+    "STEP inner\n"
+    "  TAKES: y: str\n"
+    "  GIVES: z: str\n"
+    "  MODE: exact\n"
+    "FLOW pipeline\n"
+    "  TAKES: xs: List<List<str>>\n"
+    "  FOR EACH class IN xs:\n"
+    "    FOR EACH y IN class:\n"
+    "      inner(y=y)\n"
+)
+
+# MATCH on a contract field whose name is a Python keyword. `result.class`
+# is a SyntaxError; emitters must rewrite it to `result.class_` (the
+# Pydantic model already renames the field with `alias='class'` per the
+# v0.17.1 contract fix). Both python and langgraph compile MATCH; both
+# need the fix.
+_KEYWORD_MATCH_SUB_FIELD_SRC = (
+    "CONTRACT Foo\n"
+    "  SHAPE: {class: enum(a|b|c)}\n"
+    "\n"
+    "STEP s\n"
+    "  TAKES: x: str\n"
+    "  GIVES: result: Foo\n"
+    "  MODE: exact\n"
+    "STEP handler_a\n"
+    "  TAKES: r: Foo\n"
+    "  GIVES: y: str\n"
+    "  MODE: exact\n"
+    "FLOW pipeline\n"
+    '    s(x="hello")\n'
+    "    -> MATCH result.class:\n"
+    "        CASE a:\n"
+    "            handler_a(r=result)\n"
+    "        DEFAULT:\n"
+    "            handler_a(r=result)\n"
+)
+
+
+@pytest.mark.parametrize(
+    "emitter_cls,target_label",
+    [
+        (PythonEmitter, "python"),
+        (MCPServerEmitter, "mcp-server"),
+        (ClaudeSkillEmitter, "claude-skill"),
+    ],
+)
+def test_keyword_for_each_inner_collection_compiles_to_valid_python(
+    tmp_path: Path, emitter_cls: type, target_label: str
+) -> None:
+    """Nested FOR EACH whose inner collection references an outer keyword-
+    named loop variable. mcp-server already had the fix (PR #36 / issue #37
+    closer); this test extends the parametrization so python and
+    claude-skill also stay green. langgraph rejects FOR EACH at compile
+    time and is excluded."""
+    graph = build_ir(parse(_KEYWORD_FOR_EACH_COLLECTION_SRC))
+    emitter_cls().emit(graph, tmp_path)
+    _assert_all_py_parses(tmp_path, target_label)
+
+
+@pytest.mark.parametrize(
+    "emitter_cls,target_label",
+    [
+        (PythonEmitter, "python"),
+        (MCPServerEmitter, "mcp-server"),
+        (LangGraphEmitter, "langgraph"),
+    ],
+)
+def test_keyword_match_sub_field_compiles_to_valid_python(
+    tmp_path: Path, emitter_cls: type, target_label: str
+) -> None:
+    """MATCH on a contract field whose name is a Python keyword. The
+    Pydantic model has `Field(alias='class')` so the attribute is
+    accessible as `obj.class_`; the emitter must rewrite the bare
+    `obj.class` (a SyntaxError) accordingly. claude-skill currently
+    does not emit MATCH dispatch as Python — its orchestrator renders
+    a markdown narrative — so it's out of scope."""
+    graph = build_ir(parse(_KEYWORD_MATCH_SUB_FIELD_SRC))
+    emitter_cls().emit(graph, tmp_path)
+    _assert_all_py_parses(tmp_path, target_label)
