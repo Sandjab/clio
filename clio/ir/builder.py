@@ -170,23 +170,27 @@ def build_ir(program: Program, flow_name: str | None = None) -> FlowGraph:
 
     flow_sigs = _extract_flow_signatures(flow_decls)
 
-    flow_ir: FlowIR | None = None
+    # Build every FlowIR (signed + unsigned). Sub-flow calls resolve
+    # against flow_sigs; unsigned flows remain runnable as the main
+    # flow but can't be called as sub-flows.
+    all_flows: dict[str, FlowIR] = {}
+    for d in flow_decls:
+        all_flows[d.name] = _build_flow(d, steps_by_name, flow_sigs, contracts)
+
+    _detect_flow_call_cycles(all_flows)
+
+    main: FlowIR | None = None
     if flow_name is not None:
-        match = next((d for d in flow_decls if d.name == flow_name), None)
-        if match is None:
-            available = ", ".join(d.name for d in flow_decls) or "<none>"
+        if flow_name not in all_flows:
+            available = ", ".join(sorted(all_flows)) or "<none>"
             raise IRBuildError(
                 f"flow {flow_name!r} not found in source (available: {available})"
             )
-        flow_ir = _build_flow(match, steps_by_name, flow_sigs, contracts)
-    elif len(flow_decls) == 1:
-        flow_ir = _build_flow(flow_decls[0], steps_by_name, flow_sigs, contracts)
-    elif len(flow_decls) > 1:
-        names = ", ".join(d.name for d in flow_decls)
-        raise IRBuildError(
-            f"source declares {len(flow_decls)} FLOWs ({names}); "
-            f"pass --flow <name> to select one"
-        )
+        main = all_flows[flow_name]
+    elif len(all_flows) == 1:
+        main = next(iter(all_flows.values()))
+    # else: main stays None; targets that need a main (python, langgraph,
+    # claude-skill, claude-cli) will fail in their own emit pass.
 
     resources_ir: ResourcesIR | None = None
     for d in program.decls:
@@ -208,9 +212,11 @@ def build_ir(program: Program, flow_name: str | None = None) -> FlowGraph:
     graph = FlowGraph(
         steps=tuple(steps_by_name.values()),
         contracts=tuple(contracts.values()),
-        flow=flow_ir,
+        flow=main,
         resources=resources_ir,
         tests=tests_ir,
+        flows=tuple(all_flows.values()),
+        exposed_flow_names=_compute_exposed_flows(all_flows, flow_sigs),
     )
     _validate_parallel_for_each(graph)
     _validate_mcp_tool_servers(graph)
@@ -447,6 +453,85 @@ def _detect_fallback_cycles(steps_by_name: dict[str, StepIR]) -> None:
     for n in steps_by_name:
         if color[n] == WHITE:
             visit(n, [])
+
+
+def _collect_flow_call_names(
+    items: "tuple[object, ...]",
+) -> set[str]:
+    """Walk a FLOW chain (or nested body) and collect every FLOW name
+    invoked via FlowCallIR, including inside FOR EACH / IF / MATCH /
+    WHILE bodies."""
+    out: set[str] = set()
+    for it in items:
+        if isinstance(it, FlowCallIR):
+            out.add(it.flow_name)
+        elif isinstance(it, (ForEachIR, WhileBlockIR)):
+            out.update(_collect_flow_call_names(it.body))
+        elif isinstance(it, IfBlockIR):
+            out.update(_collect_flow_call_names(it.then_body))
+            out.update(_collect_flow_call_names(it.else_body))
+        elif isinstance(it, MatchBlockIR):
+            for arm in it.cases:
+                out.update(_collect_flow_call_names(arm.body))
+    return out
+
+
+def _collect_flow_call_names_rescues(
+    rescues: "tuple[RescueBlockIR, ...]",
+) -> set[str]:
+    out: set[str] = set()
+    for r in rescues:
+        out.update(_collect_flow_call_names(r.body))
+    return out
+
+
+def _detect_flow_call_cycles(flows: dict[str, FlowIR]) -> None:
+    """DFS three-color cycle detection over the flow->flow call graph.
+    Self-edges are reported as 'recursion'; longer cycles as 'cycle'."""
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color: dict[str, int] = {n: WHITE for n in flows}
+    edges: dict[str, set[str]] = {
+        n: _collect_flow_call_names(f.chain) | _collect_flow_call_names_rescues(f.rescues)
+        for n, f in flows.items()
+    }
+
+    def visit(name: str, path: list[str]) -> None:
+        color[name] = GRAY
+        for nb in sorted(edges.get(name, ())):
+            if nb not in flows:
+                continue
+            if nb == name:
+                f = flows[name]
+                raise IRBuildError(
+                    f"line {f.line}:0: FLOW {name!r} calls itself "
+                    f"(recursion not supported in v0.17)"
+                )
+            if color[nb] == GRAY:
+                f = flows[name]
+                raise IRBuildError(
+                    f"line {f.line}:0: sub-flow call creates a cycle: "
+                    f"{' -> '.join([*path, name, nb])}"
+                )
+            if color[nb] == WHITE:
+                visit(nb, [*path, name])
+        color[name] = BLACK
+
+    for n in flows:
+        if color[n] == WHITE:
+            visit(n, [])
+
+
+def _compute_exposed_flows(
+    all_flows: dict[str, FlowIR],
+    flow_sigs: dict[str, "FlowSignature"],
+) -> frozenset[str]:
+    """A FLOW is exposed iff it has an explicit signature AND is not
+    called by any sibling FLOW in the same source."""
+    called: set[str] = set()
+    for f in all_flows.values():
+        called.update(_collect_flow_call_names(f.chain))
+        called.update(_collect_flow_call_names_rescues(f.rescues))
+    return frozenset(n for n in flow_sigs if n not in called)
 
 
 def _build_step(decl: StepDecl) -> StepIR:

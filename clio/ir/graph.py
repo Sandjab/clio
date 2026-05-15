@@ -416,3 +416,5 @@ class FlowGraph:
     flow: FlowIR | None = None
     resources: ResourcesIR | None = None
     tests: tuple[TestIR, ...] = ()
+    flows: tuple[FlowIR, ...] = ()                         # v0.17 — every FLOW, signed or not
+    exposed_flow_names: frozenset[str] = frozenset()       # v0.17 — for target=mcp-server
