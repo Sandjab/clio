@@ -2502,3 +2502,59 @@ def test_emit_with_python_keyword_flow_name_produces_importable_package(tmp_path
     for py in pkg_dir.rglob("*.py"):
         code = py.read_text()
         compile(code, str(py), "exec")  # raises SyntaxError if any import is broken
+
+
+# --- v0.16: typed run() signature from FLOW.TAKES / FLOW.GIVES -------------
+
+def test_python_emits_typed_run_signature_from_flow_takes(tmp_path):
+    """When FLOW.TAKES is declared, run() uses named typed parameters and
+    returns only the fields declared in FLOW.GIVES."""
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW p\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  s(x=x)\n"
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = (tmp_path / "p" / "flow.py").read_text()
+
+    # Typed named parameter replaces **initial; start_at still present.
+    assert "def run(*, x: str, start_at: int = 0) -> dict:" in flow_py
+
+    # State initialised from named param, not dict(initial).
+    assert "state: dict = {'x': x}" in flow_py
+    assert "dict(initial)" not in flow_py
+
+    # Returns only the declared GIVES field.
+    assert "return {'y': state['y']}" in flow_py
+    assert "return state" not in flow_py
+
+    # Resume path (start_at > 0) still reads from state.json — it must be
+    # present and precede the else branch that does the named-param init.
+    assert "state: dict = payload[\"state\"]" in flow_py
+
+
+def test_python_emits_kwargs_run_when_flow_has_no_signature(tmp_path):
+    """When FLOW.TAKES / FLOW.GIVES are absent, the v0.15 **initial /
+    full-state-return signature is preserved byte-for-byte."""
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW p\n"
+        '  s(x="hello")\n'
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    flow_py = (tmp_path / "p" / "flow.py").read_text()
+
+    # v0.15 backward-compat signature.
+    assert "def run(*, start_at: int = 0, **initial: object) -> dict:" in flow_py
+    assert "state: dict = dict(initial)" in flow_py
+    assert "return state" in flow_py
