@@ -558,6 +558,7 @@ class PythonEmitter(BaseEmitter):
         chain_groups: list[list[str]] = []
         imported_steps: list[str] = []
         steps_by_name = {s.name: s for s in graph.steps}
+        contracts_by_name_flow = {c.name: c for c in graph.contracts}
         # RESCUE bookkeeping: the names of steps protected by a RESCUE block
         # (used to wrap their call site in try/except) and the blocks
         # themselves (used to emit the _rescue_<name> helper functions).
@@ -785,6 +786,41 @@ class PythonEmitter(BaseEmitter):
         # `set_flow("name")` consistently across emitters.
         flow_name_lit = json.dumps(graph.flow.name)
         total_steps = len(graph.flow.chain)
+
+        # v0.16: typed run() signature from FLOW.TAKES / FLOW.GIVES.
+        # When FLOW.TAKES is declared, named typed params replace **initial.
+        # When absent, the v0.15 **initial / full-state-return is preserved
+        # (byte-identical output for flows without a declared signature).
+        flow = graph.flow
+        if flow.takes:
+            # Sanitize parameter identifiers via `_to_field_name` so Python
+            # keywords (e.g. `class`, `def`) declared in FLOW.TAKES don't
+            # produce a SyntaxError in the emitted run() signature. The
+            # state-dict KEY keeps the original `f.name` (it's a string
+            # literal, not an identifier).
+            named_params = ", ".join(
+                f"{_to_field_name(f.name)}: {_type_to_python(f.type, contracts_by_name_flow)}"
+                for f in flow.takes
+            )
+            run_sig = f"def run(*, {named_params}, start_at: int = 0) -> dict:\n"
+            state_init = (
+                "        state: dict = {"
+                + ", ".join(f"{f.name!r}: {_to_field_name(f.name)}" for f in flow.takes)
+                + "}\n"
+            )
+        else:
+            run_sig = "def run(*, start_at: int = 0, **initial: object) -> dict:\n"
+            state_init = "        state: dict = dict(initial)\n"
+
+        if flow.gives:
+            return_expr = (
+                "        return {"
+                + ", ".join(f"{f.name!r}: state[{f.name!r}]" for f in flow.gives)
+                + "}\n"
+            )
+        else:
+            return_expr = "        return state\n"
+
         return (
             f'"""FLOW {graph.flow.name}.\n\n'
             f'Auto-generated. Calls steps in chain order, threading state through a dict.\n'
@@ -814,7 +850,7 @@ class PythonEmitter(BaseEmitter):
             f'    os.replace(tmp, path)\n'
             f'\n'
             f'\n'
-            f'def run(*, start_at: int = 0, **initial: object) -> dict:\n'
+            f'{run_sig}'
             f'    if start_at > 0:\n'
             f'        path = os.environ.get("CLIO_STATE_FILE", "state.json")\n'
             f'        if not os.path.exists(path):\n'
@@ -839,7 +875,7 @@ class PythonEmitter(BaseEmitter):
             f'            raise SystemExit(2)\n'
             f'        state: dict = payload["state"]\n'
             f'    else:\n'
-            f'        state: dict = dict(initial)\n'
+            f'{state_init}'
             f'    _log.set_flow({flow_name_lit})\n'
             f'    _log.emit("flow_start", resumed_from=start_at if start_at > 0 else 0)\n'
             f'    _success = False\n'
@@ -847,7 +883,7 @@ class PythonEmitter(BaseEmitter):
             f'    try:\n'
             f'{chain_body}\n'
             f'        _success = True\n'
-            f'        return state\n'
+            f'{return_expr}'
             f'    finally:\n'
             f'        _log.emit("flow_end", '
             f'duration_ms=int((time.monotonic() - _t0) * 1000), '

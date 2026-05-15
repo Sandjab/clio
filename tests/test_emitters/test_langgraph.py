@@ -263,3 +263,48 @@ def test_reject_sql(tmp_path):
         '      url:    ":memory:"\n'
     )
     _expect_reject(src, ["impl.mode: sql", "langgraph", "python"], tmp_path)
+
+
+def test_langgraph_state_typeddict_includes_declared_flow_takes(tmp_path):
+    """Declared FLOW.TAKES surface in State; run() returns only declared FLOW.GIVES."""
+    src = """STEP s
+  TAKES: x: str
+  GIVES: y: str
+  MODE:  exact
+
+FLOW pipeline
+  TAKES: x: str, threshold: float
+  GIVES: y: str
+  s(x=x)
+"""
+    _emit(src, tmp_path)
+    flow_py = (tmp_path / "pipeline" / "flow.py").read_text()
+    # Declared FLOW.TAKES must appear in State (both fields)
+    assert "class State(TypedDict" in flow_py
+    assert "x:" in flow_py
+    assert "threshold:" in flow_py
+    # Step GIVES also in State
+    assert "y:" in flow_py
+    # run() returns only declared GIVES
+    assert "'y': result['y']" in flow_py or '"y": result["y"]' in flow_py
+    # run() must NOT fall back to full-state return
+    assert "return dict(result)" not in flow_py
+
+
+def test_langgraph_falls_back_when_no_flow_signature(tmp_path):
+    """v0.15 backward-compat: no FLOW.TAKES/GIVES → existing inference + full-state return."""
+    src = """STEP s
+  TAKES: x: str
+  GIVES: y: str
+  MODE:  exact
+
+FLOW p
+  s(x=x)
+"""
+    _emit(src, tmp_path)
+    flow_py = (tmp_path / "p" / "flow.py").read_text()
+    # v0.15 inference: x is not produced upstream, so it appears in State
+    assert "x:" in flow_py
+    assert "y:" in flow_py
+    # run() returns the full state
+    assert "return dict(result)" in flow_py

@@ -182,6 +182,8 @@ class FlowDecl:
     rescues: "tuple[RescueBlock, ...]"
     line: int
     col: int
+    takes: tuple[Field, ...] = ()      # v0.16 — empty tuple = field not declared
+    gives: tuple[Field, ...] = ()      # v0.16 — empty tuple = field not declared
 
 
 @dataclass(frozen=True)

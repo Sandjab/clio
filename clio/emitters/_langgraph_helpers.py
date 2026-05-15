@@ -65,18 +65,28 @@ def _collect_state_fields(
 ) -> list[tuple[str, str]]:
     """Walk all STEP TAKES and GIVES to collect the State TypedDict fields.
     Returns an ordered list of (field_name, python_type_str) preserving
-    declaration order: TAKES inputs first, then GIVES outputs."""
+    declaration order: TAKES inputs first, then GIVES outputs.
+
+    v0.16: when FLOW.TAKES is declared, those fields take precedence over the
+    auto-inferred 'TAKES-not-produced-upstream' first pass. The second pass
+    (GIVES) still runs to include every step's output in the State."""
     seen: set[str] = set()
     fields: list[tuple[str, str]] = []
 
-    # First pass: TAKES that are NOT produced by any upstream GIVES become
-    # external inputs the user passes via run(...) or app.invoke({...}).
-    produced_names = {s.gives.name for s in graph.steps if s.gives is not None}
-    for step in graph.steps:
-        for f in step.takes:
-            if f.name not in produced_names and f.name not in seen:
-                fields.append((f.name, _type_to_python(f.type, contracts_by_name)))
-                seen.add(f.name)
+    # v0.16: declared FLOW.TAKES override the auto-inferred first pass.
+    if graph.flow is not None and graph.flow.takes:
+        for f in graph.flow.takes:
+            fields.append((f.name, _type_to_python(f.type, contracts_by_name)))
+            seen.add(f.name)
+    else:
+        # v0.15 fallback: TAKES that are NOT produced by any upstream GIVES
+        # become external inputs the user passes via run(...) or app.invoke({...}).
+        produced_names = {s.gives.name for s in graph.steps if s.gives is not None}
+        for step in graph.steps:
+            for f in step.takes:
+                if f.name not in produced_names and f.name not in seen:
+                    fields.append((f.name, _type_to_python(f.type, contracts_by_name)))
+                    seen.add(f.name)
 
     # Second pass: GIVES, in step declaration order.
     for step in graph.steps:
@@ -334,13 +344,20 @@ def emit_flow_module(
         _emit_edge(src, "END")
     graph_lines.append("    return workflow.compile()")
 
-    # run() entrypoint
+    # run() entrypoint — v0.16: return only declared FLOW.GIVES when present.
+    if graph.flow is not None and graph.flow.gives:
+        return_expr = "    return {" + ", ".join(
+            f"{f.name!r}: result[{f.name!r}]" for f in graph.flow.gives
+        ) + "}"
+    else:
+        return_expr = "    return dict(result)"
+
     run_block = "\n".join([
         "def run(**initial: object) -> dict:",
         '    """Compile the graph and invoke it once with `initial` as starting state."""',
         "    app = build_graph()",
         "    result = app.invoke(initial)",
-        "    return dict(result)",
+        return_expr,
     ])
 
     sections = [*imports, state_block, "", "", "\n\n".join(node_wrappers)]

@@ -637,6 +637,35 @@ def render_resources_annex(graph: FlowGraph, lang: str = "en") -> str:
     return "".join(lines)
 
 
+def render_flow_signature_section(graph: FlowGraph, lang: str = "en") -> str:
+    """Render declared FLOW.TAKES / FLOW.GIVES as an Inputs/Outputs section.
+
+    Only called when ``graph.flow`` has at least one non-empty takes or gives
+    tuple (v0.16 declared signatures).  Returns "" when both are empty so the
+    caller never inserts a blank section for v0.15 flows.
+    """
+    flow = getattr(graph, "flow", None)
+    if flow is None:
+        return ""
+    takes: tuple = getattr(flow, "takes", ())
+    gives: tuple = getattr(flow, "gives", ())
+    if not takes and not gives:
+        return ""
+
+    inputs_label = {"en": "Inputs", "fr": "Entrées"}[lang]
+    outputs_label = {"en": "Outputs", "fr": "Sorties"}[lang]
+    lines: list[str] = []
+    if takes:
+        lines.append(f"\n## {inputs_label}\n\n")
+        for field in takes:
+            lines.append(f"- `{field.name}`: {_type_to_display(field.type)}\n")
+    if gives:
+        lines.append(f"\n## {outputs_label}\n\n")
+        for field in gives:
+            lines.append(f"- `{field.name}`: {_type_to_display(field.type)}\n")
+    return "".join(lines)
+
+
 def render_skill_md(
     graph: FlowGraph,
     *,
@@ -653,6 +682,13 @@ def render_skill_md(
     """
     lang = detect_skill_language(graph)
     parts = [render_frontmatter(graph, warn=warn), f"\n# {_flow_name(graph)}\n"]
+
+    # Surface declared FLOW.TAKES / FLOW.GIVES when present (v0.16).
+    # For v0.15 flows without a declared signature, this returns "" (no change).
+    sig = render_flow_signature_section(graph, lang=lang)
+    if sig:
+        parts.append(sig)
+
     for idx, step in enumerate(graph.steps, start=1):
         if step.mode == "exact":
             parts.append(render_exact_step_section(step, idx, lang=lang))

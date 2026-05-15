@@ -156,7 +156,44 @@ def _last_step_of_flow(graph: FlowGraph) -> StepIR | None:
     return by_name.get(last_call.step_name) if last_call else None
 
 
+def _declared_field_schema(t, contracts_by_name: dict) -> dict | None:
+    """Render a JSON Schema for a declared FLOW.TAKES / FLOW.GIVES field type.
+
+    Inlines `ContractRef` and `List<ContractRef>` because MCP clients cannot
+    resolve `$ref` against an external definitions block. Falls back to
+    `type_to_json_schema(t)` for primitives and inline records."""
+    if isinstance(t, ContractRef):
+        contract = contracts_by_name.get(t.name)
+        return contract.json_schema if contract is not None else type_to_json_schema(t)
+    if isinstance(t, ListType) and isinstance(t.inner, ContractRef):
+        contract = contracts_by_name.get(t.inner.name)
+        if contract is not None:
+            return {"type": "array", "items": contract.json_schema}
+    try:
+        return type_to_json_schema(t)
+    except (NotImplementedError, Exception):
+        return None
+
+
 def _output_schema_for_flow(graph: FlowGraph) -> dict | None:
+    # v0.16: prefer declared FLOW.GIVES when present.
+    if graph.flow is not None and graph.flow.gives:
+        contracts_by_name = {c.name: c for c in graph.contracts}
+
+        if len(graph.flow.gives) == 1:
+            return _declared_field_schema(graph.flow.gives[0].type, contracts_by_name)
+
+        # Multi-field GIVES: wrap in an object schema.
+        properties = {}
+        required = []
+        for f in graph.flow.gives:
+            schema = _declared_field_schema(f.type, contracts_by_name)
+            if schema is not None:
+                properties[f.name] = schema
+                required.append(f.name)
+        return {"type": "object", "properties": properties, "required": required}
+
+    # v0.15 fallback: infer from the last step's GIVES.
     last = _last_step_of_flow(graph)
     if last is None or last.gives is None:
         return None
@@ -182,6 +219,20 @@ def _output_schema_for_flow(graph: FlowGraph) -> dict | None:
 
 
 def _input_schema_for_flow(graph: FlowGraph) -> dict:
+    # v0.16: prefer declared FLOW.TAKES when present. Uses the same
+    # ContractRef-inlining helper as the output schema for symmetry.
+    if graph.flow is not None and graph.flow.takes:
+        contracts_by_name = {c.name: c for c in graph.contracts}
+        properties = {}
+        required = []
+        for f in graph.flow.takes:
+            schema = _declared_field_schema(f.type, contracts_by_name)
+            if schema is not None:
+                properties[f.name] = schema
+                required.append(f.name)
+        return {"type": "object", "properties": properties, "required": required}
+
+    # v0.15 fallback: infer from the first step's TAKES, with literal-kwarg defaults.
     first = _first_step_of_flow(graph)
     if first is None or not first.takes:
         return {"type": "object", "properties": {}, "required": []}

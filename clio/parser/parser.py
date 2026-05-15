@@ -2035,6 +2035,35 @@ class _Parser:
         self.expect(TokenType.NEWLINE)
         self.expect(TokenType.INDENT)
 
+        takes: tuple[Field, ...] = ()
+        gives: tuple[Field, ...] = ()
+        # v0.16: optional FLOW.TAKES / FLOW.GIVES blocks before the chain.
+        # Either order; duplicates rejected; absent fields default to ().
+        while True:
+            t = self.peek()
+            if t.type != TokenType.KEYWORD:
+                break
+            if t.value == "TAKES":
+                if takes:
+                    raise ParseError(
+                        f"FLOW {ident.value} has duplicate TAKES field", t.line, t.col,
+                    )
+                self.advance()
+                self.expect(TokenType.COLON)
+                takes = self.parse_field_list()
+                self.expect(TokenType.NEWLINE)
+            elif t.value == "GIVES":
+                if gives:
+                    raise ParseError(
+                        f"FLOW {ident.value} has duplicate GIVES field", t.line, t.col,
+                    )
+                self.advance()
+                self.expect(TokenType.COLON)
+                gives = self.parse_field_list()
+                self.expect(TokenType.NEWLINE)
+            else:
+                break
+
         chain: list[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock | ResumeAst] = [self.parse_flow_item()]
         # Skip newlines and indent/dedent changes between chain elements,
         # then look for ARROW. The -> may appear on a more-indented continuation line.
@@ -2093,6 +2122,8 @@ class _Parser:
             chain=tuple(chain),
             rescues=tuple(rescues),
             line=kw.line, col=kw.col,
+            takes=takes,
+            gives=gives,
         )
 
     def parse_flow_item(self) -> "StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock | ResumeAst":

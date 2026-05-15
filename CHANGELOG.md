@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+### Language
+
+- **`FLOW.TAKES` and `FLOW.GIVES`** (`docs/LANGUAGE_SPEC.md` §FLOW signature) — `FLOW` declarations now accept optional `TAKES:` and `GIVES:` blocks mirroring `STEP`. When `FLOW.TAKES` is declared, the named inputs are seeded into the chain's initial scope, so a chain that starts with `FOR EACH` / `IF` / `WHILE` over an external identifier compiles cleanly (closes #21, #23). When `FLOW.GIVES` is declared, the IR builder verifies subset coverage against the last chain item's effective state at compile time. When both blocks are absent, v0.15.1 behaviour is preserved (StepCall auto-promote for inputs, last-step inference for outputs).
+
+### Emitters
+
+- `python`: `run()` gains a typed signature derived from `FLOW.TAKES` when declared, and returns a dict keyed by `FLOW.GIVES` field names. Backward-compatible: flows without a declared signature keep the v0.15 `**initial` / full-state-return shape.
+- `mcp-server` and `claude-skill`: `inputSchema` / `outputSchema` (resp. SKILL.md Inputs / Outputs sections) derive from `FLOW.TAKES` / `FLOW.GIVES` when declared, replacing the previous first-step / last-step inference. `claude-skill` emits Inputs / Outputs markdown sections only when the FLOW signature is declared (v0.15 output is byte-identical for unsigned flows).
+- `langgraph`: the emitted `State` TypedDict reflects declared FLOW.TAKES alongside the per-step GIVES. `run()` returns only the declared FLOW.GIVES subset when present.
+- `claude-cli`: the emitted README surfaces declared FLOW inputs (initial `state.json` keys) when the FLOW signature is declared.
+
+### TEST block
+
+- `WITH:` kwarg names and Python literal types are type-checked at parse time against `FLOW.TAKES` when declared. `EXPECTS:` / `EXPECTS_NOT:` field paths are validated against `FLOW.GIVES`. When the target FLOW does not declare a signature, the v0.15 runtime-only behaviour is preserved.
+
+### Example
+
+- New `examples/flow_signature.clio` — minimal demonstration of the top-level `FOR EACH PARALLEL` pattern, with `FLOW.TAKES` / `FLOW.GIVES` declared, compiling to `python`, `mcp-server`, and `claude-skill`.
+
+### Closes
+
+- #21 (FOR EACH at the head of a chain over an external input).
+- #23 (parent issue for this feature).
+
+---
+
 ## v0.15.1 — 2026-05-15
 
 Bug-fix bundle for issues #17 / #18 / #19, shipped as PR #20.

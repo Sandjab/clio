@@ -11,6 +11,7 @@ from clio.ir.graph import (
     SseServerSpecIR,
     StdioServerSpecIR,
 )
+from clio.parser.ast_nodes import ListType, PrimitiveType
 from clio.parser.parser import parse
 
 
@@ -1026,3 +1027,258 @@ def test_test_with_kwargs_match_first_step_takes():
     graph = build_ir(parse(src))
     assert len(graph.tests) == 1
     assert graph.tests[0].with_kwargs == (("file", "data/article.txt"),)
+
+
+# ---------------------------------------------------------------------------
+# v0.16 — TEST WITH / EXPECTS type-checked against declared FLOW signature
+# ---------------------------------------------------------------------------
+
+def test_test_with_unknown_kwarg_against_declared_takes_rejected():
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW p\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  s(x=x)\n"
+        "\n"
+        "TEST t:\n"
+        "  FLOW: p\n"
+        "  WITH:\n"
+        '    not_there: "oops"\n'
+        "  EXPECTS:\n"
+        "    y: not_empty\n"
+    )
+    with pytest.raises(IRBuildError, match="not_there"):
+        build_ir(parse(src))
+
+
+def test_test_expects_unknown_root_against_declared_gives_rejected():
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW p\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  s(x=x)\n"
+        "\n"
+        "TEST t:\n"
+        "  FLOW: p\n"
+        "  WITH:\n"
+        '    x: "hi"\n'
+        "  EXPECTS:\n"
+        "    not_there: not_empty\n"
+    )
+    with pytest.raises(IRBuildError, match="not_there"):
+        build_ir(parse(src))
+
+
+def test_test_without_flow_signature_skips_type_check_v0_15_backcompat():
+    """v0.15 behaviour preserved when FLOW does not declare TAKES/GIVES."""
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW p\n"
+        "  s(x=x)\n"
+        "\n"
+        "TEST t:\n"
+        "  FLOW: p\n"
+        "  WITH:\n"
+        '    anything: "goes"\n'
+        "  EXPECTS:\n"
+        "    y: not_empty\n"
+    )
+    build_ir(parse(src))    # no exception expected
+
+
+# ---------------------------------------------------------------------------
+# v0.16 — FLOW.TAKES seeded into chain scope (closes #21)
+# ---------------------------------------------------------------------------
+
+def test_flow_with_declared_takes_compiles_when_chain_starts_with_for_each():
+    """Closes #21 — top-level FOR EACH over an external input now compiles
+    when FLOW.TAKES declares the input."""
+    src = (
+        "STEP classify\n"
+        "  TAKES: item:  str\n"
+        "  GIVES: label: str\n"
+        "  MODE:  judgment\n"
+        "\n"
+        "FLOW pipeline\n"
+        "  TAKES: items: List<str>\n"
+        "  FOR EACH item IN items PARALLEL AS labels:\n"
+        "    classify(item=item)\n"
+    )
+    graph = build_ir(parse(src))
+    assert graph.flow is not None
+    assert len(graph.flow.takes) == 1
+    assert graph.flow.takes[0].name == "items"
+    assert isinstance(graph.flow.takes[0].type, ListType)
+    assert isinstance(graph.flow.takes[0].type.inner, PrimitiveType)
+    assert graph.flow.takes[0].type.inner.name == "str"
+
+
+def test_flow_with_declared_takes_disables_autopromote():
+    """When FLOW.TAKES is declared, a first-step identifier kwarg whose
+    referent is not in TAKES must be rejected — no implicit auto-promote."""
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW pipeline\n"
+        "  TAKES: a: str\n"
+        "  s(x=x)\n"
+    )
+    with pytest.raises(IRBuildError, match="state reference 'x' not produced"):
+        build_ir(parse(src))
+
+
+def test_flow_without_takes_keeps_autopromote_v0_15_behaviour():
+    """Backward-compat: no FLOW.TAKES → the first-step StepCall auto-promote
+    from PR #20 still fires, so this compiles (x is promoted)."""
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW pipeline\n"
+        "  s(x=x)\n"
+    )
+    graph = build_ir(parse(src))
+    assert graph.flow is not None
+    assert graph.flow.takes == ()    # nothing declared
+
+
+def test_flow_with_declared_takes_rejects_top_level_for_each_over_undeclared():
+    """Top-level FOR EACH over an identifier that is not in FLOW.TAKES is
+    still rejected — the #21 error pattern stays for genuinely undefined names."""
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW pipeline\n"
+        "  TAKES: a: List<str>\n"
+        "  FOR EACH x IN items:\n"
+        "    s(x=x)\n"
+    )
+    with pytest.raises(IRBuildError, match="FOR EACH iterates over 'items'"):
+        build_ir(parse(src))
+
+
+def test_flow_duplicate_takes_field_rejected_at_ir_build():
+    """The parser does not deduplicate fields inside a single TAKES line
+    (parse_field_list accepts a, b, a). The IR builder rejects."""
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW pipeline\n"
+        "  TAKES: a: str, b: int, a: float\n"
+        "  s(x=\"hi\")\n"
+    )
+    with pytest.raises(IRBuildError, match="duplicate TAKES field"):
+        build_ir(parse(src))
+
+
+def test_flow_gives_coverage_compiles_when_field_matches_last_step():
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW p\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  s(x=x)\n"
+    )
+    graph = build_ir(parse(src))
+    assert graph.flow is not None
+    assert len(graph.flow.gives) == 1
+    assert graph.flow.gives[0].name == "y"
+
+
+def test_flow_gives_rejects_missing_field():
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW p\n"
+        "  TAKES: x: str\n"
+        "  GIVES: not_there: str\n"
+        "  s(x=x)\n"
+    )
+    with pytest.raises(IRBuildError, match="GIVES field 'not_there' but no step in the chain produces it"):
+        build_ir(parse(src))
+
+
+def test_flow_gives_rejects_type_mismatch():
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW p\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: int\n"
+        "  s(x=x)\n"
+    )
+    with pytest.raises(IRBuildError, match="GIVES field 'y'.*but the chain produces"):
+        build_ir(parse(src))
+
+
+def test_flow_gives_allows_subset_coverage():
+    """The chain can produce more fields than FLOW.GIVES declares —
+    only the declared subset is exposed externally."""
+    src = (
+        "STEP s1\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "STEP s2\n"
+        "  TAKES: y: str\n"
+        "  GIVES: z: int\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW p\n"
+        "  TAKES: x: str\n"
+        "  GIVES: z: int\n"
+        "  s1(x=x) -> s2(y=y)\n"
+    )
+    graph = build_ir(parse(src))
+    assert {f.name for f in graph.flow.gives} == {"z"}
+
+
+def test_flow_duplicate_gives_field_rejected_at_ir_build():
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW p\n"
+        "  GIVES: a: str, b: int, a: float\n"
+        "  s(x=\"hi\")\n"
+    )
+    with pytest.raises(IRBuildError, match="duplicate GIVES field"):
+        build_ir(parse(src))

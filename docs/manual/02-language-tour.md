@@ -227,6 +227,10 @@ WHILE). Compiles to **python**, **mcp-server**, and **claude-skill**
 (rendered as a RESCUE sub-section in `SKILL.md` for the LLM host to
 follow); **langgraph** and **claude-cli** reject at compile time.
 
+### FLOW signature (v0.16, optional)
+
+A `FLOW` may declare `TAKES:` and `GIVES:` blocks, mirroring `STEP`. This is the recommended form when a flow starts with `FOR EACH` / `IF` / `WHILE` over an external input, when you want the test suite to type-check `TEST WITH:` / `EXPECTS:` clauses, or when you want a clean `inputSchema`/`outputSchema` exposed by the `mcp-server` or `claude-skill` targets. When a FLOW omits the signature, v0.15 behaviour is preserved (input auto-promotion from the first step, output inferred from the last step).
+
 ## Multiple FLOWs per file (v0.15)
 
 A source file may declare any number of `FLOW`s. `clio compile` and

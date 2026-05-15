@@ -1,0 +1,22 @@
+# Demonstrates v0.16 FLOW.TAKES / FLOW.GIVES — the explicit FLOW signature.
+# Before v0.16, this flow would fail to compile because the chain starts
+# directly with a FOR EACH over an external input (issue #21). With
+# FLOW.TAKES declared, the IR builder seeds `articles` into the initial
+# scope, so the FOR EACH compiles cleanly.
+
+STEP classify
+  TAKES:   text:  str
+  GIVES:   label: enum(positive|neutral|negative)
+  MODE:    judgment
+  CACHE:   ttl(7d)
+  ON_FAIL: retry(2) then escalate then abort("classification failed")
+
+FLOW sentiment_batch
+  TAKES:   articles: List<str>
+  GIVES:   labels:   List<enum(positive|neutral|negative)>
+  FOR EACH text IN articles PARALLEL AS labels:
+    classify(text=text)
+
+RESOURCES
+  target: python
+  models: [haiku, sonnet]
