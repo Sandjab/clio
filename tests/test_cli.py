@@ -13,8 +13,7 @@ def test_compile_creates_output_tree(tmp_path):
     assert rc == 0
     assert (out / "CLAUDE.md").exists()
     assert (out / ".claude" / "hooks.json").exists()
-    # v0.18: all symbols are alpha-renamed with the source file stem
-    assert (out / "steps" / "01_input__foo.py").exists()
+    assert (out / "steps" / "01_foo.py").exists()
 
 
 def test_compile_unknown_target_rejected_by_argparse(tmp_path, capsys):
@@ -33,9 +32,8 @@ def test_cli_compile_python_target(tmp_path):
     rc = main(["compile", str(fixture), "--target", "python", "--output", str(out)])
     assert rc == 0
     assert (out / "pyproject.toml").exists()
-    # v0.18: flow name is alpha-renamed with the source file stem
-    assert (out / "mvp_v03_skeleton__classify" / "__init__.py").exists()
-    assert (out / "mvp_v03_skeleton__classify" / "clio_runtime" / "cache.py").exists()
+    assert (out / "classify" / "__init__.py").exists()
+    assert (out / "classify" / "clio_runtime" / "cache.py").exists()
 
 
 def test_gen_inline_argument_writes_to_stdout(tmp_path, monkeypatch, capsys):
@@ -302,10 +300,9 @@ def test_compile_multi_flow_with_selector_picks_one(tmp_path):
         "FLOW beta\n  foo(x=\"b\")\n"
     )
     out = tmp_path / "o"
-    # v0.18: flow names are alpha-renamed with the source file stem (two__beta)
-    rc = main(["compile", str(src), "--target", "python", "--output", str(out), "--flow", "two__beta"])
+    rc = main(["compile", str(src), "--target", "python", "--output", str(out), "--flow", "beta"])
     assert rc == 0
-    # Python target produces pyproject + package dir; flow name drives the entry.
+    # Python target produces pyproject + package dir; flow name 'beta' drives the entry.
     assert (out / "pyproject.toml").exists()
 
 

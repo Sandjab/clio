@@ -315,17 +315,22 @@ def _flatten_to_program(
     # Per-file rename tables: {original_name: renamed_name}
     rename_tables: dict[Path, dict[str, str]] = {}
 
-    # Pass 1: build rename tables for each file
+    # Pass 1: build rename tables for each file.
+    # Alpha-renaming only fires for multi-file inputs: single-file sources
+    # have no cross-file collisions to avoid, so all tables stay empty and
+    # every name keeps its original form (preserves v0.17 ergonomics).
+    is_multifile = len(parsed) > 1
     for path, program in parsed.items():
-        stem = _file_stem(path)
         local_renames: dict[str, str] = {}
-        for decl in program.decls:
-            if isinstance(decl, (FlowDecl, ContractDecl)):
-                if not decl.exposed:
+        if is_multifile:
+            stem = _file_stem(path)
+            for decl in program.decls:
+                if isinstance(decl, (FlowDecl, ContractDecl)):
+                    if not decl.exposed:
+                        local_renames[decl.name] = f"{stem}__{decl.name}"
+                elif isinstance(decl, StepDecl):
+                    # STEPs are always internal in v0.18
                     local_renames[decl.name] = f"{stem}__{decl.name}"
-            elif isinstance(decl, StepDecl):
-                # STEPs are always internal in v0.18
-                local_renames[decl.name] = f"{stem}__{decl.name}"
         rename_tables[path] = local_renames
 
     # Pass 2: emit decls with renames applied to internal references,
