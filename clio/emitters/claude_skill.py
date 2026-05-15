@@ -24,7 +24,13 @@ from clio.emitters._claude_skill_helpers import (
     render_sub_flow_script,
 )
 from clio.emitters.base import BaseEmitter
-from clio.ir.graph import FlowGraph, ForEachIR
+from clio.ir.graph import (
+    FlowGraph,
+    ForEachIR,
+    IfBlockIR,
+    MatchBlockIR,
+    WhileBlockIR,
+)
 
 
 class ClaudeSkillEmitter(BaseEmitter):
@@ -52,6 +58,25 @@ class ClaudeSkillEmitter(BaseEmitter):
                         "(the LLM host does not execute concurrently)."
                     )
                     break
+        # 3. v0.17 — sub-flow orchestrator only supports linear chains. Reject
+        # any control structure (IF / FOR EACH / MATCH / WHILE) inside a signed
+        # sub-flow so users get a clear compile-time error rather than a runtime
+        # NotImplementedError from the emitted script.
+        main_flow_name = flow.name if flow is not None else None
+        for sub_flow in graph.flows:
+            if sub_flow.name == main_flow_name:
+                continue
+            if not sub_flow.takes or not sub_flow.gives:
+                continue
+            for sub_item in sub_flow.chain:
+                if isinstance(sub_item, (ForEachIR, IfBlockIR, MatchBlockIR, WhileBlockIR)):
+                    kind = type(sub_item).__name__.removesuffix("IR").removesuffix("Block")
+                    raise ValueError(
+                        f"claude-skill v0.17 requires sub-flows to be linear chains "
+                        f"of step / sub-flow calls; sub-flow {sub_flow.name!r} contains "
+                        f"a {kind} block at line {sub_item.line}. Move the control "
+                        f"structure to the main FLOW, or split the sub-flow."
+                    )
 
     def emit(self, graph: FlowGraph, output_dir: Path) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)

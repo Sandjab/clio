@@ -1056,3 +1056,43 @@ def test_claude_skill_emits_subflow_script(tmp_path):
     # Main SKILL.md references the sub-flow.
     skill_md = (tmp_path / "SKILL.md").read_text()
     assert "inner" in skill_md
+
+
+def test_claude_skill_rejects_control_structures_in_subflow(tmp_path):
+    """v0.17: sub-flows in the claude-skill target must be linear chains. Any
+    control structure (IF / FOR EACH / MATCH / WHILE) inside a signed sub-flow
+    is a compile-time error rather than a runtime NotImplementedError."""
+    src = (
+        "STEP load\n"
+        "  TAKES: x: str\n"
+        "  GIVES: items: List<str>\n"
+        "  MODE: exact\n"
+        "\n"
+        "STEP process\n"
+        "  TAKES: item: str\n"
+        "  GIVES: result: str\n"
+        "  MODE: exact\n"
+        "\n"
+        "FLOW inner\n"
+        "  TAKES: x: str\n"
+        "  GIVES: items: List<str>\n"
+        "  load(x=x)\n"
+        "  -> FOR EACH item IN items:\n"
+        "       process(item=item)\n"
+        "\n"
+        "FLOW outer\n"
+        "  TAKES: x: str\n"
+        "  GIVES: items: List<str>\n"
+        "  inner(x=x)\n"
+        "\n"
+        "RESOURCES\n"
+        "  target: claude-skill\n"
+    )
+    g = build_ir(parse(src), flow_name="outer")
+    with pytest.raises(ValueError) as exc:
+        ClaudeSkillEmitter().emit(g, tmp_path)
+    msg = str(exc.value)
+    assert "inner" in msg
+    assert "linear" in msg
+    # A ForEachIR triggers the rejection; the error must surface the kind.
+    assert "ForEach" in msg

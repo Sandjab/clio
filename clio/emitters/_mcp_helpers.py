@@ -355,7 +355,7 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
     rescues_by_step = {rb.step_name: rb for rb in graph.flow.rescues}
 
     def _emit_call(call: CallIR, indent: str, scope_local: set[str]) -> None:
-        step = next(s for s in graph.steps if s.name == call.step_name)
+        step = steps_by_name[call.step_name]
         if step.name not in imported_steps:
             imported_steps.append(step.name)
         kw_parts = []
@@ -707,7 +707,7 @@ def _emit_flow_module_async_multi(graph: FlowGraph) -> str:
         rescues_by_step.update({rb.step_name: rb for rb in flow.rescues})
 
     def _emit_call(call: CallIR, indent: str, scope_local: set[str]) -> None:
-        step = next(s for s in graph.steps if s.name == call.step_name)
+        step = steps_by_name[call.step_name]
         if step.name not in imported_steps:
             imported_steps.append(step.name)
         kw_parts = []
