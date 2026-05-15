@@ -6,6 +6,14 @@
 
 ### Changed
 
+### Fixed
+
+## v0.17.2 — 2026-05-15
+
+Patch release rolling up the post-v0.17.1 polish bundle that landed on `main` over three feature PRs: PR #34 (closes #33 — STEP/FLOW name sanitization), PR #35 (issue #29 items 2-4 — mcp project dir + tool ordering + langgraph state type), and PR #36 (issue #29 item 1 — single/multi async walker dedup + Gemini-surfaced FOR EACH/MATCH sanitization). No language or IR change — purely emitter correctness + cleanup. Issue #37 is filed for the same FOR EACH/MATCH sanitization in `python.py` and `_langgraph_helpers.py`, where the bug class also lives.
+
+### Changed
+
 - **mcp-server: project dir name derives from the first declared exposed FLOW** (issue #29, item 2) — when a multi-FLOW source is compiled without `--flow`, the project directory was previously named with the generic `clio_mcp` fallback. It now derives from the **first declared exposed FLOW** (`graph.flows` preserves declaration order; `exposed_flow_names` is a frozenset filtered against it). `_safe_package_name` also keyword-sanitizes its `default=` argument, so a derived name like `class` collapses to `class_`. Single-FLOW sources are unaffected.
 - **mcp-server: `@mcp.tool()` handlers emitted in declaration order** (issue #29, item 3) — `server.py`'s lowlevel `Tool()` registry and `call_tool` dispatch chain previously used `sorted(graph.exposed_flow_names)` (alphabetical). They now walk `graph.flows` filtered against `exposed_flow_names`, giving declaration order that matches the source-file layout. No flag — alphabetical was an implementation detail, not a stability guarantee. Single-FLOW sources are unaffected.
 - **mcp-server: dedup single-/multi-FLOW chain walker** (issue #29, item 1) — `_emit_flow_module_async` (single-FLOW, byte-identical from v0.16) and `_emit_flow_module_async_multi` (v0.17) each defined their own nested `_emit_call` / `_emit_item` (and the multi path's `_emit_flow_call`) closures with byte-identical bodies. The walker is now factored into three module-level helpers (`_emit_call_mcp_chain`, `_emit_flow_call_mcp_chain`, `_emit_item_mcp_chain`) parameterised by a small `_McpWalkerCtx` dataclass. The `supports_flow_call` flag on the ctx gates `FlowCallIR` dispatch (defence in depth — the IR builder already guarantees no `FlowCallIR` appears when `len(graph.flows) <= 1`). All existing snapshot fixtures remain byte-identical.
@@ -14,6 +22,11 @@
 ### Fixed
 
 - **Sanitize `STEP` and `FLOW` names that match Python keywords** (issue #33) — follow-up to #28. The TAKES/GIVES + `FOR EACH` loop-variable fix in v0.17.1 sanitized field and loop identifiers but left `STEP` and `FLOW` names themselves un-sanitized. `STEP class` now compiles to `def class_(x):` (with `from .steps import class_ as class__mod` and `class__mod.class_(x=x)` at the call site) across `python`, `mcp-server`, `langgraph`, and `claude-skill` instead of producing a `SyntaxError`. FLOW-name-derived identifiers were already prefix-protected (`run_<name>`, `_State_<name>`, `build_<name>_graph`, `sub_<name>.py`); a regression test is added for parity. `claude-cli` is out of scope (shell target). Two new parametrized tests in `tests/test_emitters/test_keyword_identifiers.py` exercise `STEP class` (4 emitters) and `FLOW return` (4 emitters).
+- **mcp-server: sanitize `FOR EACH` inner collection and `MATCH base.sub_field` positions** (Gemini PR #36 review) — two latent positions in `_emit_item_mcp_chain` were emitting raw user-declared names: a nested `FOR EACH` whose collection references an outer keyword-named loop variable (`for y in class:`) and a `MATCH` scrutinee on a Pydantic contract field whose name is a keyword (`match state['result'].class:`). Both now route through `_to_field_name`. The same bug class lives in `python.py` and `_langgraph_helpers.py` (verified by direct emission) and is tracked in issue #37.
+
+### Known limitations
+
+- Issue #37 still open at release time: the FOR EACH inner-collection sanitization in `python.py`, and the MATCH `sub_field` sanitization in `python.py` + `_langgraph_helpers.py`, were not part of this release. `claude-skill` is unaffected (different per-script dispatch). Will be addressed in the next patch.
 
 ## v0.17.1 — 2026-05-15
 
