@@ -1,4 +1,5 @@
 import sys
+from dataclasses import dataclass
 
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
@@ -59,6 +60,7 @@ from clio.parser.ast_nodes import (
     DatabaseSpec,
     EnumType,
     ErrorAccessExpr,
+    Field,
     FieldRefExpr,
     FileBody,
     FloatExpr,
@@ -302,6 +304,32 @@ def _build_tests(
 
 def _lower_predicate(p: Predicate) -> PredicateIR:
     return PredicateIR(kind=p.kind, value=p.value)
+
+
+@dataclass(frozen=True)
+class FlowSignature:
+    """Lightweight projection of a FlowDecl used for call-site resolution.
+    Only flows that explicitly declared TAKES *and* GIVES are callable."""
+
+    name: str
+    takes: tuple[Field, ...]
+    gives: tuple[Field, ...]
+    line: int
+
+
+def _extract_flow_signatures(
+    flow_decls: list[FlowDecl],
+) -> dict[str, FlowSignature]:
+    """Pass 0.5 (v0.17): collect signatures of FLOWs that declare BOTH
+    TAKES and GIVES. Unsigned FLOWs are silently omitted (they remain
+    runnable as the main flow but cannot be called as sub-flows)."""
+    sigs: dict[str, FlowSignature] = {}
+    for d in flow_decls:
+        if d.takes and d.gives:
+            sigs[d.name] = FlowSignature(
+                name=d.name, takes=d.takes, gives=d.gives, line=d.line,
+            )
+    return sigs
 
 
 def _resolve_fallbacks(

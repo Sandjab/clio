@@ -1292,3 +1292,21 @@ def test_flowcallir_is_distinct_from_callir():
     assert fc.flow_name == "enrich"
     assert fc.kwargs == (("a", "@art"),)
     assert fc.line == 10
+
+
+def test_extract_flow_signatures_skips_unsigned_flows():
+    from clio.ir.builder import _extract_flow_signatures
+    from clio.parser.parser import parse
+    src = (
+        "STEP s\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n\n"
+        "FLOW with_sig\n  TAKES: x: str\n  GIVES: y: str\n  s(x=x)\n\n"
+        "FLOW no_sig\n  s(x=\"hi\")\n"
+    )
+    prog = parse(src)
+    flow_decls = [d for d in prog.decls if type(d).__name__ == "FlowDecl"]
+    sigs = _extract_flow_signatures(flow_decls)
+    assert "with_sig" in sigs
+    assert "no_sig" not in sigs
+    sig = sigs["with_sig"]
+    assert [f.name for f in sig.takes] == ["x"]
+    assert [f.name for f in sig.gives] == ["y"]
