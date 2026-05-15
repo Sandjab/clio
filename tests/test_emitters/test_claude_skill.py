@@ -636,33 +636,53 @@ def test_cache_block_absent_when_no_cache_config(tmp_path):
 
 
 def test_cache_block_uses_fr_label_when_flow_is_french(tmp_path):
-    """When the heuristic detects French, the cache label is 'Mise en cache'."""
-    src = (FIXTURES / "mvp_v02_cache.clio").read_text()
-    # Inject a French diacritic into a step to trigger FR detection.
-    # detect_churn has no description field in StepIR (not yet wired) — so
-    # we splice a judgment step with a diacritic docstring inline.
+    """When the FR heuristic detects French in any STEP/FLOW DESCRIPTION,
+    the cache label in SKILL.md is rendered as 'Mise en cache' instead of
+    'Cache'. The heuristic scans DESCRIPTION strings (not identifier names)
+    for the markers `éèàçôîêûïü` — so the source needs at least one
+    DESCRIPTION carrying a diacritic. The cleanest trigger is the new
+    `FLOW.DESCRIPTION` field (v0.17.x); STEP.DESCRIPTION would work too.
+
+    The previous version of this test built a source with `MODE: exact` +
+    `CACHE: ttl(24h)` (rejected by the parser: CACHE is judgment-only),
+    swallowed the resulting ParseError in a bare `except Exception`, and
+    fell back to `pytest.skip` with a misleading "not parseable with
+    current grammar" message. The skip masked a fixture bug — there was
+    no grammar limitation, just an invalid mode/cache combo. Both issues
+    are now fixed: the source uses `MODE: judgment` (CACHE valid), and
+    the assertion is tightened to `"Mise en cache" in body` only — the
+    old `"Mise en cache" in body or "Cache" in body` would have passed
+    even when FR detection silently regressed."""
+    # The DESCRIPTION must carry a LOWERCASE French diacritic to be picked
+    # up by `detect_skill_language` — its `fr_markers` set is currently
+    # `set("éèàçôîêûïü")` (no uppercase variants). A real French sentence
+    # naturally fits, but a description that opens with `Évaluer` (capital
+    # É) would silently miss detection. Tracked as a follow-up: extend the
+    # marker set to include uppercase + ÉÈÀÇÔÎÊÛÏÜ.
     fr_src = (
         "CONTRACT customer_risk\n"
         "  SHAPE: {client: str, risk: enum(low|mid|high), reason: str}\n"
         "\n"
-        "STEP charger_données\n"
-        "  TAKES: file: str\n"
-        "  GIVES: customers: List<{name: str, revenue: float}>\n"
-        "  MODE:  exact\n"
+        "STEP detecter_clients\n"
+        "  TAKES: customers: List<{name: str, revenue: float}>\n"
+        "  GIVES: risks: List<customer_risk>\n"
+        "  MODE:  judgment\n"
         "  CACHE: ttl(24h)\n"
         "\n"
-        "FLOW rétention\n"
-        "  charger_données(file=\"données.csv\")\n"
+        "FLOW retention_clients\n"
+        '  DESCRIPTION: "Score le risque de churn à partir des données client."\n'
+        "  detecter_clients(customers=customers)\n"
     )
-    try:
-        graph = build_ir(parse(fr_src))
-    except Exception:
-        import pytest
-        pytest.skip("Inline French CACHE source not parseable with current grammar.")
+    graph = build_ir(parse(fr_src))
     ClaudeSkillEmitter().emit(graph, tmp_path)
     body = (tmp_path / "SKILL.md").read_text()
-    # Accept either label — the heuristic depends on step name/description content.
-    assert "Mise en cache" in body or "Cache" in body
+    assert "Mise en cache" in body, (
+        "FR cache label expected when FLOW.DESCRIPTION carries French diacritics; "
+        "got SKILL.md:\n" + body
+    )
+    assert "## Cache" not in body, (
+        "EN cache header must not appear when FR is detected; got SKILL.md:\n" + body
+    )
 
 
 def test_retry_block_from_on_fail_in_step_section(tmp_path):

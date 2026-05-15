@@ -10,6 +10,8 @@
 
 ### Fixed
 
+- **`test_cache_block_uses_fr_label_when_flow_is_french` no longer silently skipped** — the test wrapped `build_ir(parse(...))` in a bare `try / except Exception: pytest.skip(...)` with a misleading "not parseable with current grammar" message. The real cause was a fixture bug (`MODE: exact` + `CACHE: ttl(24h)` — CACHE is judgment-only). The source is now `MODE: judgment`, the try/except is removed (parse errors fail loudly), and the assertion is tightened to require `"Mise en cache"` only (the previous `"Mise en cache" in body or "Cache" in body` would have passed even if FR detection silently regressed). The test now exercises FR detection cleanly via the new `FLOW.DESCRIPTION` field. Bumps test count to 911 passed / 13 skipped (was 910 / 14). Surfaced a separate latent bug (#40): `detect_skill_language` only recognises lowercase French diacritics — a description opening with `É` is misclassified as EN. Tracked separately; this PR dodges with a mid-sentence lowercase diacritic in the test source.
+
 ## v0.17.2 — 2026-05-15
 
 Patch release rolling up the post-v0.17.1 polish bundle that landed on `main` over three feature PRs: PR #34 (closes #33 — STEP/FLOW name sanitization), PR #35 (issue #29 items 2-4 — mcp project dir + tool ordering + langgraph state type), and PR #36 (issue #29 item 1 — single/multi async walker dedup + Gemini-surfaced FOR EACH/MATCH sanitization). No language or IR change — purely emitter correctness + cleanup. Issue #37 is filed for the same FOR EACH/MATCH sanitization in `python.py` and `_langgraph_helpers.py`, where the bug class also lives.
