@@ -31,7 +31,7 @@ from clio.emitters._python_helpers import (
     emit_rest_step,
     emit_shell_step,
 )
-from clio.emitters._shared_utils import _safe_package_name
+from clio.emitters._shared_utils import _safe_package_name, _to_field_name
 from clio.emitters.base import BaseEmitter
 from clio.emitters.python import PythonEmitter
 from clio.ir.graph import (
@@ -111,7 +111,7 @@ class LangGraphEmitter(BaseEmitter):
                 body = emit_shell_step(step, contracts_by_name, step.impl)
             else:
                 body = emit_default_exact_step(step, contracts_by_name)
-            (steps_dir / f"{step.name}.py").write_text(body)
+            (steps_dir / f"{_to_field_name(step.name)}.py").write_text(body)
 
     def _validate_for_langgraph(self, graph: FlowGraph) -> None:
         """Reject scopes the v0 LangGraph emitter does not yet support."""

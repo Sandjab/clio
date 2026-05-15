@@ -25,7 +25,7 @@ from clio.emitters._python_helpers import (
     emit_shell_step,
     emit_sql_step,
 )
-from clio.emitters._shared_utils import _safe_package_name
+from clio.emitters._shared_utils import _safe_package_name, _to_field_name
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import (
     ApiInvokeIR,
@@ -118,7 +118,7 @@ class MCPServerEmitter(BaseEmitter):
                 body = emit_sql_step(step, contracts_by_name, step.impl, db_spec)
             else:
                 body = emit_default_exact_step(step, contracts_by_name)
-            (steps_dir / f"{step.name}.py").write_text(body)
+            (steps_dir / f"{_to_field_name(step.name)}.py").write_text(body)
 
     def _validate_for_mcp(self, graph: FlowGraph) -> None:
         # v0.17: with multi-FLOW sources, `graph.flow` may be None (no `--flow`

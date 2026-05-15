@@ -125,6 +125,7 @@ def emit_default_exact_step(step: "StepIR", contracts_by_name: dict[str, "Contra
     contracts_import = (
         "from .. import contracts\n" if _uses_contract_refs(step) else ""
     )
+    py_step_name = _to_field_name(step.name)
     return (
         f'"""STEP {step.name} (exact)\n'
         f'TAKES:\n'
@@ -143,7 +144,7 @@ def emit_default_exact_step(step: "StepIR", contracts_by_name: dict[str, "Contra
         f'from ..clio_runtime import logging as _log\n'
         f'{contracts_import}'
         f'\n\n'
-        f'def {step.name}({params}) -> {ret_type}:\n'
+        f'def {py_step_name}({params}) -> {ret_type}:\n'
         f'    _t0 = time.monotonic()\n'
         f'    _log.emit("step_start", step={step.name!r}, mode="exact")\n'
         f'    raise NotImplementedError(\n'
@@ -586,7 +587,7 @@ def emit_rest_step(
 
     body_lines = (
         [
-            f'def {step.name}({params}) -> {ret_type}:',
+            f'def {_to_field_name(step.name)}({params}) -> {ret_type}:',
             '    _t0 = time.monotonic()',
             f'    _log.emit("step_start", step={step.name!r}, mode="exact")',
         ]
@@ -680,7 +681,7 @@ def emit_shell_step(
         f'from ..clio_runtime import logging as _log\n'
         f'{contracts_import}'
         f'\n\n'
-        f'def {step.name}({params}) -> {ret_type}:\n'
+        f'def {_to_field_name(step.name)}({params}) -> {ret_type}:\n'
         f'    _t0 = time.monotonic()\n'
         f'    _log.emit("step_start", step={step.name!r}, mode="exact")\n'
         f'    _argv = {argv_repr}\n'
@@ -770,10 +771,10 @@ def emit_mcp_tool_step(
     )
     if async_call:
         call_line = f"    _result = await _mcp.call_tool_async({call_kwargs})"
-        def_line = f"async def {step.name}({params}) -> {ret_type}:"
+        def_line = f"async def {_to_field_name(step.name)}({params}) -> {ret_type}:"
     else:
         call_line = f"    _result = _mcp.call_tool_sync({call_kwargs})"
-        def_line = f"def {step.name}({params}) -> {ret_type}:"
+        def_line = f"def {_to_field_name(step.name)}({params}) -> {ret_type}:"
 
     contracts_import = (
         "from .. import contracts\n" if _uses_contract_refs(step) else ""
@@ -901,7 +902,7 @@ def emit_sql_step(
     )
 
     body_lines = [
-        f"def {step.name}({params}) -> {ret_type}:",
+        f"def {_to_field_name(step.name)}({params}) -> {ret_type}:",
         '    _t0 = time.monotonic()',
         f'    _log.emit("step_start", step={step.name!r}, mode="exact")',
         *takes_dict_lines,
@@ -981,7 +982,8 @@ def emit_parallel_for_each_python(
     if isinstance(inner, CallIR):
         step = steps_by_name[inner.step_name]
         unit_kv = f"step={step.name!r}"
-        body_call_expr = f"{step.name}_mod.{step.name}({kwargs_str})"
+        py_step_name = _to_field_name(step.name)
+        body_call_expr = f"{py_step_name}_mod.{py_step_name}({kwargs_str})"
     elif isinstance(inner, FlowCallIR):
         unit_kv = f"flow={inner.flow_name!r}"
         body_call_expr = f"run_{inner.flow_name}({kwargs_str})"

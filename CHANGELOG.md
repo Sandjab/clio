@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- **Sanitize `STEP` and `FLOW` names that match Python keywords** (issue #33) — follow-up to #28. The TAKES/GIVES + `FOR EACH` loop-variable fix in v0.17.1 sanitized field and loop identifiers but left `STEP` and `FLOW` names themselves un-sanitized. `STEP class` now compiles to `def class_(x):` (with `from .steps import class_ as class__mod` and `class__mod.class_(x=x)` at the call site) across `python`, `mcp-server`, `langgraph`, and `claude-skill` instead of producing a `SyntaxError`. FLOW-name-derived identifiers were already prefix-protected (`run_<name>`, `_State_<name>`, `build_<name>_graph`, `sub_<name>.py`); a regression test is added for parity. `claude-cli` is out of scope (shell target). Two new parametrized tests in `tests/test_emitters/test_keyword_identifiers.py` exercise `STEP class` (4 emitters) and `FLOW return` (4 emitters).
+
 ## v0.17.1 — 2026-05-15
 
 Patch release rolling up the emitter identifier-sanitization bug fix that landed on `main` via PR #31 (closes #28). No language or IR change — purely an emit-side correctness fix.

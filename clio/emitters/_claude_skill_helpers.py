@@ -156,7 +156,10 @@ def render_exact_script(step: StepIR, contracts_by_name: dict, idx: int) -> str:
 
     # Build the parameter unpacking lines for the step function call.
     # `_to_field_name` sanitizes Python keywords in identifier positions
-    # (local var LHS, kwarg LHS); dict-key positions keep the original.
+    # (local var LHS, kwarg LHS, function name); dict-key positions keep
+    # the original. The function name itself is also sanitized because the
+    # STEP name may collide with a Python keyword (`class`, `return`, ...).
+    py_step_name = _to_field_name(step.name)
     if step.takes:
         param_lines = "\n".join(
             f"    {_to_field_name(t.name)} = state.get({step.name!r}, {{}}).get({t.name!r})"
@@ -165,10 +168,10 @@ def render_exact_script(step: StepIR, contracts_by_name: dict, idx: int) -> str:
         call_kwargs = ", ".join(
             f"{_to_field_name(t.name)}={_to_field_name(t.name)}" for t in step.takes
         )
-        call_expr = f"result = {step.name}({call_kwargs})"
+        call_expr = f"result = {py_step_name}({call_kwargs})"
     else:
         param_lines = "    # no TAKES"
-        call_expr = f"result = {step.name}()"
+        call_expr = f"result = {py_step_name}()"
 
     # Merge result back into state.
     if step.gives is not None:
@@ -193,7 +196,7 @@ def render_exact_script(step: StepIR, contracts_by_name: dict, idx: int) -> str:
         f"import sys\n"
         f"\n"
         f"\n"
-        f"def {step.name}({', '.join(_to_field_name(t.name) for t in step.takes)}):\n"
+        f"def {py_step_name}({', '.join(_to_field_name(t.name) for t in step.takes)}):\n"
         f'    """Implement the body of STEP {step.name} here.\n'
         f"\n"
         f"    TAKES:\n"
