@@ -6,6 +6,7 @@ import pytest
 
 from clio.ir.resolver import (
     CompileError,
+    compute_exposed_sets,
     resolve_imports,
     validate_per_file,
 )
@@ -177,3 +178,46 @@ def test_valid_file_passes(tmp_path: Path) -> None:
     )
     parsed = resolve_imports(entry)
     validate_per_file(parsed)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# compute_exposed_sets — Task 6
+# ---------------------------------------------------------------------------
+
+
+def test_exposed_set_local_only(tmp_path: Path) -> None:
+    """A file with locally-defined EXPOSE FLOW and EXPOSE CONTRACT exposes both names."""
+    (tmp_path / "main.clio").write_text(
+        "EXPOSE CONTRACT Doc\n"
+        "  SHAPE: {text: str}\n"
+        "STEP step1\n"
+        "  MODE: judgment\n"
+        "  TAKES: doc: Doc\n"
+        "  GIVES: out: str\n"
+        "EXPOSE FLOW run\n"
+        "  TAKES: doc: Doc\n"
+        "  GIVES: out: str\n"
+        "  step1(doc=doc)\n"
+    )
+    entry = tmp_path / "main.clio"
+    parsed = resolve_imports(entry)
+    sets = compute_exposed_sets(parsed)
+    assert set(sets[entry.resolve()].keys()) == {"Doc", "run"}
+
+
+def test_exposed_set_reexport() -> None:
+    """facade.clio re-exports Article and classify from lib.clio."""
+    entry = FIXTURES / "reexport" / "main.clio"
+    parsed = resolve_imports(entry)
+    sets = compute_exposed_sets(parsed)
+    facade_path = (entry.parent / "facade.clio").resolve()
+    assert set(sets[facade_path].keys()) == {"Article", "classify"}
+
+
+def test_reexport_of_nonimported_name(tmp_path: Path) -> None:
+    """EXPOSE <name> for a name that wasn't imported is rejected."""
+    entry = tmp_path / "main.clio"
+    entry.write_text("EXPOSE NotImported\n")
+    parsed = resolve_imports(entry)
+    with pytest.raises(CompileError, match=r"'NotImported' is not imported"):
+        compute_exposed_sets(parsed)

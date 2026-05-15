@@ -253,6 +253,14 @@ class ImportDecl:
 
 
 @dataclass(frozen=True)
+class ReexportDecl:
+    """Top-level 'EXPOSE <name>' re-exports a previously imported symbol."""
+    name: str
+    line: int
+    col: int
+
+
+@dataclass(frozen=True)
 class ExprNode:
     """Base for ASSERT expression AST nodes."""
 

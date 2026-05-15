@@ -15,6 +15,7 @@ from clio.parser.ast_nodes import (
     ContractDecl,
     FlowDecl,
     Program,
+    ReexportDecl,
     ResourcesDecl,
     TestDecl,
 )
@@ -115,3 +116,71 @@ def validate_per_file(
             raise CompileError(
                 f"{path}: {name!r} is exposed as both FLOW and CONTRACT"
             )
+
+
+def compute_exposed_sets(
+    parsed: dict[Path, Program],
+) -> dict[Path, dict[str, object]]:
+    """Phase 3: per-file set of transitively exposed symbols.
+
+    Returns a dict {file_path: {symbol_name: decl_or_reexport_target}}.
+    Resolution is topological over imports so re-exports are
+    resolved by the time their declaring file is visited.
+    """
+    # Build the import graph for topo sort (edges point from dependency → dependent)
+    in_degree: dict[Path, int] = {p: 0 for p in parsed}
+    edges: dict[Path, list[Path]] = {p: [] for p in parsed}
+    for path, program in parsed.items():
+        for imp in program.imports:
+            child = (path.parent / imp.path).resolve()
+            if child in parsed:
+                edges[child].append(path)
+                in_degree[path] += 1
+
+    queue: list[Path] = [p for p, d in in_degree.items() if d == 0]
+    topo: list[Path] = []
+    while queue:
+        current = queue.pop(0)
+        topo.append(current)
+        for nxt in edges[current]:
+            in_degree[nxt] -= 1
+            if in_degree[nxt] == 0:
+                queue.append(nxt)
+
+    result: dict[Path, dict[str, object]] = {}
+
+    for path in topo:
+        program = parsed[path]
+        exposed: dict[str, object] = {}
+
+        for decl in program.decls:
+            if isinstance(decl, FlowDecl) and decl.exposed:
+                exposed[decl.name] = decl
+            elif isinstance(decl, ContractDecl) and decl.exposed:
+                exposed[decl.name] = decl
+
+        import_local_names: dict[str, tuple[Path, str]] = {}
+        for imp in program.imports:
+            child = (path.parent / imp.path).resolve()
+            for item in imp.items:
+                local_name = item.alias or item.name
+                import_local_names[local_name] = (child, item.name)
+
+        for decl in program.decls:
+            if isinstance(decl, ReexportDecl):
+                if decl.name not in import_local_names:
+                    raise CompileError(
+                        f"{path}:{decl.line}:{decl.col}: "
+                        f"{decl.name!r} is not imported (cannot EXPOSE without IMPORT)"
+                    )
+                source_path, source_name = import_local_names[decl.name]
+                source_exposed = result.get(source_path, {})
+                if source_name not in source_exposed:
+                    raise CompileError(
+                        f"{path}:{decl.line}:{decl.col}: "
+                        f"{source_name!r} is not exposed by {source_path.name!r}"
+                    )
+                exposed[decl.name] = source_exposed[source_name]
+
+        result[path] = exposed
+    return result

@@ -1,0 +1,11 @@
+FROM "./facade.clio" IMPORT Article, classify
+
+STEP summarise
+  MODE: judgment
+  TAKES: article: Article
+  GIVES: summary: str
+
+EXPOSE FLOW pipeline
+  TAKES: article: Article
+  GIVES: summary: str
+  summarise(article=article)

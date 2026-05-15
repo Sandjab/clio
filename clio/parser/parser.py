@@ -43,6 +43,7 @@ from clio.parser.ast_nodes import (
     Program,
     RawBody,
     RecordType,
+    ReexportDecl,
     RescueBlock,
     ResourcesDecl,
     RestBody,
@@ -131,6 +132,15 @@ class _Parser:
                         "only one visibility marker allowed before FLOW/CONTRACT",
                         nxt.line, nxt.col,
                     )
+                # Re-export form: EXPOSE <IDENT> (no FLOW/CONTRACT keyword, no body).
+                # Only valid with EXPOSE; INTERNAL <name> stays an error (E_VIS_002).
+                if exposed is True and nxt.type == TokenType.IDENT:
+                    name_tok = self.expect(TokenType.IDENT)
+                    decls.append(ReexportDecl(
+                        name=name_tok.value, line=vis_tok.line, col=vis_tok.col,
+                    ))
+                    self.skip_newlines()
+                    continue
                 if not (nxt.type == TokenType.KEYWORD and nxt.value in ("FLOW", "CONTRACT")):
                     raise ParseError(
                         f"{vis_tok.value} applies only to FLOW and CONTRACT (got {nxt.value!r})",
