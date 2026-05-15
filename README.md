@@ -6,7 +6,7 @@
 [![Last commit](https://img.shields.io/github/last-commit/Sandjab/clio)](https://github.com/Sandjab/clio/commits/main)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-%E2%89%A53.12-blue.svg)](https://www.python.org)
-[![Version](https://img.shields.io/badge/Version-v0.17.2-green.svg)](https://github.com/Sandjab/clio/releases/tag/v0.17.2)
+[![Version](https://img.shields.io/badge/Version-v0.17.3-green.svg)](https://github.com/Sandjab/clio/releases/tag/v0.17.3)
 [![Visitors](https://komarev.com/ghpvc/?username=sandjab-clio&label=Visitors&color=0e75b6&style=flat)](https://github.com/Sandjab/clio)
 
 CLIO is a declarative language that compiles hybrid LLM/code programs into executable projects. You describe *what* you want — the compiler decides *what runs as code and what runs as an LLM*, then emits a project you can run directly.
@@ -197,7 +197,7 @@ docs/
 
 ## Current status
 
-**v0.17.2 (current)**: **5 compilation targets** (`claude-cli`, `python`, `mcp-server`, `langgraph`, `claude-skill`). **903 unit tests + 1 xfail + gated e2e.**
+**v0.17.3 (current)**: **5 compilation targets** (`claude-cli`, `python`, `mcp-server`, `langgraph`, `claude-skill`). **924 unit tests + 1 xfail + gated e2e.**
 
 What's in the language today:
 - **Control flow**: sequential chains, `FOR EACH`, `FOR EACH ... PARALLEL AS <name>`, `IF/ELSE` (with `and` / `or` composition since v0.12), `MATCH/CASE/DEFAULT`, `WHILE ... MAX N` (composed conditions in v0.12 too).
