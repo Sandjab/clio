@@ -189,6 +189,14 @@ RESCUE detect:
 
 **Fix:** Move the terminal `abort(...)` to the top level of the rescue body chain. Use `IF`/`MATCH`/`WHILE` only for intermediate side effects; the final item must be `abort(...)` directly.
 
+### `IRBuildError: line L:C: FLOW <name> declares GIVES field <X> but no step in the chain produces it`
+
+Either the field name is misspelled, or the last step does not produce it. Check the last chain item's `GIVES` clause: every field declared in `FLOW.GIVES` must appear in the state produced by the chain (or have been produced earlier by an upstream step). Subset coverage is allowed in the reverse direction — the chain may produce *more* fields than `FLOW.GIVES` declares; those extra fields stay internal.
+
+### `TEST <name>: WITH kwarg <X> is not declared in FLOW <flow_name>.TAKES`
+
+The kwarg name is not a declared input of the target FLOW. Add it to `FLOW.TAKES`, or remove it from the `WITH:` block. When the FLOW does not declare a signature, this check does not fire — `WITH:` falls back to v0.15's runtime-only behaviour.
+
 ### `IRBuildError: line N: 'abort(...)' final clause in ON_FAIL is redundant when RESCUE 'X' is declared`
 
 You declared both `ON_FAIL: ... then abort(...)` on STEP X and a

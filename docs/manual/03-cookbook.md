@@ -767,6 +767,27 @@ Use `review`, `verdict_out`, `critique`, or similar.
 
 A complete, runnable project: [`examples/projects/01-iterative-refiner/`](../../examples/projects/01-iterative-refiner/). The committed `expected_output/` lets you read the compiled `flow.py` (the `WHILE` becomes a bounded `for _i in range(3): if not cond: break` loop) without installing anything.
 
+## 19. Declaring a FLOW signature for top-level fan-out (v0.16)
+
+When a flow's first item is `FOR EACH item IN items PARALLEL AS results:` over an externally-supplied list, the v0.15 input auto-promotion does not fire (it inspects only first-position `StepCall`s) and the compiler refuses with `state reference 'items' not produced by any previous step`. The v0.16 fix is to declare the input explicitly:
+
+```clio
+STEP classify
+  TAKES: text:  str
+  GIVES: label: enum(positive|neutral|negative)
+  MODE:  judgment
+
+FLOW sentiment_batch
+  TAKES: articles: List<str>
+  GIVES: labels:   List<enum(positive|neutral|negative)>
+  FOR EACH text IN articles PARALLEL AS labels:
+    classify(text=text)
+```
+
+The declared `TAKES:` makes `articles` a first-class external input. `run(articles=[...])` (python), the MCP `inputSchema`, and the `claude-skill` Inputs section all reflect it directly. Declared `GIVES:` makes `labels` the published output; other state fields (the intermediate ones) stay internal to the flow.
+
+A complete worked example lives at `examples/flow_signature.clio`.
+
 ## What's not in the cookbook (yet)
 
 - **Multi-field ASSERT** — accept `a > b` between two fields. Specced, planned.
