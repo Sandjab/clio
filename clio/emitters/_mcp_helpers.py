@@ -171,7 +171,10 @@ def _emit_flow_call_mcp_chain(
 
 
 def _emit_item_mcp_chain(
-    item, indent: str, scope_local: set[str], ctx: _McpWalkerCtx,
+    item: CallIR | FlowCallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR | ResumeIR,
+    indent: str,
+    scope_local: set[str],
+    ctx: _McpWalkerCtx,
 ) -> None:
     """Recursive dispatch on a chain item type. The `abort(...)` shortcut at
     the top mirrors python.py:467 so RESCUE bodies emit `raise FlowAborted(...)`
@@ -195,8 +198,14 @@ def _emit_item_mcp_chain(
                 if inner.step_name not in ctx.imported_steps:
                     ctx.imported_steps.append(inner.step_name)
             return
+        # `item.collection` lands as either a local-variable read (inside an
+        # outer FOR EACH body) or a `state['…']` dict-key read. The local-var
+        # form is a Python identifier and must be sanitized to survive a
+        # keyword-named outer loop variable (e.g. `FOR EACH class IN xs FOR
+        # EACH y IN class`). The `state['…']` form keeps the original name
+        # since the dict key is a string. (Gemini PR #36 comment 1.)
         source = (
-            item.collection
+            _to_field_name(item.collection)
             if item.collection in scope_local
             else f"state[{item.collection!r}]"
         )
@@ -224,12 +233,20 @@ def _emit_item_mcp_chain(
                 _emit_item_mcp_chain(sub, inner_indent, scope_local, ctx)
         return
     if isinstance(item, MatchBlockIR):
+        # Both positions are Python identifiers post-emission and must be
+        # sanitized: `item.state_field` when it is a local variable (same
+        # rationale as the FOR EACH source above), and `item.sub_field`
+        # which is always a Pydantic attribute access on the contract
+        # (`obj.class` is a SyntaxError). `state['…']` form keeps the
+        # original key. (Gemini PR #36 comment 2.)
         base = (
-            item.state_field
+            _to_field_name(item.state_field)
             if item.state_field in scope_local
             else f"state[{item.state_field!r}]"
         )
-        ctx.chain_lines.append(f"{indent}match {base}.{item.sub_field}:")
+        ctx.chain_lines.append(
+            f"{indent}match {base}.{_to_field_name(item.sub_field)}:"
+        )
         inner_indent = indent + "    "
         for arm in item.cases:
             if arm.value is None:

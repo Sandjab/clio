@@ -1110,3 +1110,88 @@ def test_mcp_tools_emitted_in_declaration_order(tmp_path):
         f"declaration order violated: 'zeta' (pos={pos_zeta}) must appear before "
         f"'alpha' (pos={pos_alpha}) in server.py"
     )
+
+
+# Sanitize Python-keyword identifiers in two positions the v0.17 polish refactor
+# surfaced (Gemini PR #36 comments 1 + 2). These positions were already buggy
+# pre-refactor — the closure-based walker had the same omission — but the
+# extraction made them more visible and worth fixing now. (The same pattern
+# applies to `python`, `langgraph`, and `claude-skill` walkers; tracked in a
+# follow-up issue.)
+
+
+def test_mcp_for_each_inner_collection_is_sanitized(tmp_path):
+    """A nested `FOR EACH` whose inner `collection` is a Python keyword (because
+    the OUTER loop variable was named with one) must emit sanitized Python.
+    The outer-loop variable was already sanitized (`for class_ in state['xs']:`
+    — verified by `_KEYWORD_LOOP_VAR_SRC` in test_keyword_identifiers.py); the
+    inner-loop `collection` reference (`for y in class:`) was NOT sanitized
+    pre-fix and produced a `SyntaxError`."""
+    src = (
+        "STEP inner\n"
+        "  TAKES: y: str\n"
+        "  GIVES: z: str\n"
+        "  MODE: exact\n"
+        "FLOW pipeline\n"
+        "  TAKES: xs: List<List<str>>\n"
+        "  FOR EACH class IN xs:\n"
+        "    FOR EACH y IN class:\n"
+        "      inner(y=y)\n"
+        "RESOURCES\n"
+        "  target: mcp-server\n"
+    )
+    g = build_ir(parse(src))
+    MCPServerEmitter().emit(g, tmp_path)
+    pkg = next(p for p in tmp_path.iterdir() if p.is_dir())
+    flow_py = (pkg / "flow.py").read_text()
+    # The inner FOR EACH's `for y in <X>:` must reference `class_`, not `class`.
+    assert "for y in class_:" in flow_py, (
+        "inner FOR EACH collection must be sanitized when in scope_local; "
+        f"got flow.py:\n{flow_py}"
+    )
+    ast.parse(flow_py)  # raises SyntaxError if any line is unsanitized
+
+
+def test_mcp_match_state_field_and_sub_field_are_sanitized(tmp_path):
+    """`MATCH state_field.sub_field:` lands as a Python `match base.attr:`. Both
+    positions are identifier-shaped and must be sanitized: `state_field` when
+    it is a local variable (FOR EACH loop var), and `sub_field` always (it is
+    a Pydantic attribute access on the contract). Pre-fix, a contract field
+    named `class` produced `match state['result'].class:` — a `SyntaxError`."""
+    src = (
+        "CONTRACT Foo\n"
+        "  SHAPE: {class: enum(a|b|c)}\n"
+        "\n"
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: result: Foo\n"
+        "  MODE: exact\n"
+        "STEP handler_a\n"
+        "  TAKES: r: Foo\n"
+        "  GIVES: y: str\n"
+        "  MODE: exact\n"
+        "FLOW pipeline\n"
+        '    s(x="hello")\n'
+        "    -> MATCH result.class:\n"
+        "        CASE a:\n"
+        "            handler_a(r=result)\n"
+        "        DEFAULT:\n"
+        "            handler_a(r=result)\n"
+        "RESOURCES\n"
+        "  target: mcp-server\n"
+    )
+    g = build_ir(parse(src))
+    MCPServerEmitter().emit(g, tmp_path)
+    pkg = next(p for p in tmp_path.iterdir() if p.is_dir())
+    flow_py = (pkg / "flow.py").read_text()
+    # `sub_field` is `class`; the emitted match scrutinee must access `.class_`,
+    # not `.class`. The state_field is `result` (not a keyword) so its position
+    # is unchanged; the sanitization-when-local branch is covered indirectly by
+    # the FOR EACH test above.
+    assert ".class_:" in flow_py, (
+        "MATCH sub_field must be sanitized; got flow.py:\n" + flow_py
+    )
+    assert "match state['result'].class:" not in flow_py, (
+        "raw `.class:` attribute access produces SyntaxError"
+    )
+    ast.parse(flow_py)
