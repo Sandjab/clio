@@ -10,7 +10,7 @@
 
 ## v0.17.3 — 2026-05-15
 
-Patch release rolling up the post-v0.17.2 polish bundle: one feature (FLOW.DESCRIPTION) and three test/emitter correctness fixes, landed on `main` over four feature PRs (#39, #41, #42, plus the partial-Edit recovery in #41 commit `01deead`). Closes follow-up issues **#37** (cross-emitter FOR EACH + MATCH sanitization) and **#40** (uppercase French diacritics). No language or IR change beyond the new optional `FLOW.DESCRIPTION` field. Net test count `911 → 924` (+13).
+Patch release rolling up the post-v0.17.2 polish bundle: one feature (FLOW.DESCRIPTION) and three test/emitter correctness fixes, landed on `main` over three feature PRs (#39, #41, #42, plus the partial-Edit recovery in #41 commit `01deead`). Closes follow-up issues **#37** (cross-emitter FOR EACH + MATCH sanitization) and **#40** (uppercase French diacritics). No language or IR change beyond the new optional `FLOW.DESCRIPTION` field. Net test count `903 → 924` (+21).
 
 ### Added
 
