@@ -1,17 +1,23 @@
 # Changelog
 
-## Unreleased
+## v0.15.1 — 2026-05-15
+
+Bug-fix bundle for issues #17 / #18 / #19, shipped as PR #20.
 
 ### Fixed
 
 - **emitter(python): per-step `invoke.model` aliases now resolve to versioned IDs** (#17). Previously `invoke: {protocol: anthropic, model: sonnet}` emitted `_MODELS = ('sonnet',)` and the alias was rejected by the Anthropic API with `BadRequestError`. The `ApiInvokeIR` path now routes through the same `_model_id()` resolver as the `RESOURCES.models` path, so `sonnet` → `claude-sonnet-4-6`, `haiku` → `claude-haiku-4-5-20251001`, `opus` → `claude-opus-4-7`. Unknown names (e.g. raw OpenAI/Bedrock IDs) pass through unchanged.
 - **emitter(python): Pydantic `ContractRef` inputs to judgment steps are now `.model_dump()`'d before `json.dumps`** (#18). Previously a judgment step that took a `ContractRef` input crashed with `TypeError: Object of type X is not JSON serializable` on the prompt-substitution path. `List<ContractRef>` is also handled element-wise. The new helper `_prompt_subst_expr` lives in `clio/emitters/_shared_utils.py`.
-- **parser/IR: first-step identifier kwargs are auto-promoted to FLOW inputs** (#19). Previously `load_article(file=file)` on the very first step of a FLOW raised `state reference 'file' not produced by any previous step` -- so `TEST WITH:` kwargs were silently dead and CLI `--kwargs '{"file": ...}'` had no effect when the first step took a literal. Now the first step's identifier kwargs that don't match an upstream produced field are recognised as external inputs (typed via the matching `TAKES` entry) and seeded into `state[]` at runtime via `run(**initial)`. Subsequent steps still strictly validate against produced fields.
+- **parser/IR: first-step identifier kwargs are auto-promoted to FLOW inputs** (#19). Previously `load_article(file=file)` on the very first step of a FLOW raised `state reference 'file' not produced by any previous step` -- so `TEST WITH:` kwargs were silently dead and CLI `--kwargs '{"file": ...}'` had no effect when the first step took a literal. Now the first step's identifier kwargs that don't match an upstream produced field are recognised as external inputs (typed via the matching `TAKES` entry) and seeded into `state[]` at runtime via `run(**initial)`. Subsequent steps still strictly validate against produced fields. **Known limitation** (tracked as #21): when the first chain item is a control-flow block (`FOR EACH` / `IF` / `WHILE`) over an external identifier, the promotion does not trigger and the v0.15 error is still raised.
 
 ### Examples
 
 - Add `examples/projects/01-iterative-refiner/` -- full project demonstrating the writer/critic refine loop with `WHILE ... MAX 3` and per-step `invoke.model` overrides. Includes committed `--target python` output and a CI drift guard at `tests/test_examples_projects/`.
 - `examples/projects/01-iterative-refiner/flow.clio`: switch the first step from a literal (`load_article(file="article.txt")`) to an identifier kwarg (`load_article(file=file)`) now that #19 makes this compilable. The committed `expected_output/` and the `TEST WITH: file: "data/article.txt"` clause are now actually exercised by the CLI's `--kwargs` flag.
+
+### Tests
+
+- 834 passed, 15 skipped, 1 xfailed (was 788 at v0.15.0). +46 tests: 11 for the bug fixes themselves, the rest for the new example project and its CI drift guard.
 
 ## v0.15.0 — 2026-05-14
 
