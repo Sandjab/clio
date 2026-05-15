@@ -793,14 +793,19 @@ class PythonEmitter(BaseEmitter):
         # (byte-identical output for flows without a declared signature).
         flow = graph.flow
         if flow.takes:
+            # Sanitize parameter identifiers via `_to_field_name` so Python
+            # keywords (e.g. `class`, `def`) declared in FLOW.TAKES don't
+            # produce a SyntaxError in the emitted run() signature. The
+            # state-dict KEY keeps the original `f.name` (it's a string
+            # literal, not an identifier).
             named_params = ", ".join(
-                f"{f.name}: {_type_to_python(f.type, contracts_by_name_flow)}"
+                f"{_to_field_name(f.name)}: {_type_to_python(f.type, contracts_by_name_flow)}"
                 for f in flow.takes
             )
             run_sig = f"def run(*, {named_params}, start_at: int = 0) -> dict:\n"
             state_init = (
                 "        state: dict = {"
-                + ", ".join(f"{f.name!r}: {f.name}" for f in flow.takes)
+                + ", ".join(f"{f.name!r}: {_to_field_name(f.name)}" for f in flow.takes)
                 + "}\n"
             )
         else:
