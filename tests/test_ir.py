@@ -1282,3 +1282,13 @@ def test_flow_duplicate_gives_field_rejected_at_ir_build():
     )
     with pytest.raises(IRBuildError, match="duplicate GIVES field"):
         build_ir(parse(src))
+
+
+def test_flowcallir_is_distinct_from_callir():
+    from clio.ir.graph import CallIR, FlowCallIR
+    fc = FlowCallIR(flow_name="enrich", kwargs=(("a", "@art"),), line=10)
+    sc = CallIR(step_name="enrich", kwargs=(("a", "@art"),), line=10)
+    assert type(fc) is not type(sc)
+    assert fc.flow_name == "enrich"
+    assert fc.kwargs == (("a", "@art"),)
+    assert fc.line == 10
