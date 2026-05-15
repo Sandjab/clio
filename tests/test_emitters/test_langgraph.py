@@ -308,3 +308,35 @@ FLOW p
     assert "y:" in flow_py
     # run() returns the full state
     assert "return dict(result)" in flow_py
+
+
+def test_langgraph_emits_subgraph_node(tmp_path):
+    src = """
+STEP s
+  TAKES: x: str
+  GIVES: y: str
+  MODE: exact
+
+FLOW inner
+  TAKES: x: str
+  GIVES: y: str
+  s(x=x)
+
+FLOW outer
+  TAKES: x: str
+  GIVES: y: str
+  inner(x=x)
+"""
+    g = build_ir(parse(src), flow_name="outer")
+    LangGraphEmitter().emit(g, tmp_path)
+    flow_py = (tmp_path / "outer" / "flow.py").read_text()
+    # Either we expose the sub-graph as a builder function or compile it inline.
+    # Accept either spelling; the key requirement is the sub-flow's logic
+    # becomes its own StateGraph and the outer graph adds it as a node.
+    assert any(token in flow_py for token in ("build_inner_graph", "inner_graph", "subgraph_inner")), (
+        "expected a sub-graph builder named like build_inner_graph / inner_graph / subgraph_inner; "
+        f"flow.py contents:\n{flow_py}"
+    )
+    assert '"inner"' in flow_py or "'inner'" in flow_py
+    # The outer graph should add a node for the sub-flow call.
+    assert "add_node(" in flow_py
