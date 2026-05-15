@@ -3,10 +3,10 @@ EXPOSE CONTRACT Article
 
 STEP score
   MODE: judgment
-  TAKES: text: str
+  TAKES: article: Article
   GIVES: label: str
 
 EXPOSE FLOW classify
   TAKES: article: Article
   GIVES: label: str
-  score(text=article)
+  score(article=article)

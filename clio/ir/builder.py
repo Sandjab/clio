@@ -1,5 +1,7 @@
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
+from typing import cast
 
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
@@ -77,14 +79,18 @@ from clio.parser.ast_nodes import (
     JsonBody,
     ListType,
     MatchBlock,
+    MatchCase,
     McpServerSpec,
     McpToolImpl,
     MultipartBody,
+    OnFailChain,
+    OnFailStrategy,
     Predicate,
     PrimitiveType,
     Program,
     RawBody,
     RecordType,
+    ReexportDecl,
     RescueBlock,
     ResourcesDecl,
     RestBody,
@@ -108,8 +114,41 @@ class IRBuildError(ValueError):
     pass
 
 
-def build_ir(program: Program, flow_name: str | None = None) -> FlowGraph:
-    """Build the IR graph for one flow.
+def build_ir(
+    parsed: dict[Path, Program] | Program,
+    entry: Path | None = None,
+    flow_name: str | None = None,
+) -> FlowGraph:
+    """Build a FlowGraph from either a single Program (v0.17 callers)
+    or a dict[Path, Program] (v0.18 multi-file).
+
+    For the multi-file case, internal (non-exposed) STEP/CONTRACT/FLOW
+    names are alpha-renamed to '{file_stem}__{name}' to avoid global
+    name collisions in the flat output. Exposed names keep their
+    original form. RESOURCES and TEST blocks come from the entry file
+    only.
+    """
+    if isinstance(parsed, Program):
+        return _build_ir_single(parsed, flow_name=flow_name)
+
+    if entry is None:
+        raise ValueError("build_ir requires `entry` when called with a dict")
+
+    from clio.ir.resolver import (
+        compute_exposed_sets,
+        validate_imports,
+        validate_per_file,
+    )
+    validate_per_file(parsed, entry=entry)
+    exposed_sets = compute_exposed_sets(parsed)
+    validate_imports(parsed, exposed_sets)
+
+    merged_program = _flatten_to_program(parsed, entry, exposed_sets)
+    return _build_ir_single(merged_program, flow_name=flow_name)
+
+
+def _build_ir_single(program: Program, flow_name: str | None = None) -> FlowGraph:
+    """Build the IR graph for one (already-flattened) Program.
 
     When the source declares multiple FLOWs, `flow_name` must be set to the
     one the caller wants compiled. With a single FLOW (the common case),
@@ -209,6 +248,29 @@ def build_ir(program: Program, flow_name: str | None = None) -> FlowGraph:
     flows_by_name = {d.name: d for d in flow_decls}
     tests_ir = _build_tests(program, flows_by_name)
 
+    # v0.18: derive exposed_flow_names from the explicit EXPOSE marker
+    # on entry-file FlowDecls. The v0.17 sibling-call heuristic is gone.
+    exposed_flow_names = frozenset(
+        f.name for f in all_flows.values()
+        if _was_exposed_in_source(f, program)
+    )
+
+    # E_MCP_001: target=mcp-server requires at least one EXPOSE FLOW
+    # in the entry file (the public tool surface).
+    if (
+        resources_ir is not None
+        and resources_ir.target == "mcp-server"
+        and not exposed_flow_names
+    ):
+        from clio.ir.resolver import CompileError
+        source_str = (
+            str(program.source_path) if program.source_path else "<inline>"
+        )
+        raise CompileError(
+            f"{source_str}: target 'mcp-server' requires at least one "
+            f"EXPOSE FLOW in the entry file"
+        )
+
     graph = FlowGraph(
         steps=tuple(steps_by_name.values()),
         contracts=tuple(contracts.values()),
@@ -216,12 +278,302 @@ def build_ir(program: Program, flow_name: str | None = None) -> FlowGraph:
         resources=resources_ir,
         tests=tests_ir,
         flows=tuple(all_flows.values()),
-        exposed_flow_names=_compute_exposed_flows(all_flows, flow_sigs),
+        exposed_flow_names=exposed_flow_names,
     )
     _validate_parallel_for_each(graph)
     _validate_mcp_tool_servers(graph)
     _validate_sql_databases(graph)
     return graph
+
+
+def _file_stem(path: Path) -> str:
+    """Derive a safe identifier prefix from a file path.
+
+    'lib/nlp.clio' → 'nlp'
+    'shared-utils.clio' → 'shared_utils'
+    """
+    return path.stem.replace("-", "_")
+
+
+def _flatten_to_program(
+    parsed: dict[Path, Program],
+    entry: Path,
+    exposed_sets: dict[Path, dict[str, object]],
+) -> Program:
+    """Merge multiple Programs into a single Program with internal
+    symbols alpha-renamed.
+
+    Convention: internal name X in file 'lib/nlp.clio' becomes
+    'nlp__X'. Exposed names keep their original form. RESOURCES
+    and TEST blocks are taken only from the entry file. ReexportDecls
+    contribute no IR decls (they're consumed by the resolver phases)."""
+    all_decls: list[object] = []
+
+    # Per-file rename tables: {original_name: renamed_name}
+    rename_tables: dict[Path, dict[str, str]] = {}
+
+    # Pass 1: build rename tables for each file
+    for path, program in parsed.items():
+        stem = _file_stem(path)
+        local_renames: dict[str, str] = {}
+        for decl in program.decls:
+            if isinstance(decl, (FlowDecl, ContractDecl)):
+                if not decl.exposed:
+                    local_renames[decl.name] = f"{stem}__{decl.name}"
+            elif isinstance(decl, StepDecl):
+                # STEPs are always internal in v0.18
+                local_renames[decl.name] = f"{stem}__{decl.name}"
+        rename_tables[path] = local_renames
+
+    # Pass 2: emit decls with renames applied to internal references,
+    # imports collapsed to a flat per-file scope, and RESOURCES/TEST
+    # restricted to the entry file.
+    for path, program in parsed.items():
+        # Build the per-file imported scope: {local_name: target_name}.
+        # `target_name` is the post-rename name in the merged program
+        # (exposed symbols keep their original form, so the rename
+        # table lookup falls through to the identity).
+        imported_scope: dict[str, str] = {}
+        for imp in program.imports:
+            child = (path.parent / imp.path).resolve()
+            child_exposed = exposed_sets.get(child, {})
+            child_renames = rename_tables.get(child, {})
+            for item in imp.items:
+                local_name = item.alias or item.name
+                target = child_exposed.get(item.name)
+                if target is None:
+                    # validate_imports would have already raised; defend
+                    # against a partial state.
+                    continue
+                # The exposed symbol's target name is its original name
+                # (exposed names are not in child_renames). If for any
+                # reason it is in child_renames, prefer that.
+                target_name = child_renames.get(
+                    getattr(target, "name", item.name),
+                    getattr(target, "name", item.name),
+                )
+                imported_scope[local_name] = target_name
+
+        # Emit each local decl, applying renames + import resolution.
+        is_entry = path == entry
+        for decl in program.decls:
+            if isinstance(decl, ReexportDecl):
+                continue  # re-exports do not produce new decls
+            if isinstance(decl, ResourcesDecl):
+                if is_entry:
+                    all_decls.append(decl)
+                continue
+            if isinstance(decl, TestDecl):
+                if is_entry:
+                    all_decls.append(
+                        _rename_test_decl(decl, rename_tables[path]),
+                    )
+                continue
+            renamed_decl = _rename_decl(
+                decl, rename_tables[path], imported_scope,
+            )
+            # Only entry-file FLOW/CONTRACT declarations keep the EXPOSE
+            # marker in the merged Program. Imported exposed symbols
+            # remain visible (their original names are kept) but they are
+            # not part of the public surface of the merged compilation
+            # unit — `exposed_flow_names` is derived from this flag and
+            # must reflect only what the entry file chose to expose.
+            if not is_entry and isinstance(renamed_decl, (FlowDecl, ContractDecl)):
+                renamed_decl = replace(renamed_decl, exposed=False)
+            all_decls.append(renamed_decl)
+
+    return Program(decls=tuple(all_decls), source_path=entry)
+
+
+_FlowItem = (
+    StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock | ResumeAst
+)
+_NestedItem = StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock
+
+
+def _rename_decl(
+    decl: object,
+    local_renames: dict[str, str],
+    imported_scope: dict[str, str],
+) -> object:
+    """Apply alpha-renames to one decl. The decl's own name is rewritten
+    if it's in `local_renames`; references to other symbols (in type
+    expressions, step calls, rescues, on_fail) go through the combined
+    resolver `imported_scope` then `local_renames`."""
+
+    def resolve_name(n: str) -> str:
+        if n in imported_scope:
+            return imported_scope[n]
+        return local_renames.get(n, n)
+
+    def rename_type(t: TypeExpr) -> TypeExpr:
+        if isinstance(t, ContractRef):
+            return ContractRef(name=resolve_name(t.name), line=t.line, col=t.col)
+        if isinstance(t, ListType):
+            return ListType(inner=rename_type(t.inner))
+        if isinstance(t, RecordType):
+            return RecordType(
+                fields=tuple(
+                    (fname, rename_type(ftype)) for fname, ftype in t.fields
+                ),
+            )
+        if isinstance(t, ConstrainedType):
+            return ConstrainedType(
+                base=rename_type(t.base),
+                constraints=t.constraints,
+            )
+        return t
+
+    def rename_field(f: Field) -> Field:
+        return Field(name=f.name, type=rename_type(f.type), line=f.line, col=f.col)
+
+    def rename_kwargs(
+        kwargs: tuple[tuple[str, object], ...],
+    ) -> tuple[tuple[str, object], ...]:
+        out: list[tuple[str, object]] = []
+        for kname, value in kwargs:
+            if isinstance(value, ErrorAccessExpr):
+                out.append((
+                    kname,
+                    ErrorAccessExpr(
+                        step_name=resolve_name(value.step_name),
+                        field=value.field,
+                        line=value.line,
+                    ),
+                ))
+            else:
+                out.append((kname, value))
+        return tuple(out)
+
+    def rename_call(c: _FlowItem) -> _FlowItem:
+        if isinstance(c, StepCall):
+            return StepCall(
+                name=resolve_name(c.name),
+                kwargs=rename_kwargs(c.kwargs),
+                line=c.line,
+                col=c.col,
+            )
+        if isinstance(c, ForEachBlock):
+            return ForEachBlock(
+                loop_var=c.loop_var,
+                collection=c.collection,
+                body=tuple(rename_call(x) for x in c.body),
+                line=c.line,
+                col=c.col,
+                parallel=c.parallel,
+                collector=c.collector,
+            )
+        if isinstance(c, IfBlock):
+            # IfBlock bodies are the narrower union (no ResumeAst).
+            return IfBlock(
+                condition=c.condition,
+                then_body=tuple(
+                    cast(_NestedItem, rename_call(x)) for x in c.then_body
+                ),
+                else_body=tuple(
+                    cast(_NestedItem, rename_call(x)) for x in c.else_body
+                ),
+                line=c.line,
+                col=c.col,
+            )
+        if isinstance(c, MatchBlock):
+            return MatchBlock(
+                scrutinee=c.scrutinee,
+                cases=tuple(
+                    MatchCase(
+                        value=case.value,
+                        body=tuple(
+                            cast(_NestedItem, rename_call(x)) for x in case.body
+                        ),
+                        line=case.line,
+                        col=case.col,
+                    )
+                    for case in c.cases
+                ),
+                line=c.line,
+                col=c.col,
+            )
+        if isinstance(c, WhileBlock):
+            return WhileBlock(
+                condition=c.condition,
+                max_iters=c.max_iters,
+                body=tuple(
+                    cast(_NestedItem, rename_call(x)) for x in c.body
+                ),
+                line=c.line,
+                col=c.col,
+            )
+        if isinstance(c, ResumeAst):
+            return ResumeAst(
+                fallback_step=resolve_name(c.fallback_step),
+                field_name=c.field_name,
+                line=c.line,
+                col=c.col,
+            )
+        return c
+
+    def rename_rescue(r: RescueBlock) -> RescueBlock:
+        return RescueBlock(
+            step_name=resolve_name(r.step_name),
+            body=tuple(rename_call(x) for x in r.body),
+            line=r.line,
+            col=r.col,
+        )
+
+    def rename_on_fail(chain: OnFailChain | None) -> OnFailChain | None:
+        if chain is None:
+            return None
+        new_strategies: list[OnFailStrategy] = []
+        for s in chain.strategies:
+            if s.kind == "fallback" and s.fallback_step_name is not None:
+                new_strategies.append(replace(
+                    s, fallback_step_name=resolve_name(s.fallback_step_name),
+                ))
+            else:
+                new_strategies.append(s)
+        return OnFailChain(
+            strategies=tuple(new_strategies),
+            line=chain.line,
+            col=chain.col,
+        )
+
+    if isinstance(decl, StepDecl):
+        return replace(
+            decl,
+            name=local_renames.get(decl.name, decl.name),
+            takes=tuple(rename_field(f) for f in decl.takes),
+            gives=rename_field(decl.gives) if decl.gives is not None else None,
+            on_fail=rename_on_fail(decl.on_fail),
+        )
+    if isinstance(decl, ContractDecl):
+        return replace(
+            decl,
+            name=local_renames.get(decl.name, decl.name),
+            shape=rename_type(decl.shape),
+        )
+    if isinstance(decl, FlowDecl):
+        return replace(
+            decl,
+            name=local_renames.get(decl.name, decl.name),
+            chain=tuple(rename_call(x) for x in decl.chain),
+            rescues=tuple(rename_rescue(r) for r in decl.rescues),
+            takes=tuple(rename_field(f) for f in decl.takes),
+            gives=tuple(rename_field(f) for f in decl.gives),
+        )
+    return decl
+
+
+def _rename_test_decl(
+    decl: TestDecl,
+    local_renames: dict[str, str],
+) -> TestDecl:
+    """Apply alpha-renames to a TEST decl. Only `flow_name` may need
+    rewriting — WITH kwargs, EXPECTS, and EXPECTS_NOT all reference
+    FLOW state field names which are not affected by alpha-renaming."""
+    return replace(
+        decl,
+        flow_name=local_renames.get(decl.flow_name, decl.flow_name),
+    )
 
 
 def _build_tests(
@@ -521,17 +873,19 @@ def _detect_flow_call_cycles(flows: dict[str, FlowIR]) -> None:
             visit(n, [])
 
 
-def _compute_exposed_flows(
-    all_flows: dict[str, FlowIR],
-    flow_sigs: dict[str, "FlowSignature"],
-) -> frozenset[str]:
-    """A FLOW is exposed iff it has an explicit signature AND is not
-    called by any sibling FLOW in the same source."""
-    called: set[str] = set()
-    for f in all_flows.values():
-        called.update(_collect_flow_call_names(f.chain))
-        called.update(_collect_flow_call_names_rescues(f.rescues))
-    return frozenset(n for n in flow_sigs if n not in called)
+def _was_exposed_in_source(flow_ir: FlowIR, program: Program) -> bool:
+    """Return True if the FLOW was declared with EXPOSE in the source
+    program. Used by `_build_ir_single` to derive `exposed_flow_names`
+    from the explicit v0.18 marker instead of the v0.17 sibling-call
+    heuristic."""
+    for decl in program.decls:
+        if (
+            isinstance(decl, FlowDecl)
+            and decl.name == flow_ir.name
+            and decl.exposed
+        ):
+            return True
+    return False
 
 
 def _build_step(decl: StepDecl) -> StepIR:
