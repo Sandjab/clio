@@ -53,6 +53,14 @@ def main(argv: list[str] | None = None) -> int:
         "--flow", dest="flow", default=None,
         help="select a FLOW by name when the source declares more than one",
     )
+    doctor_p.add_argument(
+        "--migrate-v018", dest="migrate_v018", action="store_true", default=False,
+        help="propose (or apply with --write) the v0.17 → v0.18 EXPOSE migration",
+    )
+    doctor_p.add_argument(
+        "--write", dest="write", action="store_true", default=False,
+        help="write migration changes back to the source file (use with --migrate-v018)",
+    )
 
     status_p = sub.add_parser("status")
     status_p.add_argument("--state-file", dest="state_file", default=None)
@@ -74,7 +82,8 @@ def main(argv: list[str] | None = None) -> int:
             model=args.model,
         )
     if args.cmd == "doctor":
-        return _cmd_doctor(args.source, args.flow)
+        return _cmd_doctor(args.source, args.flow,
+                           migrate_v018=args.migrate_v018, write=args.write)
     if args.cmd == "status":
         return _cmd_status(args.state_file, args.log_file, args.limit)
     return 2
@@ -207,7 +216,33 @@ def _cmd_gen(
     return 0
 
 
-def _cmd_doctor(source: str | None, flow: str | None = None) -> int:
+def _cmd_doctor(
+    source: str | None,
+    flow: str | None = None,
+    *,
+    migrate_v018: bool = False,
+    write: bool = False,
+) -> int:
+    if migrate_v018:
+        if not source:
+            print("clio doctor --migrate-v018: a source file is required", file=sys.stderr)
+            return 2
+        from clio.diagnostics import migrate_v018 as do_migrate
+        src_path = Path(source)
+        new_text, changes = do_migrate(src_path)
+        if not changes:
+            print(f"{source}: no v0.18 migration needed")
+            return 0
+        print(f"file: {source}")
+        print("Proposed changes (using v0.17 sibling-call heuristic):")
+        for line_num, _prefix in changes:
+            print(f"  line {line_num}: + EXPOSE before existing declaration")
+        if write:
+            src_path.write_text(new_text)
+            print(f"\nWrote {len(changes)} change(s) to {source}")
+        else:
+            print("\nRun with --write to apply.")
+        return 0
     from clio.diagnostics import run_doctor
     src = Path(source) if source else None
     code, report = run_doctor(src, flow_name=flow)

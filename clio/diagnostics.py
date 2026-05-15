@@ -257,3 +257,128 @@ def checks_exit_code(checks: Iterable[CheckResult]) -> int:
     if any(c.status == "fail" for c in checks):
         return 1
     return 0
+
+
+# ---------------------------------------------------------------------------
+# v0.18 migration
+# ---------------------------------------------------------------------------
+
+
+def migrate_v018(source: Path) -> tuple[str, list[tuple[int, str]]]:
+    """Compute the v0.17 → v0.18 migration for a single .clio file.
+
+    Applies the v0.17 sibling-call heuristic: a signed FLOW (with TAKES
+    + GIVES) is auto-exposed iff it is NOT called by any sibling FLOW.
+    CONTRACTs referenced in the signatures of auto-exposed FLOWs are
+    also auto-exposed.
+
+    Returns (new_source, changes) where `changes` is a list of
+    (line_number, inserted_text) describing each EXPOSE insertion.
+    Already-exposed declarations are skipped.
+    """
+    from clio.parser.ast_nodes import ContractDecl, FlowDecl
+    from clio.parser.parser import parse
+
+    text = source.read_text()
+    program = parse(text)
+    lines = text.splitlines(keepends=True)
+
+    # Signed FLOWs: must have both TAKES and GIVES declared.
+    signed_flows = [
+        d for d in program.decls
+        if isinstance(d, FlowDecl) and d.takes and d.gives
+    ]
+
+    # Collect all names called by any FLOW in the file (sibling-call set).
+    called: set[str] = set()
+    for d in program.decls:
+        if isinstance(d, FlowDecl):
+            called.update(_collect_call_names(d.chain))
+
+    # A signed FLOW is auto-exposed iff its name is NOT in the called set.
+    auto_exposed_flow_names = {
+        f.name for f in signed_flows if f.name not in called
+    }
+
+    # Collect CONTRACT names referenced in signatures of auto-exposed FLOWs.
+    auto_exposed_contract_names: set[str] = set()
+    for f in signed_flows:
+        if f.name in auto_exposed_flow_names:
+            auto_exposed_contract_names.update(_collect_contract_refs(f))
+
+    changes: list[tuple[int, str]] = []
+    for d in program.decls:
+        if isinstance(d, FlowDecl) and d.name in auto_exposed_flow_names:
+            if not d.exposed:
+                changes.append((d.line, "EXPOSE "))
+        if isinstance(d, ContractDecl) and d.name in auto_exposed_contract_names:
+            if not d.exposed:
+                changes.append((d.line, "EXPOSE "))
+
+    # Apply insertions (sort by line number ascending for predictability).
+    changes.sort(key=lambda t: t[0])
+    new_lines = list(lines)
+    # Adjust indices as we insert prefixes (each insertion shifts subsequent lines by 0
+    # since we prepend text to an existing line, not insert new lines).
+    for line_num, prefix in changes:
+        idx = line_num - 1
+        if 0 <= idx < len(new_lines):
+            new_lines[idx] = prefix + new_lines[idx]
+
+    return "".join(new_lines), changes
+
+
+def _collect_call_names(
+    chain: tuple[object, ...],
+) -> set[str]:
+    """Walk a FLOW chain and collect every name invoked via StepCall,
+    including inside FOR EACH / IF / MATCH / WHILE bodies."""
+    from clio.parser.ast_nodes import (
+        ForEachBlock,
+        IfBlock,
+        MatchBlock,
+        StepCall,
+        WhileBlock,
+    )
+    out: set[str] = set()
+    for x in chain:
+        if isinstance(x, StepCall):
+            out.add(x.name)
+        elif isinstance(x, ForEachBlock):
+            out |= _collect_call_names(x.body)
+        elif isinstance(x, IfBlock):
+            out |= _collect_call_names(x.then_body)
+            out |= _collect_call_names(x.else_body)
+        elif isinstance(x, MatchBlock):
+            for case in x.cases:
+                out |= _collect_call_names(case.body)
+        elif isinstance(x, WhileBlock):
+            out |= _collect_call_names(x.body)
+    return out
+
+
+def _collect_contract_refs(flow_decl: object) -> set[str]:
+    """Collect all ContractRef names from a FlowDecl's TAKES and GIVES fields."""
+    from clio.parser.ast_nodes import FlowDecl
+
+    assert isinstance(flow_decl, FlowDecl)
+    out: set[str] = set()
+    for field in (*flow_decl.takes, *flow_decl.gives):
+        out |= _walk_type_for_refs(field.type)
+    return out
+
+
+def _walk_type_for_refs(t: object) -> set[str]:
+    """Recursively collect ContractRef names from a TypeExpr."""
+    from clio.parser.ast_nodes import ContractRef, ListType, RecordType
+
+    if isinstance(t, ContractRef):
+        return {t.name}
+    if isinstance(t, ListType):
+        return _walk_type_for_refs(t.inner)
+    if isinstance(t, RecordType):
+        out: set[str] = set()
+        for _name, field_type in t.fields:
+            out |= _walk_type_for_refs(field_type)
+        return out
+    return set()
