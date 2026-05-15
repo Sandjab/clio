@@ -1,0 +1,17 @@
+FROM "../schemas.clio" IMPORT Article, AnalysisResult
+
+STEP preprocess
+  MODE: exact
+  TAKES: article: Article
+  GIVES: cleaned: str
+
+EXPOSE FLOW analyse
+  TAKES: article: Article
+  GIVES: result: AnalysisResult
+  preprocess(article=article)
+  -> classify(text=cleaned)
+
+STEP classify
+  MODE: judgment
+  TAKES: text: str
+  GIVES: result: AnalysisResult

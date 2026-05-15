@@ -345,7 +345,7 @@ FROM "<path>" IMPORT <name> [AS <alias>] [, <name> [AS <alias>]] ...
 
 ```
 FROM "./schemas.clio" IMPORT Article, AnalysisResult
-FROM "./lib/nlp.clio" IMPORT analyse AS nlp_analyse
+FROM "./nlp/nlp.clio" IMPORT analyse AS nlp_analyse
 ```
 
 Multiple `FROM` declarations are allowed in a single file. The compiler
@@ -386,7 +386,7 @@ EXPOSE CONTRACT AnalysisResult
   ASSERT: 0.0 <= confidence <= 1.0
 ```
 
-**`lib/nlp.clio`** — reusable NLP FLOW that imports the shared shapes:
+**`nlp/nlp.clio`** — reusable NLP FLOW that imports the shared shapes:
 
 ```
 FROM "../schemas.clio" IMPORT Article, AnalysisResult
@@ -415,7 +415,7 @@ RESOURCES
   target: python
 
 FROM "./schemas.clio" IMPORT Article, AnalysisResult
-FROM "./lib/nlp.clio" IMPORT analyse
+FROM "./nlp/nlp.clio" IMPORT analyse
 
 STEP load_article
   MODE: exact
