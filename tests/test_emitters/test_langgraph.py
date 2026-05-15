@@ -308,3 +308,104 @@ FLOW p
     assert "y:" in flow_py
     # run() returns the full state
     assert "return dict(result)" in flow_py
+
+
+def test_langgraph_emits_subgraph_node(tmp_path):
+    src = """
+STEP s
+  TAKES: x: str
+  GIVES: y: str
+  MODE: exact
+
+FLOW inner
+  TAKES: x: str
+  GIVES: y: str
+  s(x=x)
+
+FLOW outer
+  TAKES: x: str
+  GIVES: y: str
+  inner(x=x)
+"""
+    g = build_ir(parse(src), flow_name="outer")
+    LangGraphEmitter().emit(g, tmp_path)
+    flow_py = (tmp_path / "outer" / "flow.py").read_text()
+    # Either we expose the sub-graph as a builder function or compile it inline.
+    # Accept either spelling; the key requirement is the sub-flow's logic
+    # becomes its own StateGraph and the outer graph adds it as a node.
+    assert any(token in flow_py for token in ("build_inner_graph", "inner_graph", "subgraph_inner")), (
+        "expected a sub-graph builder named like build_inner_graph / inner_graph / subgraph_inner; "
+        f"flow.py contents:\n{flow_py}"
+    )
+    assert '"inner"' in flow_py or "'inner'" in flow_py
+    # The outer graph should add a node for the sub-flow call.
+    assert "add_node(" in flow_py
+
+
+def test_langgraph_compiles_subflow_once_at_module_load(tmp_path):
+    """v0.17: each sub-flow's StateGraph is compiled exactly once into a
+    module-level `_compiled_<flow>` constant; the FlowCallIR node wrapper
+    invokes that cached instance rather than re-compiling per call."""
+    src = """
+STEP s
+  TAKES: x: str
+  GIVES: y: str
+  MODE: exact
+
+FLOW inner
+  TAKES: x: str
+  GIVES: y: str
+  s(x=x)
+
+FLOW outer
+  TAKES: x: str
+  GIVES: y: str
+  inner(x=x)
+"""
+    g = build_ir(parse(src), flow_name="outer")
+    LangGraphEmitter().emit(g, tmp_path)
+    flow_py = (tmp_path / "outer" / "flow.py").read_text()
+    # Module-level cache constant exists and is built via the sub-flow builder.
+    assert "_compiled_inner = build_inner_graph()" in flow_py
+    # The wrapper uses the cached instance, not a fresh build.
+    assert "_compiled_inner.invoke(" in flow_py
+    # And does NOT re-compile inside the wrapper body.
+    assert "build_inner_graph().invoke(" not in flow_py
+
+
+def test_langgraph_state_typeddict_uses_functional_syntax_for_keyword_fields(
+    tmp_path,
+):
+    """v0.17: when a FLOW.TAKES/GIVES field name collides with a Python keyword
+    (e.g., `from`), the State TypedDict is declared with functional syntax so
+    the dict key retains its original form (matching the `state[<orig>]` access
+    used by the emitted node wrappers). Class syntax would force a sanitized
+    field name (`from_`), causing a KeyError at runtime."""
+    src = """
+STEP s
+  TAKES: from: str
+  GIVES: y: str
+  MODE: exact
+
+FLOW inner
+  TAKES: from: str
+  GIVES: y: str
+  s(from=from)
+
+FLOW outer
+  TAKES: from: str
+  GIVES: y: str
+  inner(from=from)
+"""
+    g = build_ir(parse(src), flow_name="outer")
+    LangGraphEmitter().emit(g, tmp_path)
+    flow_py = (tmp_path / "outer" / "flow.py").read_text()
+    # Parent State must declare 'from' as a string key, not a class field.
+    assert "State = TypedDict('State'" in flow_py
+    assert "'from': str" in flow_py
+    # Sub-flow State (used by build_inner_graph) too.
+    assert "_State_inner = TypedDict('_State_inner'" in flow_py
+    # Critical: the runtime dict access must match the TypedDict key, not be
+    # rewritten to the sanitized form (i.e., no `state['from_']` lookups).
+    assert "state['from_']" not in flow_py
+    assert "_result['from_']" not in flow_py

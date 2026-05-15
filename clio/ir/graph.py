@@ -246,6 +246,16 @@ class CallIR:
 
 
 @dataclass(frozen=True)
+class FlowCallIR:
+    """v0.17 — a sub-flow invocation in a parent FLOW's chain. Resolves
+    to another FlowIR by name. Output is bound under the call-site name
+    (defaults to flow_name unless aliased) in the parent's state."""
+    flow_name: str
+    kwargs: tuple[tuple[str, object], ...]
+    line: int
+
+
+@dataclass(frozen=True)
 class ErrorAccessIR:
     """`<rescued_step>.error.<field>` reference resolved inside a RESCUE
     body. `rescued_step` MUST equal the step protected by the enclosing
@@ -279,7 +289,7 @@ class ForEachIR:
     each item, and results are collected into `state[<collector>]` as a list."""
     loop_var: str
     collection: str
-    body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
+    body: "tuple[CallIR | FlowCallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
     line: int
     parallel: bool = False
     collector: str | None = None
@@ -314,8 +324,8 @@ class IfBlockIR:
     declared in the source. `condition` is a `ConditionIR` (single
     comparison) or a `BoolOpIR` (composed with `and`/`or`, v0.12+)."""
     condition: "ConditionIR | BoolOpIR"
-    then_body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
-    else_body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
+    then_body: "tuple[CallIR | FlowCallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
+    else_body: "tuple[CallIR | FlowCallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
     line: int
 
 
@@ -324,7 +334,7 @@ class MatchCaseIR:
     """One CASE / DEFAULT arm of a MATCH block. `value` is None for DEFAULT,
     otherwise the literal string the runtime compares the scrutinee against."""
     value: str | None
-    body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
+    body: "tuple[CallIR | FlowCallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
     line: int
 
 
@@ -348,7 +358,7 @@ class WhileBlockIR:
     single `ConditionIR` or a `BoolOpIR` composing `and`/`or`)."""
     condition: "ConditionIR | BoolOpIR"
     max_iters: int
-    body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
+    body: "tuple[CallIR | FlowCallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
     line: int
 
 
@@ -358,14 +368,14 @@ class RescueBlockIR:
     pointer because StepIR is frozen). The handler runs only if the
     referenced STEP raises after its ON_FAIL chain (if any) exhausts."""
     step_name: str
-    body: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR | ResumeIR, ...]"
+    body: "tuple[CallIR | FlowCallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR | ResumeIR, ...]"
     line: int
 
 
 @dataclass(frozen=True)
 class FlowIR:
     name: str
-    chain: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
+    chain: "tuple[CallIR | FlowCallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
     rescues: "tuple[RescueBlockIR, ...]"
     line: int
     takes: tuple[FieldIR, ...] = ()      # v0.16 — empty = not declared
@@ -406,3 +416,5 @@ class FlowGraph:
     flow: FlowIR | None = None
     resources: ResourcesIR | None = None
     tests: tuple[TestIR, ...] = ()
+    flows: tuple[FlowIR, ...] = ()                         # v0.17 — every FLOW, signed or not
+    exposed_flow_names: frozenset[str] = frozenset()       # v0.17 — for target=mcp-server

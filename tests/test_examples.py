@@ -173,3 +173,87 @@ def test_compile_critical_pipeline_mcp_server(tmp_path):
     assert "async def _rescue_detect_churn(state" in flow_body
     assert "await _rescue_detect_churn(state" in flow_body
     assert "class FlowAborted(Exception)" in flow_body
+
+
+def test_compile_flow_composition_example_python_batch(tmp_path):
+    """flow_composition.clio (v0.17 example): the `batch` flow uses a
+    signed sub-flow inside FOR EACH PARALLEL — compiles cleanly to python
+    and the per-iteration body invokes the in-module sub-flow function."""
+    from clio.emitters.python import PythonEmitter
+
+    src = (REPO_ROOT / "examples/flow_composition.clio").read_text()
+    program = parse(src)
+    ir = build_ir(program, flow_name="batch")
+    PythonEmitter().emit(ir, tmp_path)
+    flow_py = (tmp_path / "batch" / "flow.py").read_text()
+    # Sub-flow function is defined in the same module.
+    assert "def run_enrich(" in flow_py
+    # The PARALLEL body invokes the sub-flow per iteration.
+    assert "return run_enrich(url=u)" in flow_py
+    # ThreadPoolExecutor is wired in.
+    assert "ThreadPoolExecutor(max_workers=10)" in flow_py
+
+
+def test_compile_flow_composition_example_mcp_batch(tmp_path):
+    """flow_composition.clio compiles to mcp-server with the same
+    PARALLEL+sub-flow pattern (async invocation, _session threaded in)."""
+    from clio.emitters.mcp_server import MCPServerEmitter
+
+    src = (REPO_ROOT / "examples/flow_composition.clio").read_text()
+    src_mcp = src.replace("target: python", "target: mcp-server")
+    program = parse(src_mcp)
+    ir = build_ir(program, flow_name="batch")
+    MCPServerEmitter().emit(ir, tmp_path)
+    flow_py = (tmp_path / "batch" / "flow.py").read_text()
+    assert "async def enrich(" in flow_py
+    assert "await enrich(_session=_session, url=u)" in flow_py
+
+
+def test_compile_flow_composition_example_langgraph_single(tmp_path):
+    """flow_composition.clio compiles to langgraph when the entrypoint is
+    `single` (langgraph rejects FOR EACH PARALLEL pre-v0.17, so `batch` is
+    not usable on this target — documented in the cookbook recipe)."""
+    from clio.emitters.langgraph import LangGraphEmitter
+
+    src = (REPO_ROOT / "examples/flow_composition.clio").read_text()
+    src_lg = src.replace("target: python", "target: langgraph")
+    program = parse(src_lg)
+    ir = build_ir(program, flow_name="single")
+    LangGraphEmitter().emit(ir, tmp_path)
+    # langgraph emits a sub-graph for `enrich` and a node calling it.
+    flow_py = (tmp_path / "single" / "flow.py").read_text()
+    assert "enrich" in flow_py
+
+
+def test_compile_flow_composition_example_claude_skill_batch(tmp_path):
+    """flow_composition.clio compiles to claude-skill (the host serializes
+    iterations — a documented warning is emitted)."""
+    from clio.emitters.claude_skill import ClaudeSkillEmitter
+
+    src = (REPO_ROOT / "examples/flow_composition.clio").read_text()
+    src_sk = src.replace("target: python", "target: claude-skill")
+    program = parse(src_sk)
+    ir = build_ir(program, flow_name="batch")
+    ClaudeSkillEmitter().emit(ir, tmp_path)
+    assert (tmp_path / "SKILL.md").exists()
+    # The sub-flow script is emitted alongside the step scripts.
+    scripts_dir = tmp_path / "scripts"
+    sub_scripts = [p.name for p in scripts_dir.glob("sub_*.py")]
+    assert "sub_enrich.py" in sub_scripts
+
+
+def test_compile_flow_composition_example_claude_cli_rejects(tmp_path):
+    """flow_composition.clio MUST be rejected by claude-cli with the
+    Task 11 v0.17 deferred-target message (FLOW composition unsupported)."""
+    import pytest
+
+    from clio.emitters.claude_cli import ClaudeCLIEmitter
+
+    src = (REPO_ROOT / "examples/flow_composition.clio").read_text()
+    src_cli = src.replace("target: python", "target: claude-cli")
+    program = parse(src_cli)
+    # Either main flow exercises a sub-flow call site; both must reject.
+    for flow_name in ("single", "batch"):
+        ir = build_ir(program, flow_name=flow_name)
+        with pytest.raises(ValueError, match="does not support FLOW composition"):
+            ClaudeCLIEmitter().emit(ir, tmp_path)

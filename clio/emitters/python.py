@@ -40,12 +40,15 @@ from clio.ir.graph import (
     ContractIR,
     DatabaseSpecIR,
     ErrorAccessIR,
+    FlowCallIR,
     FlowGraph,
+    FlowIR,
     ForEachIR,
     IfBlockIR,
     MatchBlockIR,
     McpServerSpecIR,
     McpToolImplIR,
+    RescueBlockIR,
     RestImplIR,
     ResumeIR,
     ShellImplIR,
@@ -555,15 +558,31 @@ class PythonEmitter(BaseEmitter):
         if graph.flow is None:
             return '"""No FLOW declared."""\n\ndef run(**kwargs):\n    return {}\n'
 
-        chain_groups: list[list[str]] = []
         imported_steps: list[str] = []
         steps_by_name = {s.name: s for s in graph.steps}
         contracts_by_name_flow = {c.name: c for c in graph.contracts}
-        # RESCUE bookkeeping: the names of steps protected by a RESCUE block
-        # (used to wrap their call site in try/except) and the blocks
-        # themselves (used to emit the _rescue_<name> helper functions).
-        rescue_target_names = {rb.step_name for rb in graph.flow.rescues}
-        rescues_by_step = {rb.step_name: rb for rb in graph.flow.rescues}
+        # v0.17: sub-flows that have signatures and aren't the main flow.
+        # Each is emitted as `def run_<name>(...)` in the same module so
+        # FlowCallIR sites can invoke them directly. Use the original
+        # `graph.flow.name` literal (the main flow's name) for exclusion;
+        # `_safe_package_name` is only used for directory naming.
+        main_flow_name = graph.flow.name
+        sub_flows: tuple[FlowIR, ...] = tuple(
+            f for f in graph.flows
+            if f.name != main_flow_name and f.takes and f.gives
+        )
+        # RESCUE bookkeeping is per-flow; rebuilt before each chain pass via
+        # `_set_flow_ctx`. Mutable dicts so the closures pick up the active
+        # flow's rescues without re-binding the closure.
+        rescue_target_names: set[str] = set()
+        rescues_by_step: dict[str, RescueBlockIR] = {}
+
+        def _set_flow_ctx(flow: FlowIR) -> None:
+            rescue_target_names.clear()
+            rescue_target_names.update(rb.step_name for rb in flow.rescues)
+            rescues_by_step.clear()
+            rescues_by_step.update({rb.step_name: rb for rb in flow.rescues})
+
         # The currently-being-built group; reset between top-level items.
         # Mutated (.append) by closures below; never reassigned inside them.
         _current: list[str] = []
@@ -630,8 +649,41 @@ class PythonEmitter(BaseEmitter):
             else:
                 _current.append(f"{indent}{call_line}")
 
+        def _emit_flow_call(
+            call: FlowCallIR, indent: str, scope_local: set[str],
+        ) -> None:
+            """Render a FlowCallIR as `state["<call_name>"] = run_<name>(...)`.
+            Inside a nested scope (FOR EACH / IF / MATCH / WHILE body) the
+            result is invoked but not bound to outer state — same convention
+            as nested step calls."""
+            kw_parts = []
+            for name, value in call.kwargs:
+                if isinstance(value, str) and value.startswith("@"):
+                    ref = value[1:]
+                    if ref in scope_local:
+                        kw_parts.append(f"{name}={ref}")
+                    else:
+                        kw_parts.append(f"{name}=state[{ref!r}]")
+                else:
+                    kw_parts.append(f"{name}={value!r}")
+            kwargs_str = ", ".join(kw_parts)
+            invocation = f"run_{call.flow_name}({kwargs_str})"
+            if scope_local:
+                _current.append(f"{indent}{invocation}")
+            else:
+                # v0.17: a sub-flow's declared GIVES are published top-level
+                # into the parent state (matching the IR builder's
+                # `available[g.name]` rule, and the convention used for
+                # STEPs whose GIVES becomes `state[gives.name]`). We do not
+                # keep a `state[<flow_name>]` key — it would be unreachable
+                # because downstream `@<field>` references resolve directly.
+                _current.append(f"{indent}state.update({invocation})")
+
         def _emit_item(
-            item: CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR | ResumeIR,
+            item: (
+                CallIR | FlowCallIR | ForEachIR | IfBlockIR
+                | MatchBlockIR | WhileBlockIR | ResumeIR
+            ),
             indent: str,
             scope_local: set[str],
         ) -> None:
@@ -650,9 +702,12 @@ class PythonEmitter(BaseEmitter):
                 if item.parallel:
                     _current.append(emit_parallel_for_each_python(item, steps_by_name, indent))
                     inner = item.body[0]
-                    assert isinstance(inner, CallIR)  # IR builder enforces
-                    if inner.step_name not in imported_steps:
-                        imported_steps.append(inner.step_name)
+                    # v0.17: a sub-flow body needs no step import (the sub-flow
+                    # function is emitted in the same module). Only register
+                    # step-name imports for CallIR bodies.
+                    if isinstance(inner, CallIR):
+                        if inner.step_name not in imported_steps:
+                            imported_steps.append(inner.step_name)
                     return
                 # FOR EACH item IN collection:
                 #     <body>
@@ -715,11 +770,16 @@ class PythonEmitter(BaseEmitter):
             if isinstance(item, ResumeIR):
                 _current.append(f"{indent}return state[{item.field_name!r}]")
                 return
+            if isinstance(item, FlowCallIR):
+                _emit_flow_call(item, indent, scope_local)
+                return
             if isinstance(item, CallIR):
                 _emit_call(item, indent, scope_local)
                 return
             raise ValueError(f"unknown flow item: {type(item).__name__}")
 
+        _set_flow_ctx(graph.flow)
+        chain_groups: list[list[str]] = []
         for item in graph.flow.chain:
             _current = []
             _emit_item(item, "    ", set())
@@ -743,6 +803,52 @@ class PythonEmitter(BaseEmitter):
                 + "\n".join(_current)
                 + "\n"
             )
+
+        # v0.17 sub-flows: emit one `def run_<name>(...)` per signed FLOW
+        # (other than the main one). Each renders its chain with its own
+        # local `state` dict; sub-flow rescues, if any, reuse the same
+        # `_rescue_<step>` helpers because RESCUE bookkeeping is reset per
+        # flow via `_set_flow_ctx`. The function returns a dict matching
+        # the sub-flow's GIVES signature.
+        subflow_funcs: list[str] = []
+        for sub_flow in sub_flows:
+            _set_flow_ctx(sub_flow)
+            sub_groups: list[list[str]] = []
+            for item in sub_flow.chain:
+                _current = []
+                _emit_item(item, "    ", set())
+                sub_groups.append(list(_current))
+            sub_params = ", ".join(
+                f"{_to_field_name(f.name)}: {_type_to_python(f.type, contracts_by_name_flow)}"
+                for f in sub_flow.takes
+            )
+            sub_state_init = (
+                "    state: dict = {"
+                + ", ".join(
+                    f"{f.name!r}: {_to_field_name(f.name)}"
+                    for f in sub_flow.takes
+                )
+                + "}"
+            )
+            sub_body_lines = [sub_state_init]
+            for group in sub_groups:
+                sub_body_lines.extend(group)
+            sub_return = (
+                "    return {"
+                + ", ".join(f"{f.name!r}: state[{f.name!r}]" for f in sub_flow.gives)
+                + "}"
+            )
+            sub_body_lines.append(sub_return)
+            subflow_funcs.append(
+                f"def run_{sub_flow.name}(*, {sub_params}) -> dict:\n"
+                + "\n".join(sub_body_lines)
+                + "\n"
+            )
+
+        # Restore the main flow's rescue context for downstream use (e.g. the
+        # _rescue_<name> helpers in `rescue_helpers` are already rendered, but
+        # the final assembled output uses `graph.flow.rescues` directly).
+        _set_flow_ctx(graph.flow)
 
         needs_concurrent = _has_parallel(graph.flow.chain)
         cf_import = (
@@ -781,6 +887,12 @@ class PythonEmitter(BaseEmitter):
         )
         rescue_helpers_block = (
             "\n\n" + "\n\n".join(rescue_helpers) if rescue_helpers else ""
+        )
+        # v0.17: sub-flow function block inserted between `_persist_state`
+        # and `def run(...)` so the main run() body can reference them by
+        # bare name. Each entry already ends with `\n`, so join with `\n`.
+        subflow_block = (
+            "\n".join(subflow_funcs) + "\n" if subflow_funcs else ""
         )
         # JSON-style double-quoted literal so callers can grep for
         # `set_flow("name")` consistently across emitters.
@@ -850,6 +962,7 @@ class PythonEmitter(BaseEmitter):
             f'    os.replace(tmp, path)\n'
             f'\n'
             f'\n'
+            f'{subflow_block}'
             f'{run_sig}'
             f'    if start_at > 0:\n'
             f'        path = os.environ.get("CLIO_STATE_FILE", "state.json")\n'

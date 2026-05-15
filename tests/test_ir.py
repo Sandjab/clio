@@ -545,7 +545,7 @@ def test_ir_rejects_parallel_multi_step_body():
         "         a(x=item)\n"
         "           -> b(y)\n"
     )
-    with pytest.raises(ValueError, match="must contain exactly one step call"):
+    with pytest.raises(ValueError, match="must contain exactly one step or sub-flow call"):
         build_ir(parse(src))
 
 
@@ -849,17 +849,21 @@ def test_ir_build_sql_primitive_gives_shape_accepted():
 # -- multi-FLOW (v0.15) --
 
 
-def test_build_ir_multiple_flows_requires_flow_name():
+def test_build_ir_multiple_flows_without_selector_leaves_main_none():
+    """v0.17: multi-FLOW sources no longer require --flow at build_ir.
+    `flow` (the main) stays None; per-target emitters that need a main
+    (python, langgraph, claude-skill, claude-cli) raise in their own
+    emit pass. `flows` and `exposed_flow_names` are still populated so
+    targets like mcp-server can emit every FLOW as a tool."""
     src = (
         "STEP foo\n"
         "  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n"
         "FLOW alpha\n  foo(x=\"a\")\n"
         "FLOW beta\n  foo(x=\"b\")\n"
     )
-    with pytest.raises(IRBuildError) as exc:
-        build_ir(parse(src))
-    assert "2 FLOWs" in str(exc.value)
-    assert "alpha" in str(exc.value) and "beta" in str(exc.value)
+    g = build_ir(parse(src))
+    assert g.flow is None
+    assert {f.name for f in g.flows} == {"alpha", "beta"}
 
 
 def test_build_ir_multi_flow_select_by_name():
@@ -1282,3 +1286,123 @@ def test_flow_duplicate_gives_field_rejected_at_ir_build():
     )
     with pytest.raises(IRBuildError, match="duplicate GIVES field"):
         build_ir(parse(src))
+
+
+def test_flowcallir_is_distinct_from_callir():
+    from clio.ir.graph import CallIR, FlowCallIR
+    fc = FlowCallIR(flow_name="enrich", kwargs=(("a", "@art"),), line=10)
+    sc = CallIR(step_name="enrich", kwargs=(("a", "@art"),), line=10)
+    assert type(fc) is not type(sc)
+    assert fc.flow_name == "enrich"
+    assert fc.kwargs == (("a", "@art"),)
+    assert fc.line == 10
+
+
+def test_extract_flow_signatures_skips_unsigned_flows():
+    from clio.ir.builder import _extract_flow_signatures
+    from clio.parser.parser import parse
+    src = (
+        "STEP s\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n\n"
+        "FLOW with_sig\n  TAKES: x: str\n  GIVES: y: str\n  s(x=x)\n\n"
+        "FLOW no_sig\n  s(x=\"hi\")\n"
+    )
+    prog = parse(src)
+    flow_decls = [d for d in prog.decls if type(d).__name__ == "FlowDecl"]
+    sigs = _extract_flow_signatures(flow_decls)
+    assert "with_sig" in sigs
+    assert "no_sig" not in sigs
+    sig = sigs["with_sig"]
+    assert [f.name for f in sig.takes] == ["x"]
+    assert [f.name for f in sig.gives] == ["y"]
+
+
+def test_step_flow_name_collision_rejected():
+    from clio.ir.builder import IRBuildError, build_ir
+    from clio.parser.parser import parse
+    src = (
+        "STEP enrich\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n\n"
+        "FLOW enrich\n  TAKES: x: str\n  GIVES: y: str\n  enrich(x=x)\n"
+    )
+    import pytest as _pt
+    with _pt.raises(IRBuildError) as ei:
+        build_ir(parse(src))
+    msg = str(ei.value)
+    assert "collision" in msg.lower() or "shadow" in msg.lower()
+    assert "enrich" in msg
+
+
+def test_subflow_call_returns_flowcallir():
+    from clio.ir.builder import build_ir
+    from clio.ir.graph import FlowCallIR
+    from clio.parser.parser import parse
+    src = (
+        "STEP s\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n\n"
+        "FLOW inner\n  TAKES: x: str\n  GIVES: y: str\n  s(x=x)\n\n"
+        "FLOW outer\n  TAKES: x: str\n  GIVES: y: str\n  inner(x=x)\n"
+    )
+    g = build_ir(parse(src), flow_name="outer")
+    outer = g.flow
+    assert outer is not None
+    item = outer.chain[0]
+    assert isinstance(item, FlowCallIR)
+    assert item.flow_name == "inner"
+
+
+def test_call_to_unsigned_flow_rejected():
+    from clio.ir.builder import IRBuildError, build_ir
+    from clio.parser.parser import parse
+    src = (
+        "STEP s\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n\n"
+        "FLOW inner\n  s(x=\"hi\")\n\n"
+        "FLOW outer\n  TAKES: x: str\n  GIVES: y: str\n  inner(x=x)\n"
+    )
+    import pytest as _pt
+    with _pt.raises(IRBuildError) as ei:
+        build_ir(parse(src), flow_name="outer")
+    msg = str(ei.value)
+    assert "inner" in msg
+    assert "signature" in msg.lower() or "TAKES" in msg
+
+
+def test_subflow_self_recursion_rejected():
+    from clio.ir.builder import IRBuildError, build_ir
+    from clio.parser.parser import parse
+    src = (
+        "STEP s\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n\n"
+        "FLOW a\n  TAKES: x: str\n  GIVES: y: str\n  a(x=x)\n"
+    )
+    import pytest as _pt
+    with _pt.raises(IRBuildError) as ei:
+        build_ir(parse(src), flow_name="a")
+    assert "recursion" in str(ei.value).lower() or "cycle" in str(ei.value).lower()
+
+
+def test_subflow_mutual_recursion_rejected():
+    from clio.ir.builder import IRBuildError, build_ir
+    from clio.parser.parser import parse
+    src = (
+        "STEP s\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n\n"
+        "FLOW a\n  TAKES: x: str\n  GIVES: y: str\n  b(x=x)\n\n"
+        "FLOW b\n  TAKES: x: str\n  GIVES: y: str\n  a(x=x)\n"
+    )
+    import pytest as _pt
+    with _pt.raises(IRBuildError) as ei:
+        build_ir(parse(src), flow_name="a")
+    assert "cycle" in str(ei.value).lower()
+
+
+def test_graph_exposes_all_flows():
+    from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
+    src = (
+        "STEP s\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n\n"
+        "FLOW a\n  TAKES: x: str\n  GIVES: y: str\n  s(x=x)\n\n"
+        "FLOW b\n  TAKES: x: str\n  GIVES: y: str\n  a(x=x)\n"
+    )
+    g = build_ir(parse(src), flow_name="b")
+    assert g.flow is not None and g.flow.name == "b"
+    names = {f.name for f in g.flows}
+    assert names == {"a", "b"}
+    # `a` is called by `b`, so it is NOT exposed at the top level.
+    assert "a" not in g.exposed_flow_names
+    assert "b" in g.exposed_flow_names

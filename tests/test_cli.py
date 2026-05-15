@@ -221,10 +221,12 @@ def test_doctor_with_source_judgment_fails_without_api_key(tmp_path, monkeypatch
     assert rc == 1
 
 
-def test_doctor_multi_flow_without_selector_reports_fail(tmp_path, monkeypatch, capsys):
-    """Regression: clio doctor used to crash on multi-FLOW sources because
-    build_ir requires --flow when more than one flow is declared
-    (Gemini PR #13 review). Now it surfaces as a clean FAIL line."""
+def test_doctor_multi_flow_without_selector_compiles(tmp_path, monkeypatch, capsys):
+    """v0.17: build_ir no longer requires --flow for multi-FLOW sources.
+    Each FLOW is now built unconditionally (so emitters like mcp-server
+    can expose all of them); doctor reports a clean PASS on the compile
+    check. Per-target compile-time errors (langgraph, claude-cli, ...)
+    still surface in their own emit pass."""
     src = tmp_path / "two.clio"
     src.write_text(
         "STEP foo\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n"
@@ -233,9 +235,9 @@ def test_doctor_multi_flow_without_selector_reports_fail(tmp_path, monkeypatch, 
     )
     rc = main(["doctor", str(src)])
     out = capsys.readouterr().out
-    assert "FAIL" in out
-    assert "2 FLOWs" in out
-    assert rc == 1
+    assert "source compiles" in out
+    assert "FAIL" not in out
+    assert rc == 0
 
 
 def test_doctor_multi_flow_with_selector_passes(tmp_path, monkeypatch, capsys):
@@ -273,18 +275,21 @@ def test_status_no_state_file_reports_missing(tmp_path, monkeypatch, capsys):
     assert rc == 0
 
 
-def test_compile_multi_flow_requires_selector(tmp_path, capsys):
+def test_compile_multi_flow_without_selector_python_succeeds(tmp_path, capsys):
+    """v0.17: with the python target, build_ir succeeds and the emitter
+    falls back to an empty entry point when no main FLOW is selected.
+    Targets that need a main (langgraph, claude-cli) still error in
+    their own emit pass."""
     src = tmp_path / "two.clio"
     src.write_text(
         "STEP foo\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n"
         "FLOW alpha\n  foo(x=\"a\")\n"
         "FLOW beta\n  foo(x=\"b\")\n"
     )
-    rc = main(["compile", str(src), "--target", "python", "--output", str(tmp_path / "o")])
-    assert rc == 1
-    out = (capsys.readouterr().out or capsys.readouterr().err).lower()
-    # one of stdout/stderr should carry the helpful diagnostic
-    assert "flow" in out
+    out_dir = tmp_path / "o"
+    rc = main(["compile", str(src), "--target", "python", "--output", str(out_dir)])
+    assert rc == 0
+    assert (out_dir / "pyproject.toml").exists()
 
 
 def test_compile_multi_flow_with_selector_picks_one(tmp_path):

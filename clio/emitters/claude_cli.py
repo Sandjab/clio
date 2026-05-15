@@ -28,6 +28,7 @@ from clio.emitters.base import BaseEmitter
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
     ContractIR,
+    FlowCallIR,
     FlowGraph,
     ForEachIR,
     McpToolImplIR,
@@ -54,6 +55,31 @@ class ClaudeCLIEmitter(BaseEmitter):
         if graph.flow is not None:
             _walk(graph.flow.chain)
 
+    @staticmethod
+    def _check_no_subflow_calls(graph: FlowGraph) -> None:
+        """Reject any FlowCallIR found anywhere in any flow's chain or RESCUE
+        bodies. FLOW composition is not supported by the claude-cli target in
+        v0.17 (bash sub-shell isolation is deferred)."""
+        def walk(items) -> None:
+            for it in items:
+                if isinstance(it, FlowCallIR):
+                    raise ValueError(
+                        f"line {it.line}:0: target=claude-cli does not support "
+                        f"FLOW composition (sub-flow calls). v0.17 limitation — "
+                        f"use target=python or target=mcp-server."
+                    )
+                for attr in ("body", "then_body", "else_body"):
+                    if hasattr(it, attr):
+                        walk(getattr(it, attr))
+                if hasattr(it, "cases"):
+                    for arm in it.cases:
+                        walk(arm.body)
+
+        for f in graph.flows:
+            walk(f.chain)
+            for r in f.rescues:
+                walk(r.body)
+
     def _reject_rescue(self, graph: FlowGraph) -> None:
         """RESCUE handlers are not supported by the claude-cli target.
         Pointer to --target python / mcp-server."""
@@ -79,6 +105,7 @@ class ClaudeCLIEmitter(BaseEmitter):
                 )
 
     def emit(self, graph: FlowGraph, output_dir: Path) -> None:
+        self._check_no_subflow_calls(graph)
         self._reject_parallel(graph)
         self._reject_rescue(graph)
         self._reject_sql(graph)

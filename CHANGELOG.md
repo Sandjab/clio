@@ -1,5 +1,61 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+### Changed
+
+### Fixed
+
+## v0.17.0 — 2026-05-15
+
+FLOW composition (issue #24): a signed `FLOW` (one with explicit `TAKES:` / `GIVES:`) can now be called wherever a STEP is legal — chains, `FOR EACH PARALLEL` bodies, `IF` / `MATCH` / `WHILE`, and `RESCUE`. Shipped as PR #27; closes #24.
+
+### Language
+
+- **FLOW composition** (`docs/LANGUAGE_SPEC.md` §FLOW composition) — a `FLOW` with explicit `TAKES:` / `GIVES:` can now be called as a step in another `FLOW`. The call resolves as a `FlowCallIR` (distinct from `CallIR`). Resolution order: step name first, signed flow name second; a shared name is rejected as a compile-time collision. Recursive sub-flows and inter-flow cycles are rejected at IR build time. `PARALLEL FOR EACH` bodies: the v0.16 "exactly one step call" restriction is lifted — a body may now be either a step call or a single sub-flow call.
+
+### Emitters
+
+- `python`: each signed sub-FLOW becomes a top-level `run_<name>(**takes) -> dict` function in `flow.py`; the parent chain invokes it and publishes its `GIVES` fields flat into `state`. Unsigned FLOWs keep v0.16 behaviour.
+- `mcp-server`: multi-FLOW sources now emit one `@mcp.tool()` per *exposed* FLOW (every signed FLOW not called by a sibling). Sub-flow calls compile to plain Python function calls within the tool handler.
+- `claude-skill`: each signed sub-FLOW becomes a standalone `scripts/sub_<name>.py` orchestrator the main script invokes; `GIVES` fields are merged flat into `state.json`.
+- `langgraph`: each signed sub-FLOW becomes its own `build_<name>_graph()` builder; sub-flow calls in a parent flow register the compiled sub-graph as a node and merge its outputs back flat into the parent's `State` TypedDict.
+- `claude-cli`: rejects any source containing sub-flow calls with a clear `ValueError` (sub-shell-based isolation is deferred).
+
+### IR
+
+- **`FlowCallIR`** — new IR node distinct from `CallIR`, returned by `_build_call` when the call resolves to a signed FLOW.
+- **`FlowGraph.flows`** + **`FlowGraph.exposed_flow_names`** — every `FlowIR` is now built (not just the selected main); emitters that need the full multi-flow surface consume them.
+- `_build_call` now accepts a flow-signature map; all downstream builder helpers thread it through.
+
+### Example
+
+- New `examples/flow_composition.clio` — exercises the reuse + `PARALLEL FOR EACH` + sub-flow patterns.
+
+### Documentation
+
+- New `§FLOW composition (v0.17)` section in `docs/LANGUAGE_SPEC.md`.
+- New cookbook recipe in `docs/manual/03-cookbook.md`.
+
+### Known limitations
+
+- A `PARALLEL FOR EACH` body that is a sub-flow with multiple `GIVES` fields produces a list-of-dicts collector; the parent's declared `List<T>` annotation will not match. Single-`GIVES` sub-flows publish `List<gives.type>` cleanly.
+- No cross-file `IMPORT` yet — all sub-flow callees must live in the same `.clio` source.
+- No `EXPOSE` / `INTERNAL` marker — the default rule (expose uncalled signed FLOWs) is fixed for now.
+- `target: claude-cli` does not support sub-flow composition; use `target: python` or `target: mcp-server` instead.
+
+### Tests
+
+- 880 passed, 15 skipped, 1 xfailed (was 859 at v0.16.0). +21 tests.
+
+### Closes
+
+- #24 (FLOW composition — sub-flow callable as a step).
+
+---
+
 ## v0.16.0 — 2026-05-15
 
 Adds optional `TAKES:` / `GIVES:` blocks to `FLOW` declarations, mirroring `STEP`. Shipped as PR #25; closes #21 and #23.
