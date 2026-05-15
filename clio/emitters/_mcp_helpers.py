@@ -157,6 +157,37 @@ def _last_step_of_flow(graph: FlowGraph) -> StepIR | None:
 
 
 def _output_schema_for_flow(graph: FlowGraph) -> dict | None:
+    # v0.16: prefer declared FLOW.GIVES when present.
+    if graph.flow is not None and graph.flow.gives:
+        contracts_by_name = {c.name: c for c in graph.contracts}
+
+        def _schema_for_field_type(t):
+            if isinstance(t, ContractRef):
+                contract = contracts_by_name.get(t.name)
+                return contract.json_schema if contract is not None else type_to_json_schema(t)
+            if isinstance(t, ListType) and isinstance(t.inner, ContractRef):
+                contract = contracts_by_name.get(t.inner.name)
+                if contract is not None:
+                    return {"type": "array", "items": contract.json_schema}
+            try:
+                return type_to_json_schema(t)
+            except (NotImplementedError, Exception):
+                return None
+
+        if len(graph.flow.gives) == 1:
+            return _schema_for_field_type(graph.flow.gives[0].type)
+
+        # Multi-field GIVES: wrap in an object schema.
+        properties = {}
+        required = []
+        for f in graph.flow.gives:
+            schema = _schema_for_field_type(f.type)
+            if schema is not None:
+                properties[f.name] = schema
+                required.append(f.name)
+        return {"type": "object", "properties": properties, "required": required}
+
+    # v0.15 fallback: infer from the last step's GIVES.
     last = _last_step_of_flow(graph)
     if last is None or last.gives is None:
         return None
@@ -182,6 +213,16 @@ def _output_schema_for_flow(graph: FlowGraph) -> dict | None:
 
 
 def _input_schema_for_flow(graph: FlowGraph) -> dict:
+    # v0.16: prefer declared FLOW.TAKES when present.
+    if graph.flow is not None and graph.flow.takes:
+        properties = {}
+        required = []
+        for f in graph.flow.takes:
+            properties[f.name] = type_to_json_schema(f.type)
+            required.append(f.name)
+        return {"type": "object", "properties": properties, "required": required}
+
+    # v0.15 fallback: infer from the first step's TAKES, with literal-kwarg defaults.
     first = _first_step_of_flow(graph)
     if first is None or not first.takes:
         return {"type": "object", "properties": {}, "required": []}

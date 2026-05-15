@@ -886,3 +886,48 @@ def test_mcp_emit_no_description_keeps_legacy_prompt(tmp_path):
     assert "Step intent:" not in body
     assert "Heuristics:" not in body
     assert "    'You are a strict JSON-only API." in body
+
+
+# -- v0.16: schemas from declared FLOW.TAKES / GIVES -----------------------
+
+
+def test_mcp_server_schemas_from_declared_flow_signature(tmp_path):
+    """inputSchema / outputSchema must reflect FLOW.TAKES / FLOW.GIVES when
+    declared, overriding the first-step / last-step inference."""
+    src = (
+        "STEP classify\n"
+        "  TAKES: item: str\n"
+        "  GIVES: label: str\n"
+        "  MODE:  judgment\n"
+        "\n"
+        "FLOW pipeline\n"
+        "  TAKES: items: List<str>\n"
+        "  GIVES: labels: List<str>\n"
+        "  FOR EACH item IN items PARALLEL AS labels:\n"
+        "    classify(item=item)\n"
+        "\n"
+        "RESOURCES\n"
+        "  target: mcp-server\n"
+        "  models: [haiku]\n"
+    )
+    MCPServerEmitter().emit(build_ir(parse(src)), tmp_path)
+    server_py = (tmp_path / "pipeline" / "server.py").read_text()
+
+    # inputSchema must reflect declared FLOW.TAKES (items: List<str>),
+    # NOT the first step's TAKES (item: str).
+    schema = _extract_input_schema(server_py, "pipeline")
+    assert "items" in schema["properties"], (
+        "inputSchema must expose declared FLOW.TAKES field 'items', not first-step 'item'"
+    )
+    assert schema["properties"]["items"]["type"] == "array"
+    assert schema["properties"]["items"]["items"]["type"] == "string"
+    assert "items" in schema["required"]
+    assert "item" not in schema["properties"], (
+        "inputSchema must NOT fall back to first-step 'item' when FLOW.TAKES is declared"
+    )
+
+    # outputSchema must reflect declared FLOW.GIVES (labels: List<str>).
+    # Use string search to avoid duplicating the AST-walk helper.
+    assert "outputSchema=" in server_py, "outputSchema must be present when FLOW.GIVES is declared"
+    assert "'type': 'array'" in server_py or '"type": "array"' in server_py
+    assert "'type': 'string'" in server_py or '"type": "string"' in server_py
