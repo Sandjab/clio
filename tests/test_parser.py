@@ -2,8 +2,10 @@ import pytest
 
 from clio.parser.ast_nodes import (
     DatabaseSpec,
+    FlowDecl,
     HttpServerSpec,
     McpToolImpl,
+    PrimitiveType,
     ResourcesDecl,
     ShellImpl,
     SqlImpl,
@@ -2028,3 +2030,100 @@ def test_parse_test_duplicate_section_rejected():
     with pytest.raises(ParseError) as exc:
         parse(src)
     assert "duplicate EXPECTS" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# v0.16 — FLOW.TAKES / FLOW.GIVES parser tests
+# ---------------------------------------------------------------------------
+
+def test_flow_takes_single_field_parses():
+    src = """STEP s
+  TAKES: x: str
+  GIVES: y: str
+  MODE:  exact
+
+FLOW pipeline
+  TAKES: x: str
+  s(x=x)
+"""
+    program = parse(src)
+    flow = next(d for d in program.decls if isinstance(d, FlowDecl))
+    assert len(flow.takes) == 1
+    assert flow.takes[0].name == "x"
+    assert isinstance(flow.takes[0].type, PrimitiveType) and flow.takes[0].type.name == "str"
+    assert flow.gives == ()
+
+
+def test_flow_gives_multi_field_parses():
+    src = """STEP s
+  TAKES: x: str
+  GIVES: y: str
+  MODE:  exact
+
+FLOW pipeline
+  GIVES: a: str, b: int
+  s(x="hi")
+"""
+    program = parse(src)
+    flow = next(d for d in program.decls if isinstance(d, FlowDecl))
+    assert len(flow.gives) == 2
+    assert {f.name for f in flow.gives} == {"a", "b"}
+    assert flow.takes == ()
+
+
+def test_flow_takes_and_gives_parse_in_either_order():
+    src_a = """STEP s
+  TAKES: x: str
+  GIVES: y: str
+  MODE:  exact
+
+FLOW p
+  TAKES: x: str
+  GIVES: y: str
+  s(x=x)
+"""
+    src_b = """STEP s
+  TAKES: x: str
+  GIVES: y: str
+  MODE:  exact
+
+FLOW p
+  GIVES: y: str
+  TAKES: x: str
+  s(x=x)
+"""
+    for src in (src_a, src_b):
+        program = parse(src)
+        flow = next(d for d in program.decls if isinstance(d, FlowDecl))
+        assert len(flow.takes) == 1 and len(flow.gives) == 1
+
+
+def test_flow_duplicate_takes_rejected():
+    src = """STEP s
+  TAKES: x: str
+  GIVES: y: str
+  MODE:  exact
+
+FLOW p
+  TAKES: x: str
+  TAKES: y: int
+  s(x=x)
+"""
+    with pytest.raises(ParseError, match="duplicate TAKES"):
+        parse(src)
+
+
+def test_flow_without_takes_gives_still_parses_backcompat():
+    """v0.15 form — no FLOW signature, behaviour unchanged."""
+    src = """STEP s
+  TAKES: x: str
+  GIVES: y: str
+  MODE:  exact
+
+FLOW pipeline
+  s(x="hi")
+"""
+    program = parse(src)
+    flow = next(d for d in program.decls if isinstance(d, FlowDecl))
+    assert flow.takes == ()
+    assert flow.gives == ()
