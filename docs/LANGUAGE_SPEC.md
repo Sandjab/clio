@@ -53,6 +53,7 @@ Also lifts `FOR EACH <var> IN <collection>:` from spec-only to implemented contr
 | `IF <cond>: ... ELSE: ...` (v0.7) | ✅ | ✅ | ✅ `if/else` | ❌ rejected | ✅ `if/else` |
 | `MATCH x: CASE ...` (v0.7) | ✅ | ✅ | ✅ `match/case` | ❌ rejected | ✅ `match/case` |
 | `WHILE <cond> MAX N:` (v0.7) | ✅ | ✅ | ✅ bounded `for/break` | ❌ rejected | ✅ bounded `for/break` |
+| `FLOW.TAKES` / `FLOW.GIVES` (v0.16) | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 Where the table says *rejected at compile time*, the emitter raises a clear `ValueError` / `NotImplementedError` rather than producing silent or broken code.
 
@@ -507,6 +508,50 @@ FLOW <name>
 of FLOWs. `clio compile` and `clio graph` require `--flow <name>` to pick one
 when more than one is declared. Programmatically: `build_ir(program, flow_name=...)`.
 Duplicate FLOW names are rejected at IR build time.
+
+### FLOW signature (v0.16, optional)
+
+A FLOW may declare an explicit signature with optional `TAKES:` and `GIVES:` blocks, mirroring `STEP`. Both fields are optional in v0.16; absent fields fall back to v0.15 behaviour (first-step `TAKES` auto-promotion for inputs, last-step `GIVES` inference for outputs).
+
+```
+FLOW <name>
+  TAKES: <field>: <type>, <field>: <type>, ...    # optional, multi-field
+  GIVES: <field>: <type>, <field>: <type>, ...    # optional, multi-field
+  <chain>
+  <rescues>
+```
+
+**Semantics of `TAKES`:**
+- Declared names are seeded into the chain's input scope before walking. This allows the chain's first item to be `FOR EACH`, `IF`, `WHILE`, or `MATCH` over an external input — these forms previously failed to compile because the auto-promote path only inspected first-position `StepCall`s.
+- When `TAKES:` is declared, the first-step `StepCall` auto-promote (v0.15.1) is **disabled** for this FLOW. Any identifier kwarg in the chain that is not produced upstream and is not in `TAKES` is rejected at compile time with `line:col`.
+- `clio compile --kwargs '{...}'` validates declared inputs structurally at parse time, not runtime.
+
+**Semantics of `GIVES`:**
+- Each declared field must match a field present in the *effective state* after the last chain item executes, with a structurally-equivalent type (subset coverage: the last step may produce additional state fields; only the declared subset is exposed externally).
+- A missing field in the state — or a type mismatch — is rejected at compile time with `line:col`.
+- `target: python` returns a dict keyed by the declared `GIVES` field names. `target: mcp-server` and `target: claude-skill` derive `outputSchema` from `GIVES` instead of inferring it from the last step.
+
+**Interaction with `TEST`:**
+- `TEST WITH:` kwarg names and types are checked against `FLOW.TAKES` when declared.
+- `TEST EXPECTS:` / `EXPECTS_NOT:` field paths (`<root>.<sub>...`) are checked against `FLOW.GIVES` when declared.
+- When the FLOW does not declare a signature, `TEST` behaves as in v0.15 (no compile-time type check).
+
+**Worked example — closes the #21 case:**
+
+```clio
+STEP classify
+  TAKES: item:  str
+  GIVES: label: str
+  MODE:  judgment
+
+FLOW classify_batch
+  TAKES: items:  List<str>
+  GIVES: labels: List<str>
+  FOR EACH item IN items PARALLEL AS labels:
+    classify(item=item)
+```
+
+Without `TAKES:`, the FOR EACH at the head of the chain compiles to `state reference 'items' not produced by any previous step` (#21). With `TAKES:` declared, `items` is seeded as an external input and the FLOW compiles to all targets that support PARALLEL (python / mcp-server / claude-skill).
 
 ### TEST (v0.15)
 
