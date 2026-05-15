@@ -8,6 +8,7 @@ from clio.emitters._shared_utils import (
     _has_parallel,
     _python_condition_expr,
     _render_system_prompt,
+    _to_field_name,
 )
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
@@ -623,9 +624,12 @@ def _emit_server_module_multi(pkg_name: str, graph: FlowGraph) -> str:
             f"{output_field}"
             f"        )"
         )
+        # Sanitize the Python attribute access (the function name in flow.py);
+        # the MCP `name == ...` string still matches the user-declared FLOW name.
+        py_flow_name = _to_field_name(flow_name)
         dispatch_lines.append(
             f"    if name == {flow_name!r}:\n"
-            f"        result = await _flow.{flow_name}(_session=ctx.session, **arguments)\n"
+            f"        result = await _flow.{py_flow_name}(_session=ctx.session, **arguments)\n"
             f'        return [TextContent(type="text", text=json.dumps(result, default=str))]'
         )
 
@@ -780,7 +784,10 @@ def _emit_flow_module_async_multi(graph: FlowGraph) -> str:
                 kw_parts.append(f"{name}={value!r}")
         kwargs_str = ", ".join(kw_parts)
         sep = ", " if kwargs_str else ""
-        invocation = f"await {call.flow_name}(_session=_session{sep}{kwargs_str})"
+        invocation = (
+            f"await {_to_field_name(call.flow_name)}"
+            f"(_session=_session{sep}{kwargs_str})"
+        )
         if scope_local:
             chain_lines.append(f"{indent}{invocation}")
         else:
@@ -899,9 +906,10 @@ def _emit_flow_module_async_multi(graph: FlowGraph) -> str:
             )
 
         flow_name_lit = _json.dumps(flow.name)
+        py_flow_name = _to_field_name(flow.name)
         # Initialize state and emit chain.
         body = (
-            f"async def {flow.name}(*, _session=None, **initial: object) -> dict:\n"
+            f"async def {py_flow_name}(*, _session=None, **initial: object) -> dict:\n"
             "    state: dict = dict(initial)\n"
             f"    _log.set_flow({flow_name_lit})\n"
             '    _log.emit("flow_start")\n'
@@ -1004,7 +1012,10 @@ def emit_parallel_for_each_mcp(
         unit_kv = f"step={step.name!r}"
     elif isinstance(inner, FlowCallIR):
         sep = ", " if kwargs_str else ""
-        call_expr = f"await {inner.flow_name}(_session=_session{sep}{kwargs_str})"
+        call_expr = (
+            f"await {_to_field_name(inner.flow_name)}"
+            f"(_session=_session{sep}{kwargs_str})"
+        )
         unit_kv = f"flow={inner.flow_name!r}"
     else:
         raise AssertionError(
