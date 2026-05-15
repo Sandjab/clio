@@ -946,3 +946,77 @@ def test_emitted_exact_script_runs_against_state_example(tmp_path):
     # Output must be valid JSON dict.
     output = json.loads(result.stdout)
     assert isinstance(output, dict), f"Expected dict output, got {type(output).__name__}"
+
+
+# ---------------------------------------------------------------------------
+# Task 9 (v0.16) — FLOW.TAKES / FLOW.GIVES declared signature in SKILL.md
+# ---------------------------------------------------------------------------
+
+def test_claude_skill_renders_declared_takes_gives_in_skill_md(tmp_path):
+    """Declared FLOW.TAKES / FLOW.GIVES surface in the SKILL.md Inputs/Outputs
+    section rather than first-step / last-step inference.
+
+    The FLOW declares TAKES: items: List<str> and GIVES: labels: List<str>.
+    The SKILL.md must show those fields, NOT the step-level item: str.
+    """
+    src = (
+        "STEP s\n"
+        "  TAKES: item: str\n"
+        "  GIVES: label: str\n"
+        "  MODE:  judgment\n"
+        "\n"
+        "FLOW pipeline\n"
+        "  TAKES: items: List<str>\n"
+        "  GIVES: labels: List<str>\n"
+        "  FOR EACH item IN items PARALLEL AS labels:\n"
+        "    s(item=item)\n"
+        "\n"
+        "RESOURCES\n"
+        "  target: claude-skill\n"
+        "  models: [haiku]\n"
+    )
+    graph = build_ir(parse(src))
+    assert graph.flow is not None
+    assert len(graph.flow.takes) == 1
+    assert len(graph.flow.gives) == 1
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    skill_md = (tmp_path / "SKILL.md").read_text()
+    # Declared FLOW.TAKES surfaces as `items: List<str>`, NOT the step's `item: str`
+    assert "items" in skill_md
+    assert "List<str>" in skill_md
+    # Declared FLOW.GIVES surfaces as `labels: List<str>`
+    assert "labels" in skill_md
+    # The Inputs / Outputs section headers are present
+    assert "## Inputs" in skill_md or "## Entrées" in skill_md
+    assert "## Outputs" in skill_md or "## Sorties" in skill_md
+
+
+def test_claude_skill_falls_back_to_step_inference_without_signature(tmp_path):
+    """v0.15 backward-compat: no FLOW.TAKES/GIVES → no Inputs/Outputs section
+    is emitted (the v0.15 behaviour is preserved byte-for-byte).
+    """
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  judgment\n"
+        "\n"
+        "FLOW p\n"
+        "  s(x=x)\n"
+        "\n"
+        "RESOURCES\n"
+        "  target: claude-skill\n"
+        "  models: [haiku]\n"
+    )
+    graph = build_ir(parse(src))
+    assert graph.flow is not None
+    assert graph.flow.takes == ()
+    assert graph.flow.gives == ()
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    skill_md = (tmp_path / "SKILL.md").read_text()
+    # No Inputs/Outputs section — v0.15 behaviour preserved
+    assert "## Inputs" not in skill_md and "## Entrées" not in skill_md
+    assert "## Outputs" not in skill_md and "## Sorties" not in skill_md
+    # Step content is still rendered
+    assert "x" in skill_md
+    assert "y" in skill_md
