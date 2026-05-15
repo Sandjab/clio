@@ -2558,3 +2558,29 @@ def test_python_emits_kwargs_run_when_flow_has_no_signature(tmp_path):
     assert "def run(*, start_at: int = 0, **initial: object) -> dict:" in flow_py
     assert "state: dict = dict(initial)" in flow_py
     assert "return state" in flow_py
+
+
+def test_python_emits_subflow_as_function_call(tmp_path):
+    src = (
+        "STEP greet\n"
+        "  TAKES: name: str\n"
+        "  GIVES: msg: str\n"
+        "  MODE: exact\n"
+        "\n"
+        "FLOW inner\n"
+        "  TAKES: name: str\n"
+        "  GIVES: msg: str\n"
+        "  greet(name=name)\n"
+        "\n"
+        "FLOW outer\n"
+        "  TAKES: name: str\n"
+        "  GIVES: msg: str\n"
+        "  inner(name=name)\n"
+    )
+    g = build_ir(parse(src), flow_name="outer")
+    PythonEmitter().emit(g, tmp_path)
+    flow_py = (tmp_path / "outer" / "flow.py").read_text()
+    # Sub-flow becomes a callable function inside the same module.
+    assert "def run_inner" in flow_py
+    # The outer chain invokes it.
+    assert "run_inner(name=" in flow_py
