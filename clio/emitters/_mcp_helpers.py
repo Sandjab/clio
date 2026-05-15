@@ -382,14 +382,15 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
         kwargs_str = ", ".join(kw_parts)
         out_name = step.gives.name if step.gives is not None else "_result"
         is_judgment = step.mode == "judgment"
+        py_step_name = _to_field_name(step.name)
         if is_judgment:
             if kwargs_str:
-                call_expr = f"{step.name}_mod.{step.name}({kwargs_str}, _session=_session)"
+                call_expr = f"{py_step_name}_mod.{py_step_name}({kwargs_str}, _session=_session)"
             else:
-                call_expr = f"{step.name}_mod.{step.name}(_session=_session)"
+                call_expr = f"{py_step_name}_mod.{py_step_name}(_session=_session)"
             call_expr = f"await {call_expr}"
         else:
-            call_expr = f"{step.name}_mod.{step.name}({kwargs_str})"
+            call_expr = f"{py_step_name}_mod.{py_step_name}({kwargs_str})"
         if scope_local:
             call_line = call_expr
         else:
@@ -542,7 +543,10 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
             + "\n"
         )
 
-    imports = "\n".join(f"from .steps import {n} as {n}_mod" for n in imported_steps)
+    imports = "\n".join(
+        f"from .steps import {_to_field_name(n)} as {_to_field_name(n)}_mod"
+        for n in imported_steps
+    )
     asyncio_import = "import asyncio\n\n" if _has_parallel(graph.flow.chain) else ""
 
     # main_chain_lines start with "    " (4 spaces) for top-level items; some
@@ -738,14 +742,15 @@ def _emit_flow_module_async_multi(graph: FlowGraph) -> str:
         kwargs_str = ", ".join(kw_parts)
         out_name = step.gives.name if step.gives is not None else "_result"
         is_judgment = step.mode == "judgment"
+        py_step_name = _to_field_name(step.name)
         if is_judgment:
             if kwargs_str:
-                call_expr = f"{step.name}_mod.{step.name}({kwargs_str}, _session=_session)"
+                call_expr = f"{py_step_name}_mod.{py_step_name}({kwargs_str}, _session=_session)"
             else:
-                call_expr = f"{step.name}_mod.{step.name}(_session=_session)"
+                call_expr = f"{py_step_name}_mod.{py_step_name}(_session=_session)"
             call_expr = f"await {call_expr}"
         else:
-            call_expr = f"{step.name}_mod.{step.name}({kwargs_str})"
+            call_expr = f"{py_step_name}_mod.{py_step_name}({kwargs_str})"
         if scope_local:
             call_line = call_expr
         else:
@@ -945,7 +950,10 @@ def _emit_flow_module_async_multi(graph: FlowGraph) -> str:
             body += "\n\n" + "\n\n".join(rescue_helpers_for_flow)
         flow_funcs.append(body)
 
-    imports = "\n".join(f"from .steps import {n} as {n}_mod" for n in imported_steps)
+    imports = "\n".join(
+        f"from .steps import {_to_field_name(n)} as {_to_field_name(n)}_mod"
+        for n in imported_steps
+    )
     asyncio_import = "import asyncio\n\n" if has_parallel else ""
     flow_aborted_block = (
         "class FlowAborted(Exception):\n"
@@ -1006,13 +1014,14 @@ def emit_parallel_for_each_mcp(
     if isinstance(inner, CallIR):
         step = steps_by_name[inner.step_name]
         is_judgment = step.mode == "judgment"
+        py_step_name = _to_field_name(step.name)
         if is_judgment:
             if kwargs_str:
-                call_expr = f"await {step.name}_mod.{step.name}({kwargs_str}, _session=_session)"
+                call_expr = f"await {py_step_name}_mod.{py_step_name}({kwargs_str}, _session=_session)"
             else:
-                call_expr = f"await {step.name}_mod.{step.name}(_session=_session)"
+                call_expr = f"await {py_step_name}_mod.{py_step_name}(_session=_session)"
         else:
-            call_expr = f"{step.name}_mod.{step.name}({kwargs_str})"
+            call_expr = f"{py_step_name}_mod.{py_step_name}({kwargs_str})"
         unit_kv = f"step={step.name!r}"
     elif isinstance(inner, FlowCallIR):
         sep = ", " if kwargs_str else ""
@@ -1131,7 +1140,7 @@ def emit_judgment_step_via_sampling(
     if has_on_fail:
         retry_max_line = f"_RETRY_MAX = {retry_max}\n"
         body_lines = (
-            f"async def {step.name}({params_with_session}) -> {ret_type}:\n"
+            f"async def {_to_field_name(step.name)}({params_with_session}) -> {ret_type}:\n"
             "    _t0 = time.monotonic()\n"
             f'    _log.emit("step_start", step={step.name!r}, mode="judgment")\n'
             "    _last_model = None\n"
@@ -1184,7 +1193,7 @@ def emit_judgment_step_via_sampling(
             ("    " + line) if line else line for line in sub_block.split("\n")
         )
         body_lines = (
-            f"async def {step.name}({params_with_session}) -> {ret_type}:\n"
+            f"async def {_to_field_name(step.name)}({params_with_session}) -> {ret_type}:\n"
             "    _t0 = time.monotonic()\n"
             f'    _log.emit("step_start", step={step.name!r}, mode="judgment")\n'
             "    _last_model = None\n"

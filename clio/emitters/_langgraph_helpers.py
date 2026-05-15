@@ -158,9 +158,10 @@ def _emit_node_wrapper(call: CallIR, step: StepIR) -> str:
             kw_parts.append(f"{py_name}={value!r}")
     kwargs_str = ", ".join(kw_parts)
     state_key = _step_state_key(step)
+    py_step_name = _to_field_name(step.name)
     return (
         f"def {step.name}_node(state: State) -> dict:\n"
-        f"    _result = {step.name}_mod.{step.name}({kwargs_str})\n"
+        f"    _result = {py_step_name}_mod.{py_step_name}({kwargs_str})\n"
         f"    return {{{state_key!r}: _result}}"
     )
 
@@ -367,7 +368,10 @@ def emit_flow_module(
     for c in all_step_calls:
         if c.step_name not in imported_steps:
             imported_steps.append(c.step_name)
-    imports += [f"from .steps import {n} as {n}_mod" for n in imported_steps]
+    imports += [
+        f"from .steps import {_to_field_name(n)} as {_to_field_name(n)}_mod"
+        for n in imported_steps
+    ]
     imports.append("")
     imports.append("")
 

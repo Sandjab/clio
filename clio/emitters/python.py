@@ -171,7 +171,7 @@ class PythonEmitter(BaseEmitter):
                 )
             else:
                 body = self._emit_judgment_step(step, graph, contracts_by_name)
-            (steps_dir / f"{step.name}.py").write_text(body)
+            (steps_dir / f"{_to_field_name(step.name)}.py").write_text(body)
 
         needs_requests = any(
             isinstance(s.impl, RestImplIR) for s in graph.steps
@@ -395,7 +395,7 @@ class PythonEmitter(BaseEmitter):
             ]
 
         body = list(header)
-        body.append(f"def {step.name}({params}) -> {ret_type}:")
+        body.append(f"def {_to_field_name(step.name)}({params}) -> {ret_type}:")
         body.append("    _t0 = time.monotonic()")
         body.append(f'    _log.emit("step_start", step={step.name!r}, mode="judgment")')
         body.append("    _last_usage: dict = {}")
@@ -492,14 +492,15 @@ class PythonEmitter(BaseEmitter):
             elif s.kind == "fallback":
                 assert s.fallback_step is not None
                 fb_name = s.fallback_step.name
+                py_fb_name = _to_field_name(fb_name)
                 kw_str = ", ".join(
                     f"{_to_field_name(t.name)}={_to_field_name(t.name)}"
                     for t in step.takes
                 )
                 chain_lines += [
                     "    if response is None:",
-                    f"        from . import {fb_name} as _{fb_name}_mod",
-                    f"        fb_response = _{fb_name}_mod.{fb_name}({kw_str})",
+                    f"        from . import {py_fb_name} as _{py_fb_name}_mod",
+                    f"        fb_response = _{py_fb_name}_mod.{py_fb_name}({kw_str})",
                     (
                         f"        response = {result_class}("
                         f"fb_response if not isinstance(fb_response, str) "
@@ -619,11 +620,12 @@ class PythonEmitter(BaseEmitter):
             # Inside a FOR EACH body, results are not assigned to the global state
             # (no accumulation semantic in v0); the call is invoked for its side
             # effects on whatever it explicitly writes.
+            py_step_name = _to_field_name(step.name)
             if scope_local:
-                call_line = f"{step.name}_mod.{step.name}({kwargs_str})"
+                call_line = f"{py_step_name}_mod.{py_step_name}({kwargs_str})"
             else:
                 call_line = (
-                    f"state[{out_name!r}] = {step.name}_mod.{step.name}({kwargs_str})"
+                    f"state[{out_name!r}] = {py_step_name}_mod.{py_step_name}({kwargs_str})"
                 )
             # RESCUE: wrap the protected step's call site in try/except. Any
             # uncaught Exception triggers _rescue_<name>(state); FlowAborted
@@ -861,7 +863,10 @@ class PythonEmitter(BaseEmitter):
             if needs_concurrent else ""
         )
 
-        imports = "\n".join(f"from .steps import {n} as {n}_mod" for n in imported_steps)
+        imports = "\n".join(
+            f"from .steps import {_to_field_name(n)} as {_to_field_name(n)}_mod"
+            for n in imported_steps
+        )
 
         # Each group's lines were constructed at 4-space indent for top-level
         # (deeper for nested). Re-indent every line +8 so the body lives at
