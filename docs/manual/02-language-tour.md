@@ -231,6 +231,24 @@ follow); **langgraph** and **claude-cli** reject at compile time.
 
 A `FLOW` may declare `TAKES:` and `GIVES:` blocks, mirroring `STEP`. This is the recommended form when a flow starts with `FOR EACH` / `IF` / `WHILE` over an external input, when you want the test suite to type-check `TEST WITH:` / `EXPECTS:` clauses, or when you want a clean `inputSchema`/`outputSchema` exposed by the `mcp-server` or `claude-skill` targets. When a FLOW omits the signature, v0.15 behaviour is preserved (input auto-promotion from the first step, output inferred from the last step).
 
+### FLOW composition (v0.17+)
+
+A FLOW that declares both `TAKES:` and `GIVES:` is callable as a step in another FLOW — anywhere a step call is legal (chains, `IF` / `MATCH` / `WHILE` branches, `RESCUE` bodies, and a `FOR EACH PARALLEL` body). Name resolution is STEP first, then signed FLOW; a shared name is rejected at IR build time.
+
+```clio
+FLOW enrich
+  TAKES: url: str
+  GIVES: summary: str
+  fetch(url=url) -> summarize(article=article)
+
+FLOW batch
+  TAKES: urls: List<str>
+  FOR EACH u IN urls PARALLEL AS results:
+    enrich(url=u)        # sub-flow as the parallel body
+```
+
+Three v0.17 limitations to keep in mind: a FLOW without a signature is **not** callable as a sub-flow, recursion and inter-flow cycles are rejected at compile time, and `target: claude-cli` rejects sub-flow calls (use `--target python` or `--target mcp-server`). See cookbook [recipe #20](03-cookbook.md#20-composing-flows-v017) for the worked example.
+
 ## Multiple FLOWs per file (v0.15)
 
 A source file may declare any number of `FLOW`s. `clio compile` and
