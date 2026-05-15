@@ -1039,3 +1039,74 @@ def test_mcp_parallel_foreach_with_subflow_body(tmp_path):
     assert "state['results']" in flow_py
     # Log events distinguish a sub-flow body via the `flow=` key.
     assert "flow='enrich'" in flow_py
+
+
+# v0.17 polish (issue #29 items 2 + 3): when a multi-FLOW source is compiled
+# without `--flow`, derive the project directory name from the first declared
+# exposed FLOW (not the legacy `clio_mcp` fallback); list `@mcp.tool()` handlers
+# in declaration order (not alphabetical). Both choices follow the source-file
+# layout so refactoring or renaming a FLOW does not silently reorder the
+# emitted surface — declaration order matches user intent.
+_MULTI_FLOW_DECL_ORDER_SRC = (
+    "STEP s\n"
+    "  TAKES: x: str\n"
+    "  GIVES: y: str\n"
+    "  MODE: exact\n"
+    "FLOW zeta\n"
+    "  TAKES: x: str\n"
+    "  GIVES: y: str\n"
+    "  s(x=x)\n"
+    "FLOW alpha\n"
+    "  TAKES: x: str\n"
+    "  GIVES: y: str\n"
+    "  s(x=x)\n"
+    "RESOURCES\n"
+    "  target: mcp-server\n"
+)
+
+
+def test_mcp_project_dir_uses_first_exposed_flow_when_no_main(tmp_path):
+    """Multi-FLOW source compiled without `--flow`: project dir name derives
+    from the FIRST DECLARED exposed FLOW. `zeta` is declared before `alpha`
+    so the package dir is `zeta`, not the legacy `clio_mcp` fallback nor the
+    alphabetical `alpha`."""
+    g = build_ir(parse(_MULTI_FLOW_DECL_ORDER_SRC))
+    assert g.flow is None, "multi-FLOW without --flow must leave graph.flow None"
+    MCPServerEmitter().emit(g, tmp_path)
+    dirs = [p.name for p in tmp_path.iterdir() if p.is_dir()]
+    assert "zeta" in dirs, (
+        f"expected project dir 'zeta' (first declared exposed FLOW); got {dirs!r}"
+    )
+    assert "clio_mcp" not in dirs, (
+        "legacy 'clio_mcp' fallback must be replaced by first-declared exposed FLOW name"
+    )
+    assert "alpha" not in dirs, (
+        "alphabetical first ('alpha') must NOT win over declaration order ('zeta')"
+    )
+
+
+def test_mcp_tools_emitted_in_declaration_order(tmp_path):
+    """server.py must emit `@mcp.tool()` handlers and the `list_tools`/
+    `call_tool` registry in DECLARATION ORDER (matching the source file),
+    not alphabetical. `zeta` precedes `alpha` in the source, so every
+    server-side appearance of `zeta` must precede `alpha`."""
+    g = build_ir(parse(_MULTI_FLOW_DECL_ORDER_SRC))
+    MCPServerEmitter().emit(g, tmp_path)
+    pkg = next(p for p in tmp_path.iterdir() if p.is_dir())
+    server_py = (pkg / "server.py").read_text()
+    # The lowlevel Tool() registration block + the call_tool dispatch chain
+    # both list flows; both must follow declaration order. Pick the EARLIEST
+    # appearance of each name in server.py and assert the order.
+    def _first(needle_single: str, needle_double: str) -> int:
+        a = server_py.find(needle_single)
+        b = server_py.find(needle_double)
+        candidates = [p for p in (a, b) if p != -1]
+        assert candidates, f"neither {needle_single!r} nor {needle_double!r} in server.py"
+        return min(candidates)
+
+    pos_zeta = _first("name='zeta'", 'name="zeta"')
+    pos_alpha = _first("name='alpha'", 'name="alpha"')
+    assert pos_zeta < pos_alpha, (
+        f"declaration order violated: 'zeta' (pos={pos_zeta}) must appear before "
+        f"'alpha' (pos={pos_alpha}) in server.py"
+    )

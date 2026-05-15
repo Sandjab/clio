@@ -608,8 +608,15 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
 
 def _emit_server_module_multi(pkg_name: str, graph: FlowGraph) -> str:
     """v0.17 multi-FLOW server: one Tool entry per exposed FLOW, dispatched by
-    name. Each tool delegates to the corresponding async function in flow.py."""
-    exposed = sorted(graph.exposed_flow_names)
+    name. Each tool delegates to the corresponding async function in flow.py.
+
+    Tools are emitted in DECLARATION ORDER (matching the source file), not
+    alphabetical: `graph.exposed_flow_names` is a frozenset (no order), so we
+    walk `graph.flows` — which is a declaration-ordered tuple — and keep only
+    the names that are exposed. This makes the emitted tool surface follow
+    the source layout, which is what users expect when they read their
+    `.clio` file top-to-bottom."""
+    exposed = [f.name for f in graph.flows if f.name in graph.exposed_flow_names]
     flows_by_name = {f.name: f for f in graph.flows}
 
     tool_entries: list[str] = []
