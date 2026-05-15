@@ -25,6 +25,8 @@ from clio.parser.ast_nodes import (
     IdentExpr,
     IfBlock,
     ImplBlock,
+    ImportDecl,
+    ImportItem,
     IntExpr,
     InvokeBlock,
     JsonBody,
@@ -107,10 +109,13 @@ class _Parser:
 
     def parse_program(self) -> Program:
         decls: list[object] = []
+        imports: list[ImportDecl] = []
         self.skip_newlines()
         while self.peek().type != TokenType.EOF:
             t = self.peek()
-            if t.type == TokenType.KEYWORD and t.value == "STEP":
+            if t.type == TokenType.KEYWORD and t.value == "FROM":
+                imports.append(self.parse_import_decl())
+            elif t.type == TokenType.KEYWORD and t.value == "STEP":
                 decls.append(self.parse_step())
             elif t.type == TokenType.KEYWORD and t.value == "CONTRACT":
                 decls.append(self.parse_contract())
@@ -122,12 +127,12 @@ class _Parser:
                 decls.append(self.parse_test())
             else:
                 raise ParseError(
-                    f"expected STEP / CONTRACT / FLOW / RESOURCES / TEST, "
+                    f"expected FROM / STEP / CONTRACT / FLOW / RESOURCES / TEST, "
                     f"got {t.type.value} {t.value!r}",
                     t.line, t.col,
                 )
             self.skip_newlines()
-        return Program(tuple(decls))
+        return Program(tuple(decls), imports=tuple(imports))
 
     def parse_test(self) -> TestDecl:
         """Parse a `TEST <name>: ... ` top-level block.
@@ -299,6 +304,67 @@ class _Parser:
             f"expected predicate (not_empty / empty / == … / != … / > … / >= … / "
             f"< … / <= … / contains …), got {t.type.value} {t.value!r}",
             t.line, t.col,
+        )
+
+    def parse_import_decl(self) -> ImportDecl:
+        """Parse a top-level FROM "<path>" IMPORT <item>, <item>, ... line.
+
+        Grammar:
+          FROM STRING_LIT IMPORT IDENT [AS IDENT] ("," IDENT [AS IDENT])* NEWLINE
+        """
+        tok_from = self.expect(TokenType.KEYWORD, "FROM")
+        path_tok = self.expect(TokenType.STRING)
+        path = path_tok.value
+        if not (path.startswith("./") or path.startswith("../")):
+            raise ParseError(
+                f"path must start with './' or '../', got {path!r}",
+                path_tok.line, path_tok.col,
+            )
+        if not path.endswith(".clio"):
+            raise ParseError(
+                f"path must end with '.clio', got {path!r}",
+                path_tok.line, path_tok.col,
+            )
+        self.expect(TokenType.KEYWORD, "IMPORT")
+        items: list[ImportItem] = []
+        seen_names: set[str] = set()
+        while True:
+            if self.peek().type in (TokenType.NEWLINE, TokenType.EOF):
+                if not items:
+                    raise ParseError(
+                        "expected at least one symbol after IMPORT",
+                        tok_from.line, tok_from.col,
+                    )
+                break
+            name_tok = self.expect(TokenType.IDENT)
+            alias: str | None = None
+            if self.peek().type == TokenType.KEYWORD and self.peek().value == "AS":
+                self.advance()  # consume AS
+                if self.peek().type != TokenType.IDENT:
+                    raise ParseError(
+                        "expected identifier after AS",
+                        self.peek().line, self.peek().col,
+                    )
+                alias_tok = self.advance()
+                alias = alias_tok.value
+            if name_tok.value in seen_names:
+                raise ParseError(
+                    f"duplicate symbol {name_tok.value!r} in same IMPORT statement",
+                    name_tok.line, name_tok.col,
+                )
+            seen_names.add(name_tok.value)
+            items.append(ImportItem(
+                name=name_tok.value, alias=alias,
+                line=name_tok.line, col=name_tok.col,
+            ))
+            if self.peek().type == TokenType.COMMA:
+                self.advance()
+                continue
+            break
+        self.skip_newlines()
+        return ImportDecl(
+            path=path, items=tuple(items),
+            line=tok_from.line, col=tok_from.col,
         )
 
     def parse_resources(self) -> ResourcesDecl:
