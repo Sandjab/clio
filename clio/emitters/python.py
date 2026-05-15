@@ -670,8 +670,13 @@ class PythonEmitter(BaseEmitter):
             if scope_local:
                 _current.append(f"{indent}{invocation}")
             else:
-                # v0.17: no aliasing — call name == flow name.
-                _current.append(f"{indent}state[{call.flow_name!r}] = {invocation}")
+                # v0.17: a sub-flow's declared GIVES are published top-level
+                # into the parent state (matching the IR builder's
+                # `available[g.name]` rule, and the convention used for
+                # STEPs whose GIVES becomes `state[gives.name]`). We do not
+                # keep a `state[<flow_name>]` key — it would be unreachable
+                # because downstream `@<field>` references resolve directly.
+                _current.append(f"{indent}state.update({invocation})")
 
         def _emit_item(
             item: (
