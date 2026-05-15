@@ -13,7 +13,8 @@ def test_compile_creates_output_tree(tmp_path):
     assert rc == 0
     assert (out / "CLAUDE.md").exists()
     assert (out / ".claude" / "hooks.json").exists()
-    assert (out / "steps" / "01_foo.py").exists()
+    # v0.18: all symbols are alpha-renamed with the source file stem
+    assert (out / "steps" / "01_input__foo.py").exists()
 
 
 def test_compile_unknown_target_rejected_by_argparse(tmp_path, capsys):
@@ -32,8 +33,9 @@ def test_cli_compile_python_target(tmp_path):
     rc = main(["compile", str(fixture), "--target", "python", "--output", str(out)])
     assert rc == 0
     assert (out / "pyproject.toml").exists()
-    assert (out / "classify" / "__init__.py").exists()
-    assert (out / "classify" / "clio_runtime" / "cache.py").exists()
+    # v0.18: flow name is alpha-renamed with the source file stem
+    assert (out / "mvp_v03_skeleton__classify" / "__init__.py").exists()
+    assert (out / "mvp_v03_skeleton__classify" / "clio_runtime" / "cache.py").exists()
 
 
 def test_gen_inline_argument_writes_to_stdout(tmp_path, monkeypatch, capsys):
@@ -300,9 +302,10 @@ def test_compile_multi_flow_with_selector_picks_one(tmp_path):
         "FLOW beta\n  foo(x=\"b\")\n"
     )
     out = tmp_path / "o"
-    rc = main(["compile", str(src), "--target", "python", "--output", str(out), "--flow", "beta"])
+    # v0.18: flow names are alpha-renamed with the source file stem (two__beta)
+    rc = main(["compile", str(src), "--target", "python", "--output", str(out), "--flow", "two__beta"])
     assert rc == 0
-    # Python target produces pyproject + package dir; flow name 'beta' drives the entry.
+    # Python target produces pyproject + package dir; flow name drives the entry.
     assert (out / "pyproject.toml").exists()
 
 
@@ -326,3 +329,94 @@ def test_status_reads_state_and_log(tmp_path, monkeypatch, capsys):
     assert "flow_start" in out
     assert "step_end" in out
     assert rc == 0
+
+
+# -- v0.18 multi-file CLI tests --
+
+
+def test_cli_compile_multifile(tmp_path):
+    """_cmd_compile resolves imports and compiles a two-file project."""
+    from clio.cli import _cmd_compile
+
+    (tmp_path / "lib.clio").write_text(
+        "EXPOSE CONTRACT Article\n"
+        "  SHAPE: {title: str, body: str}\n"
+        "\n"
+        "STEP score\n"
+        "  MODE: judgment\n"
+        "  TAKES: article: Article\n"
+        "  GIVES: label: str\n"
+        "\n"
+        "EXPOSE FLOW classify\n"
+        "  TAKES: article: Article\n"
+        "  GIVES: label: str\n"
+        "  score(article=article)\n"
+    )
+    (tmp_path / "main.clio").write_text(
+        "RESOURCES\n"
+        "  target: python\n"
+        "\n"
+        "FROM \"./lib.clio\" IMPORT Article, classify\n"
+        "\n"
+        "STEP run_pipeline\n"
+        "  MODE: judgment\n"
+        "  TAKES: article: Article\n"
+        "  GIVES: label: str\n"
+        "\n"
+        "EXPOSE FLOW pipeline\n"
+        "  TAKES: article: Article\n"
+        "  GIVES: label: str\n"
+        "  classify(article=article)\n"
+    )
+    rc = _cmd_compile(
+        str(tmp_path / "main.clio"),
+        target="python",
+        output=str(tmp_path / "out"),
+    )
+    assert rc == 0
+    assert (tmp_path / "out" / "pyproject.toml").exists()
+
+
+def test_cli_check_multifile(tmp_path):
+    """_cmd_check resolves imports and returns 0 for a valid two-file project."""
+    from clio.cli import _cmd_check
+
+    (tmp_path / "lib.clio").write_text(
+        "EXPOSE CONTRACT Tag\n"
+        "  SHAPE: {label: str}\n"
+        "\n"
+        "STEP tag\n"
+        "  MODE: judgment\n"
+        "  TAKES: text: str\n"
+        "  GIVES: result: Tag\n"
+        "\n"
+        "EXPOSE FLOW tagger\n"
+        "  TAKES: text: str\n"
+        "  GIVES: result: Tag\n"
+        "  tag(text=text)\n"
+    )
+    (tmp_path / "main.clio").write_text(
+        "FROM \"./lib.clio\" IMPORT Tag, tagger\n"
+        "\n"
+        "STEP use_tag\n"
+        "  MODE: judgment\n"
+        "  TAKES: text: str\n"
+        "  GIVES: result: Tag\n"
+        "\n"
+        "EXPOSE FLOW pipeline\n"
+        "  TAKES: text: str\n"
+        "  GIVES: result: Tag\n"
+        "  tagger(text=text)\n"
+    )
+    rc = _cmd_check(str(tmp_path / "main.clio"))
+    assert rc == 0
+
+
+def test_cli_check_reports_missing_import(tmp_path):
+    """_cmd_check returns non-zero when a FROM ... IMPORT references a missing file."""
+    from clio.cli import _cmd_check
+
+    src = tmp_path / "main.clio"
+    src.write_text('FROM "./missing.clio" IMPORT X\n')
+    rc = _cmd_check(str(src))
+    assert rc != 0

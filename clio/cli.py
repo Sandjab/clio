@@ -8,8 +8,9 @@ from pathlib import Path
 from clio.emitters.claude_cli import ClaudeCLIEmitter
 from clio.emitters.python import PythonEmitter
 from clio.graph_render import to_dot, to_html, to_mermaid
-from clio.ir.builder import build_ir
-from clio.parser.parser import ParseError, parse
+from clio.ir.builder import IRBuildError, build_ir
+from clio.ir.resolver import CompileError, resolve_imports
+from clio.parser.parser import ParseError
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -86,12 +87,18 @@ def _cmd_compile(source: str, target: str, output: str, flow: str | None = None)
         return 2
 
     try:
-        graph = build_ir(parse(src_path.read_text()), flow_name=flow)
-    except ParseError as e:
-        print(f"{src_path.name}:{e}", flush=True)
-        return 1
-    except ValueError as e:
-        print(f"{src_path.name}: {e}", flush=True)
+        parsed = resolve_imports(src_path)
+        had_imports = any(p.imports for p in parsed.values())
+        if target == "claude-cli" and had_imports:
+            print(
+                "error: target 'claude-cli' does not support cross-file imports "
+                "(deferred to a future release)",
+                file=sys.stderr,
+            )
+            return 1
+        graph = build_ir(parsed, entry=src_path.resolve(), flow_name=flow)
+    except (ParseError, IRBuildError, CompileError) as e:
+        print(f"error: {e}", file=sys.stderr)
         return 1
 
     out_path = Path(output)
@@ -119,10 +126,12 @@ def _cmd_check(source: str) -> int:
         print(f"clio: source file not found: {source}", flush=True)
         return 2
     try:
-        parse(src_path.read_text())
-    except ParseError as e:
-        print(f"{src_path.name}:{e}", flush=True)
+        parsed = resolve_imports(src_path)
+        build_ir(parsed, entry=src_path.resolve())
+    except (ParseError, IRBuildError, CompileError) as e:
+        print(f"error: {e}", file=sys.stderr)
         return 1
+    print("ok")
     return 0
 
 
@@ -132,12 +141,10 @@ def _cmd_graph(source: str, fmt: str, output: str | None, flow: str | None = Non
         print(f"clio: source file not found: {source}", flush=True)
         return 2
     try:
-        graph = build_ir(parse(src_path.read_text()), flow_name=flow)
-    except ParseError as e:
-        print(f"{src_path.name}:{e}", flush=True)
-        return 1
-    except ValueError as e:
-        print(f"{src_path.name}: {e}", flush=True)
+        parsed = resolve_imports(src_path)
+        graph = build_ir(parsed, entry=src_path.resolve(), flow_name=flow)
+    except (ParseError, IRBuildError, CompileError) as e:
+        print(f"error: {e}", file=sys.stderr)
         return 1
 
     if fmt == "mermaid":

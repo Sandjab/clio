@@ -221,8 +221,10 @@ def test_cli_compile_langgraph_target(tmp_path):
     out = tmp_path / "out"
     rc = main(["compile", str(src), "--target", "langgraph", "--output", str(out)])
     assert rc == 0
-    assert (out / "classify" / "flow.py").exists()
-    assert "StateGraph(State)" in (out / "classify" / "flow.py").read_text()
+    # v0.18: CLI uses resolve_imports → build_ir(dict); single-file FLOWs are
+    # alpha-renamed with the source file stem (f__classify for FLOW classify in f.clio)
+    assert (out / "f__classify" / "flow.py").exists()
+    assert "StateGraph(State)" in (out / "f__classify" / "flow.py").read_text()
 
 
 def test_langgraph_rejects_rescue(tmp_path):

@@ -112,7 +112,9 @@ def test_cli_graph_prints_mermaid_to_stdout(tmp_path, capsys):
     assert rc == 0
     captured = capsys.readouterr().out
     assert captured.startswith("flowchart TD\n")
-    assert "detect_topic --> summarize" in captured
+    # v0.18: CLI uses resolve_imports → build_ir(dict); single-file STEPs are
+    # alpha-renamed with the source file stem (f__detect_topic, f__summarize)
+    assert "f__detect_topic --> f__summarize" in captured
 
 
 def test_cli_graph_writes_to_output_file(tmp_path):
