@@ -132,7 +132,7 @@ state and skips items 1..N. Path via `CLIO_STATE_FILE` env var.
 
 ## `target: mcp-server`
 
-Produces a runnable MCP (Model Context Protocol) server. Each `FLOW` becomes a tool registered with the official `mcp` Python SDK. Judgment steps are handled by the MCP client via `sampling/createMessage` — the server itself carries no API key and no `anthropic`/`openai` dependency.
+Produces a runnable MCP (Model Context Protocol) server. Each *exposed* `FLOW` (since v0.17: every signed FLOW that is not called by a sibling FLOW; pre-v0.17 sources expose every FLOW) becomes a tool registered with the official `mcp` Python SDK. Judgment steps are handled by the MCP client via `sampling/createMessage` — the server itself carries no API key and no `anthropic`/`openai` dependency.
 
 ### Layout
 
@@ -167,8 +167,8 @@ Judgment steps use `sampling/createMessage` instead of a direct SDK call. The MC
 
 ### inputSchema / outputSchema derivation
 
-- **inputSchema**: derived from the first step's `TAKES`. Literal kwargs in the FLOW call become `default` values in the JSON Schema; required fields are those with no default.
-- **outputSchema**: derived from the last step's `GIVES`. Inline types and CONTRACT refs both resolve to JSON Schema objects.
+- **inputSchema**: when the FLOW declares `TAKES:` (v0.16+), it is the source of truth. Otherwise derived from the first step's `TAKES`. Literal kwargs in the FLOW call become `default` values in the JSON Schema; required fields are those with no default.
+- **outputSchema**: when the FLOW declares `GIVES:` (v0.16+), it is the source of truth. Otherwise derived from the last step's `GIVES`. Inline types and CONTRACT refs both resolve to JSON Schema objects.
 
 ### Refused combinations
 

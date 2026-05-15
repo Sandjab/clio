@@ -34,6 +34,30 @@ The collection variable in a `FOR EACH` doesn't match anything in scope at this 
 
 **Fix:** check your upstream `STEP`'s `GIVES: tickets: List<...>`. The names must match exactly.
 
+### `IRBuildError: name 'X' collides with a STEP declared on line N`
+
+A `FLOW` declaration shares a name with a `STEP`. Since v0.17, sub-flow calls resolve step name first then signed FLOW name; a shared name would make resolution ambiguous, so the IR builder rejects it.
+
+**Fix:** rename one of the two. A common convention is `verb_object` for STEPs (`classify_ticket`) and `noun_pipeline` / `noun_flow` for FLOWs (`ticket_routing`).
+
+### `IRBuildError: FLOW 'X' calls itself (recursion not supported in v0.17)`
+
+A FLOW chain (or one of its branches) calls itself directly. v0.17 explicitly rejects recursion — sub-flow composition is acyclic.
+
+**Fix:** model the iteration with `FOR EACH ... IN ...:` over a finite collection, or with `WHILE <cond> MAX N: ...` for a bounded loop. If you truly need unbounded self-recursion, drop down to the host language (a Python `exact` step calling itself).
+
+### `IRBuildError: sub-flow call creates a cycle: A -> B -> A`
+
+FLOWs `A` and `B` call each other (mutual recursion), or a longer chain (`A -> B -> C -> A`) loops back. v0.17 rejects all cycles at IR build time; the error names the offending path.
+
+**Fix:** break the cycle. Either inline one side as a STEP, or refactor so the shared logic lives in a third FLOW that both callers invoke without calling each other.
+
+### `IRBuildError: unknown STEP or signed FLOW 'X' (signed FLOWs must declare both TAKES and GIVES)`
+
+You called a FLOW that has no `TAKES:` / `GIVES:` blocks. Only signed FLOWs are callable as sub-flows; unsigned ones can still be the program's main flow but cannot be invoked from another FLOW.
+
+**Fix:** add `TAKES:` and `GIVES:` blocks to the callee FLOW (see recipe [#19 in the cookbook](03-cookbook.md#19-declaring-a-flow-signature-for-top-level-fan-out-v016)), or rewrite the caller to compose the underlying STEPs directly.
+
 ## At emit time
 
 ### `ValueError: claude-cli target does not support FOR EACH PARALLEL`
@@ -41,6 +65,18 @@ The collection variable in a `FOR EACH` doesn't match anything in scope at this 
 The `claude-cli` emitter explicitly rejects `FOR EACH ... PARALLEL AS` because bash can't safely manage concurrent state.
 
 **Fix:** compile to `--target python` or `--target mcp-server` instead. Or rewrite the loop as a sequential `FOR EACH` if the parallelism isn't critical.
+
+### `ValueError: target=claude-cli does not support FLOW composition (sub-flow calls). v0.17 limitation — use target=python or target=mcp-server.`
+
+The `claude-cli` emitter rejects any source containing a `FlowCallIR` site. Sub-shell-based isolation between bash-emitted sub-flows is deferred — there's no clean way to scope state without a real process boundary today.
+
+**Fix:** compile to `--target python` or `--target mcp-server` (both fully support sub-flow calls). If you want to stay on `claude-cli`, inline the sub-flow as a chain of STEP calls in the parent.
+
+### `ValueError: target=claude-skill — sub-flow '<name>' must be a linear chain (no IF/FOR EACH/MATCH/WHILE)`
+
+The `claude-skill` emitter writes a per-sub-flow orchestrator at `scripts/sub_<name>.py`, but the v0.17 implementation only walks linear chains there. Control structures inside a sub-flow body are caught at compile time so the host doesn't see a half-orchestrated skill.
+
+**Fix:** either hoist the control structure into the *main* FLOW (sub-flows in the cookbook recipe stay purely linear), or compile to `--target python` / `--target mcp-server`, which lower the full structure inside a sub-flow without restriction.
 
 ### `IRBuildError: IF/WHILE condition reads X.Y but X is not a CONTRACT`
 

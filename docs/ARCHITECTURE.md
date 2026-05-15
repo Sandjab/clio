@@ -35,7 +35,7 @@ The IR Builder transforms the AST into a directed graph of steps with typed edge
 - MODE inference runs: `auto` steps are classified as `exact` or `judgment`
 - LANG inference runs: `auto` lang steps get a language assigned based on data size heuristics
 
-**Graph** (`ir/graph.py`): the flow as a DAG of StepIR nodes. Each node holds its resolved contract, inferred mode, inferred lang, and connections.
+**Graph** (`ir/graph.py`): the flow as a DAG of StepIR nodes. Each node holds its resolved contract, inferred mode, inferred lang, and connections. Since v0.17, `FlowGraph` also carries `flows` (every parsed `FlowIR`, not only the main one) and `exposed_flow_names` (those not called by a sibling — used by the `mcp-server` emitter to decide which FLOWs surface as tools). A call that resolves to a signed FLOW (one with both `TAKES` and `GIVES`) produces a `FlowCallIR` node — distinct from the regular `CallIR` for STEP invocations.
 
 **Contracts** (`ir/contracts.py`): validates SHAPE definitions against Pydantic models and JSON Schema. Generates the validation code/schema that emitters will embed.
 
