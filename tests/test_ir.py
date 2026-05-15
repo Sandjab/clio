@@ -1310,3 +1310,18 @@ def test_extract_flow_signatures_skips_unsigned_flows():
     sig = sigs["with_sig"]
     assert [f.name for f in sig.takes] == ["x"]
     assert [f.name for f in sig.gives] == ["y"]
+
+
+def test_step_flow_name_collision_rejected():
+    from clio.ir.builder import IRBuildError, build_ir
+    from clio.parser.parser import parse
+    src = (
+        "STEP enrich\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n\n"
+        "FLOW enrich\n  TAKES: x: str\n  GIVES: y: str\n  enrich(x=x)\n"
+    )
+    import pytest as _pt
+    with _pt.raises(IRBuildError) as ei:
+        build_ir(parse(src))
+    msg = str(ei.value)
+    assert "collision" in msg.lower() or "shadow" in msg.lower()
+    assert "enrich" in msg

@@ -158,6 +158,15 @@ def build_ir(program: Program, flow_name: str | None = None) -> FlowGraph:
             )
         flow_names_seen.add(d.name)
 
+    # v0.17: a STEP and a FLOW cannot share a name (would render call
+    # resolution ambiguous).
+    for d in flow_decls:
+        if d.name in steps_by_name:
+            raise IRBuildError(
+                f"line {d.line}:{d.col}: name collision — {d.name!r} is already "
+                f"declared as a STEP on line {steps_by_name[d.name].line}"
+            )
+
     flow_ir: FlowIR | None = None
     if flow_name is not None:
         match = next((d for d in flow_decls if d.name == flow_name), None)
