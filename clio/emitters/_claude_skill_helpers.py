@@ -13,7 +13,9 @@ from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
     BoolOpIR,
     CallIR,
+    FlowCallIR,
     FlowGraph,
+    FlowIR,
     ForEachIR,
     IfBlockIR,
     MatchBlockIR,
@@ -228,6 +230,204 @@ def render_exact_step_section(step: StepIR, idx: int, lang: str = "en") -> str:
         "Do not advance until the script exited 0.\n\n"
     )
     return title + doc_block + cmd + tail + render_cache_block(step, lang=lang) + render_retry_block(step, lang=lang)
+
+
+def _step_index_map(graph: FlowGraph) -> dict[str, int]:
+    """1-based index for every step in graph.steps, matching the
+    `{idx:02d}_{step.name}.py` filename convention used by the emitter."""
+    return {step.name: i for i, step in enumerate(graph.steps, start=1)}
+
+
+def render_sub_flow_script(sub_flow: FlowIR, graph: FlowGraph) -> str:
+    """Python orchestrator script for a signed sub-FLOW.
+
+    Reads kwargs JSON on stdin (matches FLOW.TAKES), runs each top-level
+    `CallIR` in the chain by invoking its already-emitted per-step script
+    via subprocess, and writes the FLOW.GIVES dict to stdout as JSON.
+
+    Conventions:
+      - Internal state is a flat dict (`flat_state[field_name] = value`),
+        mirroring the python/mcp-server "flat GIVES" convention. Each
+        sub-flow run starts with a fresh state seeded from the input kwargs.
+      - Per-step scripts use the existing claude-skill namespaced state
+        (`state[step_name][field]`); the orchestrator translates between
+        the two on each call.
+      - Sub-flow nesting: a FlowCallIR inside the chain recurses into
+        `scripts/sub_<other>.py` and merges its GIVES into `flat_state`.
+      - Items other than CallIR / FlowCallIR (IF / FOR EACH / MATCH /
+        WHILE) raise NotImplementedError at runtime — v0.17 sub-flows
+        with control structures should be expressed at the parent level
+        or narrated via SKILL.md.
+
+    Limitations: this v0.17 orchestrator handles the linear-chain case
+    documented above. Complex control flow inside a sub-flow is out of
+    scope for this milestone.
+    """
+    idx_by_step = _step_index_map(graph)
+    takes_doc = (
+        ", ".join(f"{f.name}: {_type_to_display(f.type)}" for f in sub_flow.takes)
+        or "(no TAKES)"
+    )
+    gives_doc = (
+        ", ".join(f"{f.name}: {_type_to_display(f.type)}" for f in sub_flow.gives)
+        or "(no GIVES)"
+    )
+
+    chain_lines: list[str] = []
+    for item in sub_flow.chain:
+        if isinstance(item, CallIR):
+            step_name = item.step_name
+            script = f"{idx_by_step[step_name]:02d}_{step_name}.py"
+            kwarg_inits = []
+            for kw_name, kw_value in item.kwargs:
+                if isinstance(kw_value, str) and kw_value.startswith("@"):
+                    ref = kw_value[1:]
+                    kwarg_inits.append(f"{kw_name!r}: flat_state[{ref!r}]")
+                else:
+                    kwarg_inits.append(f"{kw_name!r}: {kw_value!r}")
+            kwargs_dict = "{" + ", ".join(kwarg_inits) + "}"
+            chain_lines.append(
+                f"    # CallIR: {step_name}"
+            )
+            chain_lines.append(
+                f"    _step_state = {{{step_name!r}: {kwargs_dict}}}"
+            )
+            chain_lines.append(
+                f"    _step_state = _run_step({script!r}, _step_state)"
+            )
+            chain_lines.append(
+                f"    for _k, _v in _step_state.get({step_name!r}, {{}}).items():"
+            )
+            chain_lines.append(
+                "        flat_state[_k] = _v"
+            )
+        elif isinstance(item, FlowCallIR):
+            target = item.flow_name
+            kwarg_inits = []
+            for kw_name, kw_value in item.kwargs:
+                if isinstance(kw_value, str) and kw_value.startswith("@"):
+                    ref = kw_value[1:]
+                    kwarg_inits.append(f"{kw_name!r}: flat_state[{ref!r}]")
+                else:
+                    kwarg_inits.append(f"{kw_name!r}: {kw_value!r}")
+            kwargs_dict = "{" + ", ".join(kwarg_inits) + "}"
+            chain_lines.append(
+                f"    # FlowCallIR: {target}"
+            )
+            chain_lines.append(
+                f"    _sub_out = _run_sub_flow({target!r}, {kwargs_dict})"
+            )
+            chain_lines.append(
+                "    flat_state.update(_sub_out)"
+            )
+        else:
+            kind = type(item).__name__
+            chain_lines.append(
+                f"    raise NotImplementedError("
+                f'"sub-flow {sub_flow.name!r} chain contains {kind}; '
+                f'v0.17 sub-flow orchestrator only handles linear CallIR/'
+                f'FlowCallIR chains"'
+                f")"
+            )
+
+    chain_body = "\n".join(chain_lines) if chain_lines else "    pass"
+
+    seed_lines = "\n".join(
+        f"    flat_state[{f.name!r}] = _kwargs[{f.name!r}]" for f in sub_flow.takes
+    ) or "    # no TAKES"
+
+    return_dict = "{" + ", ".join(
+        f"{f.name!r}: flat_state[{f.name!r}]" for f in sub_flow.gives
+    ) + "}"
+
+    return (
+        f'"""Sub-flow orchestrator for FLOW {sub_flow.name}.\n'
+        f"\n"
+        f"TAKES: {takes_doc}\n"
+        f"GIVES: {gives_doc}\n"
+        f"\n"
+        f"Usage:\n"
+        f"    python scripts/sub_{sub_flow.name}.py < kwargs.json > gives.json\n"
+        f"\n"
+        f"Reads kwargs JSON on stdin (one key per FLOW.TAKES field),\n"
+        f"runs the sub-flow chain by invoking per-step scripts via\n"
+        f"subprocess, and writes the FLOW.GIVES dict to stdout.\n"
+        f'"""\n'
+        f"from __future__ import annotations\n"
+        f"\n"
+        f"import json\n"
+        f"import subprocess\n"
+        f"import sys\n"
+        f"from pathlib import Path\n"
+        f"\n"
+        f"SCRIPTS_DIR = Path(__file__).parent\n"
+        f"\n"
+        f"\n"
+        f"def _run_step(script_name: str, state: dict) -> dict:\n"
+        f'    """Invoke a per-step script with the given state on stdin;\n'
+        f'    return the updated state from stdout."""\n'
+        f"    proc = subprocess.run(\n"
+        f"        [sys.executable, str(SCRIPTS_DIR / script_name)],\n"
+        f"        input=json.dumps(state),\n"
+        f"        capture_output=True,\n"
+        f"        text=True,\n"
+        f"        check=True,\n"
+        f"    )\n"
+        f"    return json.loads(proc.stdout)\n"
+        f"\n"
+        f"\n"
+        f"def _run_sub_flow(flow_name: str, kwargs: dict) -> dict:\n"
+        f'    """Invoke another sub-flow orchestrator and return its GIVES dict."""\n'
+        f"    proc = subprocess.run(\n"
+        f"        [sys.executable, str(SCRIPTS_DIR / f\"sub_{{flow_name}}.py\")],\n"
+        f"        input=json.dumps(kwargs),\n"
+        f"        capture_output=True,\n"
+        f"        text=True,\n"
+        f"        check=True,\n"
+        f"    )\n"
+        f"    return json.loads(proc.stdout)\n"
+        f"\n"
+        f"\n"
+        f'if __name__ == "__main__":\n'
+        f"    _kwargs = json.load(sys.stdin)\n"
+        f"    flat_state: dict = {{}}\n"
+        f"{seed_lines}\n"
+        f"{chain_body}\n"
+        f"    json.dump({return_dict}, sys.stdout, indent=2)\n"
+        f"    sys.stdout.write('\\n')\n"
+    )
+
+
+def render_flow_call_section(
+    call: FlowCallIR, idx_label: str, lang: str = "en",
+) -> str:
+    """Markdown section for a FlowCallIR in the main SKILL.md chain narrative."""
+    title_label = {"en": "Sub-flow", "fr": "Sous-flux"}[lang]
+    cmd_label = {"en": "Run", "fr": "Exécuter"}[lang]
+    target = call.flow_name
+    # Build the kwargs JSON template: literal values are inlined, @refs
+    # become state lookups the LLM host must substitute before invoking.
+    kwarg_parts = []
+    for name, value in call.kwargs:
+        if isinstance(value, str) and value.startswith("@"):
+            ref = value[1:]
+            kwarg_parts.append(f'"{name}": <state.{ref}>')
+        else:
+            kwarg_parts.append(f"{name!r}: {value!r}")
+    kwargs_json = "{" + ", ".join(kwarg_parts) + "}"
+    head = (
+        f"### {title_label}: `{target}`  (source line {call.line})\n\n"
+        f"This step invokes sub-flow `{target}`. Build the kwargs JSON,\n"
+        f"invoke the orchestrator, and merge its declared GIVES into "
+        f"`state.json`.\n\n"
+        f"{cmd_label}:\n\n"
+        f"    echo '{kwargs_json}' | python scripts/sub_{target}.py > gives.json\n\n"
+        f"Then merge each top-level field of `gives.json` into `state.json` "
+        f"(the sub-flow's declared GIVES become top-level keys in the parent "
+        f"state).\n\n"
+        f"Tick the corresponding TodoWrite todo.\n\n"
+    )
+    return head
 
 
 def render_judgment_prompt(step: StepIR) -> str:
@@ -708,6 +908,8 @@ def render_skill_md(
                 parts.append(render_for_each_section(item, f"{item_idx:02d}", lang=lang))
             elif isinstance(item, WhileBlockIR):
                 parts.append(render_while_section(item, f"{item_idx:02d}", lang=lang))
+            elif isinstance(item, FlowCallIR):
+                parts.append(render_flow_call_section(item, f"{item_idx:02d}", lang=lang))
 
         # Append RESCUE sections from FlowIR.rescues (separate from chain).
         rescues = getattr(flow, "rescues", None) or ()

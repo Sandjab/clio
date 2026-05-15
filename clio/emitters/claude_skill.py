@@ -21,6 +21,7 @@ from clio.emitters._claude_skill_helpers import (
     render_readme,
     render_skill_md,
     render_state_example,
+    render_sub_flow_script,
 )
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import FlowGraph, ForEachIR
@@ -79,6 +80,19 @@ class ClaudeSkillEmitter(BaseEmitter):
                 (output_dir / "schemas" / f"{idx:02d}_{step.name}.input.json").write_text(
                     input_schema
                 )
+        # v0.17 sub-flows: emit one orchestrator script per signed FLOW other
+        # than the main one. Signed = has both TAKES and GIVES. The main flow
+        # is narrated by SKILL.md (the LLM host orchestrates); each sub-flow
+        # is a self-contained Python script the host invokes via subprocess.
+        main_flow_name = graph.flow.name if graph.flow is not None else None
+        for sub_flow in graph.flows:
+            if sub_flow.name == main_flow_name:
+                continue
+            if not sub_flow.takes or not sub_flow.gives:
+                continue
+            (output_dir / "scripts" / f"sub_{sub_flow.name}.py").write_text(
+                render_sub_flow_script(sub_flow, graph)
+            )
         (output_dir / "SKILL.md").write_text(render_skill_md(graph, warn=warn))
         (output_dir / "process_flow.dot").write_text(render_process_flow_dot(graph))
         (output_dir / "state.example.json").write_text(render_state_example(graph))

@@ -1020,3 +1020,39 @@ def test_claude_skill_falls_back_to_step_inference_without_signature(tmp_path):
     # Step content is still rendered
     assert "x" in skill_md
     assert "y" in skill_md
+
+
+def test_claude_skill_emits_subflow_script(tmp_path):
+    """v0.17: a sub-FLOW called by the main FLOW becomes scripts/sub_<name>.py
+    and the main SKILL.md narrates the invocation."""
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE: exact\n"
+        "\n"
+        "FLOW inner\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  s(x=x)\n"
+        "\n"
+        "FLOW outer\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  inner(x=x)\n"
+        "\n"
+        "RESOURCES\n"
+        "  target: claude-skill\n"
+    )
+    g = build_ir(parse(src), flow_name="outer")
+    ClaudeSkillEmitter().emit(g, tmp_path)
+    # The emitter writes files directly under output_dir.
+    scripts = tmp_path / "scripts"
+    files = {p.name for p in scripts.iterdir()}
+    # Sub-flow scaffold exists.
+    assert any("inner" in name for name in files), (
+        f"expected a sub-flow script for `inner` in {files}"
+    )
+    # Main SKILL.md references the sub-flow.
+    skill_md = (tmp_path / "SKILL.md").read_text()
+    assert "inner" in skill_md
