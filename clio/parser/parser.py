@@ -115,12 +115,35 @@ class _Parser:
             t = self.peek()
             if t.type == TokenType.KEYWORD and t.value == "FROM":
                 imports.append(self.parse_import_decl())
-            elif t.type == TokenType.KEYWORD and t.value == "STEP":
+                self.skip_newlines()
+                continue
+
+            # Visibility prefix detection (EXPOSE / INTERNAL)
+            exposed: bool | None = None
+            vis_tok = None
+            if t.type == TokenType.KEYWORD and t.value in ("EXPOSE", "INTERNAL"):
+                vis_tok = t
+                exposed = (t.value == "EXPOSE")
+                self.advance()
+                nxt = self.peek()
+                if nxt.type == TokenType.KEYWORD and nxt.value in ("EXPOSE", "INTERNAL"):
+                    raise ParseError(
+                        "only one visibility marker allowed before FLOW/CONTRACT",
+                        nxt.line, nxt.col,
+                    )
+                if not (nxt.type == TokenType.KEYWORD and nxt.value in ("FLOW", "CONTRACT")):
+                    raise ParseError(
+                        f"EXPOSE applies only to FLOW and CONTRACT (got {nxt.value!r})",
+                        vis_tok.line, vis_tok.col,
+                    )
+                t = nxt
+
+            if t.type == TokenType.KEYWORD and t.value == "STEP":
                 decls.append(self.parse_step())
             elif t.type == TokenType.KEYWORD and t.value == "CONTRACT":
-                decls.append(self.parse_contract())
+                decls.append(self.parse_contract(exposed=exposed or False))
             elif t.type == TokenType.KEYWORD and t.value == "FLOW":
-                decls.append(self.parse_flow())
+                decls.append(self.parse_flow(exposed=exposed or False))
             elif t.type == TokenType.KEYWORD and t.value == "RESOURCES":
                 decls.append(self.parse_resources())
             elif t.type == TokenType.KEYWORD and t.value == "TEST":
@@ -1935,7 +1958,7 @@ class _Parser:
             t.line, t.col,
         )
 
-    def parse_contract(self) -> "ContractDecl":
+    def parse_contract(self, exposed: bool = False) -> "ContractDecl":
         from clio.parser.expressions import parse_expression
         kw = self.expect(TokenType.KEYWORD, "CONTRACT")
         ident = self.expect(TokenType.IDENT)
@@ -1985,6 +2008,7 @@ class _Parser:
             assert_expr=assert_expr,
             line=kw.line,
             col=kw.col,
+            exposed=exposed,
         )
 
     def parse_field_list(self) -> tuple[Field, ...]:
@@ -2095,7 +2119,7 @@ class _Parser:
         self.expect(TokenType.RPAREN)
         return EnumType(values=tuple(values))
 
-    def parse_flow(self) -> FlowDecl:
+    def parse_flow(self, exposed: bool = False) -> FlowDecl:
         kw = self.expect(TokenType.KEYWORD, "FLOW")
         ident = self.expect(TokenType.IDENT)
         self.expect(TokenType.NEWLINE)
@@ -2202,6 +2226,7 @@ class _Parser:
             takes=takes,
             gives=gives,
             description=description,
+            exposed=exposed,
         )
 
     def parse_flow_item(self) -> "StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock | ResumeAst":
