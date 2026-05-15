@@ -591,3 +591,40 @@ def test_claude_cli_rejects_sql(tmp_path):
     )
     with _pytest.raises(ValueError, match="impl.mode: sql is not supported by the claude-cli target"):
         ClaudeCLIEmitter().emit(build_ir(parse(src)), tmp_path)
+
+
+def test_claude_cli_rejects_subflow_calls(tmp_path):
+    import pytest as _pt
+
+    from clio.emitters.claude_cli import ClaudeCLIEmitter
+    from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
+    src = """
+STEP s
+  TAKES: x: str
+  GIVES: y: str
+  MODE: exact
+
+FLOW inner
+  TAKES: x: str
+  GIVES: y: str
+  s(x=x)
+
+FLOW outer
+  TAKES: x: str
+  GIVES: y: str
+  inner(x=x)
+
+RESOURCES
+  target: claude-cli
+  models: [haiku]
+"""
+    g = build_ir(parse(src), flow_name="outer")
+    with _pt.raises(Exception) as ei:
+        ClaudeCLIEmitter().emit(g, tmp_path)
+    msg = str(ei.value)
+    # The error must clearly point at the target and the unsupported feature.
+    assert "claude-cli" in msg
+    assert "sub-flow" in msg.lower() or "composition" in msg.lower() or "FlowCallIR" in msg
+    # Hint at the version + suggested alternative.
+    assert "v0.17" in msg or "not supported" in msg.lower()
