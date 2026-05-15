@@ -7,6 +7,7 @@ import pytest
 from clio.ir.resolver import (
     CompileError,
     resolve_imports,
+    validate_per_file,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "imports"
@@ -92,3 +93,87 @@ def test_discovery_idempotent_caching(tmp_path: Path) -> None:
     )
     parsed = resolve_imports(tmp_path / "main.clio")
     assert len(parsed) == 4
+
+
+# ---------------------------------------------------------------------------
+# validate_per_file — Task 5
+# ---------------------------------------------------------------------------
+
+
+def test_e_vis_003_exposed_flow_without_signature(tmp_path: Path) -> None:
+    """EXPOSE FLOW must declare TAKES and GIVES (E_VIS_003)."""
+    entry = tmp_path / "main.clio"
+    entry.write_text(
+        "STEP step1\n"
+        "  MODE: judgment\n"
+        "  TAKES: text: str\n"
+        "  GIVES: out: str\n"
+        "EXPOSE FLOW broken\n"
+        "  step1(text=text)\n"
+    )
+    parsed = resolve_imports(entry)
+    with pytest.raises(CompileError, match=r"exposed FLOW 'broken' must declare explicit TAKES and GIVES"):
+        validate_per_file(parsed)
+
+
+def test_e_vis_004_same_name_flow_and_contract(tmp_path: Path) -> None:
+    """A name cannot be both EXPOSE FLOW and EXPOSE CONTRACT in the same file."""
+    entry = tmp_path / "main.clio"
+    entry.write_text(
+        "EXPOSE CONTRACT X\n"
+        "  SHAPE: {val: str}\n"
+        "STEP step1\n"
+        "  MODE: judgment\n"
+        "  TAKES: x: X\n"
+        "  GIVES: out: str\n"
+        "EXPOSE FLOW X\n"
+        "  TAKES: x: X\n"
+        "  GIVES: out: str\n"
+        "  step1(x=x)\n"
+    )
+    parsed = resolve_imports(entry)
+    with pytest.raises(CompileError, match=r"'X' is exposed as both FLOW and CONTRACT"):
+        validate_per_file(parsed)
+
+
+def test_e_mod_001_resources_in_imported_file(tmp_path: Path) -> None:
+    """Only the entry file may declare RESOURCES (E_MOD_001)."""
+    lib = tmp_path / "lib.clio"
+    lib.write_text(
+        "RESOURCES\n"
+        "  target: python\n"
+        "EXPOSE CONTRACT Doc\n"
+        "  SHAPE: {text: str}\n"
+    )
+    main = tmp_path / "main.clio"
+    main.write_text(
+        'FROM "./lib.clio" IMPORT Doc\n'
+        "STEP noop\n"
+        "  MODE: judgment\n"
+        "  TAKES: doc: Doc\n"
+        "  GIVES: out: str\n"
+        "EXPOSE FLOW run\n"
+        "  TAKES: doc: Doc\n"
+        "  GIVES: out: str\n"
+        "  noop(doc=doc)\n"
+    )
+    parsed = resolve_imports(main)
+    with pytest.raises(CompileError, match=r"only the entry file may declare"):
+        validate_per_file(parsed, entry=main.resolve())
+
+
+def test_valid_file_passes(tmp_path: Path) -> None:
+    """A well-formed file with EXPOSE FLOW + TAKES/GIVES is silently accepted."""
+    entry = tmp_path / "main.clio"
+    entry.write_text(
+        "STEP step1\n"
+        "  MODE: judgment\n"
+        "  TAKES: text: str\n"
+        "  GIVES: out: str\n"
+        "EXPOSE FLOW run\n"
+        "  TAKES: text: str\n"
+        "  GIVES: out: str\n"
+        "  step1(text=text)\n"
+    )
+    parsed = resolve_imports(entry)
+    validate_per_file(parsed)  # must not raise
