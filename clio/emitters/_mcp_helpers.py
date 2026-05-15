@@ -361,11 +361,12 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
             imported_steps.append(step.name)
         kw_parts = []
         for name, value in call.kwargs:
+            py_name = _to_field_name(name)
             if isinstance(value, ErrorAccessIR):
                 if value.field == "message":
-                    kw_parts.append(f"{name}=str(_err)")
+                    kw_parts.append(f"{py_name}=str(_err)")
                 elif value.field == "type":
-                    kw_parts.append(f"{name}=type(_err).__name__")
+                    kw_parts.append(f"{py_name}=type(_err).__name__")
                 else:
                     raise AssertionError(
                         f"unreachable: ErrorAccessIR field {value.field!r}"
@@ -373,11 +374,11 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
             elif isinstance(value, str) and value.startswith("@"):
                 ref = value[1:]
                 if ref in scope_local:
-                    kw_parts.append(f"{name}={ref}")
+                    kw_parts.append(f"{py_name}={_to_field_name(ref)}")
                 else:
-                    kw_parts.append(f"{name}=state[{ref!r}]")
+                    kw_parts.append(f"{py_name}=state[{ref!r}]")
             else:
-                kw_parts.append(f"{name}={value!r}")
+                kw_parts.append(f"{py_name}={value!r}")
         kwargs_str = ", ".join(kw_parts)
         out_name = step.gives.name if step.gives is not None else "_result"
         is_judgment = step.mode == "judgment"
@@ -453,7 +454,7 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
                 if item.collection in scope_local
                 else f"state[{item.collection!r}]"
             )
-            chain_lines.append(f"{indent}for {item.loop_var} in {source}:")
+            chain_lines.append(f"{indent}for {_to_field_name(item.loop_var)} in {source}:")
             inner_scope = scope_local | {item.loop_var}
             inner_indent = indent + "    "
             if not item.body:
@@ -716,11 +717,12 @@ def _emit_flow_module_async_multi(graph: FlowGraph) -> str:
             imported_steps.append(step.name)
         kw_parts = []
         for name, value in call.kwargs:
+            py_name = _to_field_name(name)
             if isinstance(value, ErrorAccessIR):
                 if value.field == "message":
-                    kw_parts.append(f"{name}=str(_err)")
+                    kw_parts.append(f"{py_name}=str(_err)")
                 elif value.field == "type":
-                    kw_parts.append(f"{name}=type(_err).__name__")
+                    kw_parts.append(f"{py_name}=type(_err).__name__")
                 else:
                     raise AssertionError(
                         f"unreachable: ErrorAccessIR field {value.field!r}"
@@ -728,11 +730,11 @@ def _emit_flow_module_async_multi(graph: FlowGraph) -> str:
             elif isinstance(value, str) and value.startswith("@"):
                 ref = value[1:]
                 if ref in scope_local:
-                    kw_parts.append(f"{name}={ref}")
+                    kw_parts.append(f"{py_name}={_to_field_name(ref)}")
                 else:
-                    kw_parts.append(f"{name}=state[{ref!r}]")
+                    kw_parts.append(f"{py_name}=state[{ref!r}]")
             else:
-                kw_parts.append(f"{name}={value!r}")
+                kw_parts.append(f"{py_name}={value!r}")
         kwargs_str = ", ".join(kw_parts)
         out_name = step.gives.name if step.gives is not None else "_result"
         is_judgment = step.mode == "judgment"
@@ -774,14 +776,15 @@ def _emit_flow_module_async_multi(graph: FlowGraph) -> str:
     def _emit_flow_call(call: FlowCallIR, indent: str, scope_local: set[str]) -> None:
         kw_parts = []
         for name, value in call.kwargs:
+            py_name = _to_field_name(name)
             if isinstance(value, str) and value.startswith("@"):
                 ref = value[1:]
                 if ref in scope_local:
-                    kw_parts.append(f"{name}={ref}")
+                    kw_parts.append(f"{py_name}={_to_field_name(ref)}")
                 else:
-                    kw_parts.append(f"{name}=state[{ref!r}]")
+                    kw_parts.append(f"{py_name}=state[{ref!r}]")
             else:
-                kw_parts.append(f"{name}={value!r}")
+                kw_parts.append(f"{py_name}={value!r}")
         kwargs_str = ", ".join(kw_parts)
         sep = ", " if kwargs_str else ""
         invocation = (
@@ -812,7 +815,7 @@ def _emit_flow_module_async_multi(graph: FlowGraph) -> str:
                 if item.collection in scope_local
                 else f"state[{item.collection!r}]"
             )
-            chain_lines.append(f"{indent}for {item.loop_var} in {source}:")
+            chain_lines.append(f"{indent}for {_to_field_name(item.loop_var)} in {source}:")
             inner_scope = scope_local | {item.loop_var}
             inner_indent = indent + "    "
             if not item.body:
@@ -989,14 +992,15 @@ def emit_parallel_for_each_mcp(
     scope_local = {elem.loop_var}
     kw_parts: list[str] = []
     for name, value in inner.kwargs:
+        py_name = _to_field_name(name)
         if isinstance(value, str) and value.startswith("@"):
             ref = value[1:]
             if ref in scope_local:
-                kw_parts.append(f"{name}={ref}")
+                kw_parts.append(f"{py_name}={_to_field_name(ref)}")
             else:
-                kw_parts.append(f"{name}=state[{ref!r}]")
+                kw_parts.append(f"{py_name}=state[{ref!r}]")
         else:
-            kw_parts.append(f"{name}={value!r}")
+            kw_parts.append(f"{py_name}={value!r}")
     kwargs_str = ", ".join(kw_parts)
 
     if isinstance(inner, CallIR):
@@ -1029,7 +1033,7 @@ def emit_parallel_for_each_mcp(
     return (
         f"{indent}_items = {items_lookup}\n"
         f"{indent}_sem = asyncio.Semaphore(10)\n"
-        f"{indent}async def {bound_name}({elem.loop_var}):\n"
+        f"{indent}async def {bound_name}({_to_field_name(elem.loop_var)}):\n"
         f"{indent}    async with _sem:\n"
         f"{indent}        return {call_expr}\n"
         f'{indent}_log.emit("parallel_block_start", {unit_kv}, '

@@ -17,6 +17,7 @@ import keyword
 
 from clio.emitters._shared_utils import (
     _python_condition_expr,
+    _to_field_name,
     _type_to_python,
 )
 from clio.ir.graph import (
@@ -149,11 +150,12 @@ def _emit_node_wrapper(call: CallIR, step: StepIR) -> str:
     state-dict semantics and the underlying step function's keyword signature."""
     kw_parts = []
     for name, value in call.kwargs:
+        py_name = _to_field_name(name)
         if isinstance(value, str) and value.startswith("@"):
             ref = value[1:]
-            kw_parts.append(f"{name}=state[{ref!r}]")
+            kw_parts.append(f"{py_name}=state[{ref!r}]")
         else:
-            kw_parts.append(f"{name}={value!r}")
+            kw_parts.append(f"{py_name}={value!r}")
     kwargs_str = ", ".join(kw_parts)
     state_key = _step_state_key(step)
     return (

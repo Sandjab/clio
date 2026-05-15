@@ -492,7 +492,10 @@ class PythonEmitter(BaseEmitter):
             elif s.kind == "fallback":
                 assert s.fallback_step is not None
                 fb_name = s.fallback_step.name
-                kw_str = ", ".join(f"{t.name}={_to_field_name(t.name)}" for t in step.takes)
+                kw_str = ", ".join(
+                    f"{_to_field_name(t.name)}={_to_field_name(t.name)}"
+                    for t in step.takes
+                )
                 chain_lines += [
                     "    if response is None:",
                     f"        from . import {fb_name} as _{fb_name}_mod",
@@ -593,11 +596,12 @@ class PythonEmitter(BaseEmitter):
                 imported_steps.append(step.name)
             kw_parts = []
             for name, value in call.kwargs:
+                py_name = _to_field_name(name)
                 if isinstance(value, ErrorAccessIR):
                     if value.field == "message":
-                        kw_parts.append(f"{name}=str(_err)")
+                        kw_parts.append(f"{py_name}=str(_err)")
                     elif value.field == "type":
-                        kw_parts.append(f"{name}=type(_err).__name__")
+                        kw_parts.append(f"{py_name}=type(_err).__name__")
                     else:
                         raise AssertionError(
                             f"unreachable: ErrorAccessIR field {value.field!r}"
@@ -605,11 +609,11 @@ class PythonEmitter(BaseEmitter):
                 elif isinstance(value, str) and value.startswith("@"):
                     ref = value[1:]
                     if ref in scope_local:
-                        kw_parts.append(f"{name}={ref}")
+                        kw_parts.append(f"{py_name}={_to_field_name(ref)}")
                     else:
-                        kw_parts.append(f"{name}=state[{ref!r}]")
+                        kw_parts.append(f"{py_name}=state[{ref!r}]")
                 else:
-                    kw_parts.append(f"{name}={value!r}")
+                    kw_parts.append(f"{py_name}={value!r}")
             kwargs_str = ", ".join(kw_parts)
             out_name = step.gives.name if step.gives is not None else "_result"
             # Inside a FOR EACH body, results are not assigned to the global state
@@ -658,14 +662,15 @@ class PythonEmitter(BaseEmitter):
             as nested step calls."""
             kw_parts = []
             for name, value in call.kwargs:
+                py_name = _to_field_name(name)
                 if isinstance(value, str) and value.startswith("@"):
                     ref = value[1:]
                     if ref in scope_local:
-                        kw_parts.append(f"{name}={ref}")
+                        kw_parts.append(f"{py_name}={_to_field_name(ref)}")
                     else:
-                        kw_parts.append(f"{name}=state[{ref!r}]")
+                        kw_parts.append(f"{py_name}=state[{ref!r}]")
                 else:
-                    kw_parts.append(f"{name}={value!r}")
+                    kw_parts.append(f"{py_name}={value!r}")
             kwargs_str = ", ".join(kw_parts)
             invocation = f"run_{call.flow_name}({kwargs_str})"
             if scope_local:
@@ -716,7 +721,7 @@ class PythonEmitter(BaseEmitter):
                     if item.collection in scope_local
                     else f"state[{item.collection!r}]"
                 )
-                _current.append(f"{indent}for {item.loop_var} in {source}:")
+                _current.append(f"{indent}for {_to_field_name(item.loop_var)} in {source}:")
                 inner_scope = scope_local | {item.loop_var}
                 inner_indent = indent + "    "
                 if not item.body:

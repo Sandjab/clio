@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- **Sanitize Python identifiers in all emitters** (issue #28) — when a `STEP`, `FLOW`, or `FOR EACH` declares an identifier whose name collides with a Python keyword (`from`, `class`, `return`, …), every Python-emitting target (`python`, `mcp-server`, `langgraph`, `claude-skill`) now passes the name through `_to_field_name` wherever it lands in a Python identifier position (kwarg LHS, local variable, function-signature parameter, `FOR EACH` loop variable definition + usage). Dict-key positions (`state["from"]`) keep the original name. Previously the emitter produced a syntactically invalid Python file (`SyntaxError` on `from=state['from']`, `def relay(from, class):`, `async def _bound_text(return):`, `from_=return`). New cross-emitter regression test `tests/test_emitters/test_keyword_identifiers.py` `ast.parse`s every emitted `.py` for the four targets, exercising both `TAKES` / `GIVES` field-name positions (all four targets) and `FOR EACH PARALLEL` loop-variable positions (python, mcp-server, claude-skill — langgraph rejects `FOR EACH` at compile time).
+
 ## v0.17.0 — 2026-05-15
 
 FLOW composition (issue #24): a signed `FLOW` (one with explicit `TAKES:` / `GIVES:`) can now be called wherever a STEP is legal — chains, `FOR EACH PARALLEL` bodies, `IF` / `MATCH` / `WHILE`, and `RESCUE`. Shipped as PR #27; closes #24.
