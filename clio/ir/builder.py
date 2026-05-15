@@ -55,14 +55,17 @@ from clio.parser.ast_nodes import (
     ApiInvoke,
     BoolAndExpr,
     BoolOrExpr,
+    CallExpr,
     CliInvoke,
     CodeImpl,
+    CompareExpr,
     ConstrainedType,
     ContractDecl,
     ContractRef,
     DatabaseSpec,
     EnumType,
     ErrorAccessExpr,
+    ExprNode,
     Field,
     FieldRefExpr,
     FileBody,
@@ -445,6 +448,36 @@ def _rename_decl(
                 out.append((kname, value))
         return tuple(out)
 
+    def rename_expr(e: ExprNode) -> ExprNode:
+        """Recurse into expression trees and rewrite step_name references."""
+        if isinstance(e, FieldRefExpr):
+            return replace(e, step_name=resolve_name(e.step_name))
+        if isinstance(e, ErrorAccessExpr):
+            return replace(e, step_name=resolve_name(e.step_name))
+        if isinstance(e, CompareExpr):
+            return replace(
+                e,
+                left=rename_expr(cast(ExprNode, e.left)),
+                right=rename_expr(cast(ExprNode, e.right)),
+            )
+        if isinstance(e, BoolAndExpr):
+            return replace(
+                e,
+                left=rename_expr(cast(ExprNode, e.left)),
+                right=rename_expr(cast(ExprNode, e.right)),
+            )
+        if isinstance(e, BoolOrExpr):
+            return replace(
+                e,
+                left=rename_expr(cast(ExprNode, e.left)),
+                right=rename_expr(cast(ExprNode, e.right)),
+            )
+        if isinstance(e, CallExpr):
+            return replace(
+                e, args=tuple(rename_expr(cast(ExprNode, a)) for a in e.args)
+            )
+        return e
+
     def rename_call(c: _FlowItem) -> _FlowItem:
         if isinstance(c, StepCall):
             return StepCall(
@@ -466,7 +499,7 @@ def _rename_decl(
         if isinstance(c, IfBlock):
             # IfBlock bodies are the narrower union (no ResumeAst).
             return IfBlock(
-                condition=c.condition,
+                condition=rename_expr(c.condition),
                 then_body=tuple(
                     cast(_NestedItem, rename_call(x)) for x in c.then_body
                 ),
@@ -478,7 +511,7 @@ def _rename_decl(
             )
         if isinstance(c, MatchBlock):
             return MatchBlock(
-                scrutinee=c.scrutinee,
+                scrutinee=cast(FieldRefExpr, rename_expr(c.scrutinee)),
                 cases=tuple(
                     MatchCase(
                         value=case.value,
@@ -495,7 +528,7 @@ def _rename_decl(
             )
         if isinstance(c, WhileBlock):
             return WhileBlock(
-                condition=c.condition,
+                condition=rename_expr(c.condition),
                 max_iters=c.max_iters,
                 body=tuple(
                     cast(_NestedItem, rename_call(x)) for x in c.body
