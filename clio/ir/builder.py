@@ -576,8 +576,8 @@ def _build_flow(
     if takes_ir:
         # Declared TAKES is the single source of truth — seed `available`
         # directly and DO NOT run the auto-promote.
-        for f in takes_ir:
-            available[f.name] = f.type
+        for fi in takes_ir:
+            available[fi.name] = fi.type
     else:
         # Issue #19: auto-promote the first step's identifier kwargs that
         # don't match an upstream produced field as FLOW-level inputs. They
@@ -614,14 +614,14 @@ def _build_flow(
         FieldIR(name=f.name, type=f.type) for f in decl.gives
     )
     if gives_ir:
-        seen: set[str] = set()
+        seen_gives: set[str] = set()
         for f in decl.gives:
-            if f.name in seen:
+            if f.name in seen_gives:
                 raise IRBuildError(
                     f"line {f.line}:{f.col}: FLOW {decl.name!r} "
                     f"duplicate GIVES field {f.name!r}"
                 )
-            seen.add(f.name)
+            seen_gives.add(f.name)
         for f in decl.gives:
             if f.name not in available:
                 raise IRBuildError(
