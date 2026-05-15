@@ -43,7 +43,20 @@ class MCPServerEmitter(BaseEmitter):
         self._validate_for_mcp(graph)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        pkg_name = _safe_package_name(graph, default="clio_mcp")
+        # When the source declares multiple FLOWs and none was selected via
+        # `--flow`, derive the project dir from the FIRST DECLARED exposed
+        # FLOW (graph.flows preserves declaration order; exposed_flow_names is
+        # a frozenset that we filter against to recover declaration order).
+        # Falls through to the legacy "clio_mcp" only when graph carries no
+        # exposed FLOW at all — a case _validate_for_mcp already rejects, so
+        # the literal is effectively dead but kept for defence in depth.
+        if graph.flow is None and graph.exposed_flow_names:
+            first_exposed = next(
+                f.name for f in graph.flows if f.name in graph.exposed_flow_names
+            )
+            pkg_name = _safe_package_name(graph, default=first_exposed)
+        else:
+            pkg_name = _safe_package_name(graph, default="clio_mcp")
         pkg_dir = output_dir / pkg_name
         steps_dir = pkg_dir / "steps"
         pkg_dir.mkdir(parents=True, exist_ok=True)

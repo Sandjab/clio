@@ -146,8 +146,15 @@ def emit_state_typeddict(
 
 
 def _emit_node_wrapper(call: CallIR, step: StepIR) -> str:
-    """Generate `def <step>_node(state: State) -> dict:` that translates between
-    state-dict semantics and the underlying step function's keyword signature."""
+    """Generate `def <step>_node(state: dict[str, Any]) -> dict:` that translates
+    between state-dict semantics and the underlying step function's keyword
+    signature. The looser `dict[str, Any]` type — instead of the main flow's
+    `State` TypedDict — is intentional: this wrapper is emitted once at module
+    level but reused across the main graph AND every `build_<sub>_graph()`
+    sub-graph, where the actual runtime state type is `_State_<sub>`. Stamping
+    `State` would be a type lie that mypy / pyright can't catch (TypedDicts
+    are dicts at runtime); per-flow wrappers would be more precise but at the
+    cost of (step, flow) duplication — deferred as future work."""
     kw_parts = []
     for name, value in call.kwargs:
         py_name = _to_field_name(name)
@@ -160,22 +167,23 @@ def _emit_node_wrapper(call: CallIR, step: StepIR) -> str:
     state_key = _step_state_key(step)
     py_step_name = _to_field_name(step.name)
     return (
-        f"def {step.name}_node(state: State) -> dict:\n"
+        f"def {step.name}_node(state: dict[str, Any]) -> dict:\n"
         f"    _result = {py_step_name}_mod.{py_step_name}({kwargs_str})\n"
         f"    return {{{state_key!r}: _result}}"
     )
 
 
 def _emit_flow_call_node_wrapper(call: FlowCallIR, sub_flow: FlowIR) -> str:
-    """v0.17 — generate `def <flow>_node(state: State) -> dict:` that invokes a
-    *pre-compiled* sub-flow StateGraph (see `_emit_compiled_subflow_constant`),
-    remapping the parent's state into the sub-flow's input keys and publishing
-    the sub-flow's GIVES back into the parent state (flat, matching
-    python/mcp-server convention).
+    """v0.17 — generate `def <flow>_node(state: dict[str, Any]) -> dict:` that
+    invokes a *pre-compiled* sub-flow StateGraph (see
+    `_emit_compiled_subflow_constant`), remapping the parent's state into the
+    sub-flow's input keys and publishing the sub-flow's GIVES back into the
+    parent state (flat, matching python/mcp-server convention).
 
     Compiling a LangGraph StateGraph is expensive; we compile each sub-flow
     once at module load (`_compiled_<flow>` constants) and invoke the cached
-    instance on every call site."""
+    instance on every call site. The `dict[str, Any]` parameter type matches
+    `_emit_node_wrapper` — see the rationale there."""
     input_parts = []
     for name, value in call.kwargs:
         if isinstance(value, str) and value.startswith("@"):
@@ -188,7 +196,7 @@ def _emit_flow_call_node_wrapper(call: FlowCallIR, sub_flow: FlowIR) -> str:
         f"{f.name!r}: _result[{f.name!r}]" for f in sub_flow.gives
     )
     return (
-        f"def {call.flow_name}_node(state: State) -> dict:\n"
+        f"def {call.flow_name}_node(state: dict[str, Any]) -> dict:\n"
         f"    _result = _compiled_{call.flow_name}.invoke({input_dict})\n"
         f"    return {{{output_parts}}}"
     )
@@ -349,6 +357,8 @@ def emit_flow_module(
     # Imports section
     imports: list[str] = [
         "from __future__ import annotations",
+        "",
+        "from typing import Any",
         "",
         "from typing_extensions import TypedDict",
         "from langgraph.graph import START, END, StateGraph",

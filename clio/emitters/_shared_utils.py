@@ -85,11 +85,12 @@ def _safe_package_name(graph: FlowGraph, default: str) -> str:
 
     CLIO identifiers accept Python reserved/soft keywords (`class`, `match`, …),
     but a package literally named `class` produces `from class.flow import …`,
-    which is a SyntaxError. Suffix `_` for the rare collisions; default when
-    no FLOW is declared (e.g. CONTRACT-only sources)."""
-    if graph.flow is None:
-        return default
-    name = graph.flow.name
+    which is a SyntaxError. Suffix `_` for the rare collisions; fall back to
+    `default` when no FLOW is selected (e.g. CONTRACT-only sources, or a
+    multi-FLOW source compiled without `--flow`). The default is also
+    keyword-sanitized so callers that derive it from a FLOW name (e.g.
+    mcp_server's "first declared exposed FLOW" fallback) need not double-check."""
+    name = graph.flow.name if graph.flow is not None else default
     if keyword.iskeyword(name) or keyword.issoftkeyword(name):
         return f"{name}_"
     return name

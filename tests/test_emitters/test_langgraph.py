@@ -409,3 +409,51 @@ FLOW outer
     # rewritten to the sanitized form (i.e., no `state['from_']` lookups).
     assert "state['from_']" not in flow_py
     assert "_result['from_']" not in flow_py
+
+
+def test_node_wrappers_use_loose_state_type_when_sub_flow_present(tmp_path):
+    """v0.17 polish (issue #29 item 4): step / sub-flow node wrappers are
+    emitted at module level and reused across the main graph AND every sub-
+    graph builder. The `state: State` annotation was therefore a type lie —
+    `s_node` is called with `State` in `build_graph()` but with `_State_<sub>`
+    inside `build_<sub>_graph()`. To stop the lie without duplicating wrappers
+    per containing flow (deferred as future work — `[[v0.18-langgraph-per-flow-wrappers]]`),
+    wrappers now type `state` as `dict[str, Any]`. We assert the looser type
+    is in place AND `Any` is imported (`from __future__ import annotations`
+    makes the annotation a string, but mypy still resolves the symbol)."""
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE: exact\n"
+        "FLOW helper\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  s(x=x)\n"
+        "FLOW entry\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  helper(x=x)\n"
+        "RESOURCES\n"
+        "  target: langgraph\n"
+    )
+    g = build_ir(parse(src), flow_name="entry")
+    LangGraphEmitter().emit(g, tmp_path)
+    flow_py = (tmp_path / "entry" / "flow.py").read_text()
+    # The step wrapper and the sub-flow wrapper both lose the `State` lie.
+    assert "def s_node(state: dict[str, Any]) -> dict:" in flow_py, (
+        "step node wrapper must declare loose `dict[str, Any]` to remain honest "
+        "across main + sub-graph reuse; got:\n" + flow_py
+    )
+    assert "def helper_node(state: dict[str, Any]) -> dict:" in flow_py, (
+        "sub-flow node wrapper must also declare `dict[str, Any]`; got:\n" + flow_py
+    )
+    # `Any` must be imported (PEP 563 string annotations still require the
+    # symbol resolvable for mypy strict).
+    assert "from typing import Any" in flow_py, (
+        "`Any` must be imported when wrappers reference it"
+    )
+    # `state: State` (the lie) must not appear anywhere in flow.py.
+    assert "state: State" not in flow_py, (
+        "no wrapper should still use the lie `state: State`"
+    )
