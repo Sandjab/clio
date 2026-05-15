@@ -556,8 +556,15 @@ def emit_flow_module(
                 )
 
             # Router function — string compare against state_field.sub_field.
+            # `state[...]` is a string dict key (unchanged). The attribute
+            # access on the contract's Pydantic model MUST be sanitized:
+            # the v0.17.1 fix aliases keyword field names to `class_` etc.,
+            # so `obj.class` is a SyntaxError and we must emit `obj.class_`.
+            # `router_name` is prefix-protected (`_match_<x>_<y>` is always a
+            # valid identifier even when x/y are keywords) so no sanitization
+            # needed there. (Issue #37, mirror of mcp 47e2d7b.)
             base = f"state[{item.state_field!r}]"
-            scrutinee = f"{base}.{item.sub_field}"
+            scrutinee = f"{base}.{_to_field_name(item.sub_field)}"
             non_default = [(v, s) for v, s in arms_with_step if v is not None]
             default_step = next(s for v, s in arms_with_step if v is None)
             router_name = f"_match_{item.state_field}_{item.sub_field}"

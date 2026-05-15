@@ -718,8 +718,14 @@ class PythonEmitter(BaseEmitter):
                     return
                 # FOR EACH item IN collection:
                 #     <body>
+                # `item.collection` is a Python identifier read when it
+                # references an outer loop var (`scope_local`), or a string
+                # dict key when it reads from state. Only the identifier
+                # form must be sanitized to survive a keyword-named outer
+                # loop variable (issue #37, mirror of the mcp-side fix in
+                # commit 47e2d7b).
                 source = (
-                    item.collection
+                    _to_field_name(item.collection)
                     if item.collection in scope_local
                     else f"state[{item.collection!r}]"
                 )
@@ -745,12 +751,22 @@ class PythonEmitter(BaseEmitter):
                         _emit_item(sub, inner_indent, scope_local)
                 return
             if isinstance(item, MatchBlockIR):
+                # Both positions are Python identifiers post-emission and
+                # must be sanitized: `item.state_field` when it is a local
+                # variable (same rationale as the FOR EACH source above),
+                # and `item.sub_field` always — it is a Pydantic attribute
+                # access on the contract (`obj.class` is a SyntaxError).
+                # The contract's Pydantic model already aliases the field
+                # to `class_` via the v0.17.1 sanitization, so the runtime
+                # attribute exists. (Issue #37, mirror of mcp 47e2d7b.)
                 base = (
-                    item.state_field
+                    _to_field_name(item.state_field)
                     if item.state_field in scope_local
                     else f"state[{item.state_field!r}]"
                 )
-                _current.append(f"{indent}match {base}.{item.sub_field}:")
+                _current.append(
+                    f"{indent}match {base}.{_to_field_name(item.sub_field)}:"
+                )
                 inner_indent = indent + "    "
                 for arm in item.cases:
                     if arm.value is None:
