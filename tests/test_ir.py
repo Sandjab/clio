@@ -1123,3 +1123,91 @@ def test_flow_duplicate_takes_field_rejected_at_ir_build():
     )
     with pytest.raises(IRBuildError, match="duplicate TAKES field"):
         build_ir(parse(src))
+
+
+def test_flow_gives_coverage_compiles_when_field_matches_last_step():
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW p\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  s(x=x)\n"
+    )
+    graph = build_ir(parse(src))
+    assert graph.flow is not None
+    assert len(graph.flow.gives) == 1
+    assert graph.flow.gives[0].name == "y"
+
+
+def test_flow_gives_rejects_missing_field():
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW p\n"
+        "  TAKES: x: str\n"
+        "  GIVES: not_there: str\n"
+        "  s(x=x)\n"
+    )
+    with pytest.raises(IRBuildError, match="GIVES field 'not_there' but no step in the chain produces it"):
+        build_ir(parse(src))
+
+
+def test_flow_gives_rejects_type_mismatch():
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW p\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: int\n"
+        "  s(x=x)\n"
+    )
+    with pytest.raises(IRBuildError, match="GIVES field 'y'.*but the chain produces"):
+        build_ir(parse(src))
+
+
+def test_flow_gives_allows_subset_coverage():
+    """The chain can produce more fields than FLOW.GIVES declares —
+    only the declared subset is exposed externally."""
+    src = (
+        "STEP s1\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "STEP s2\n"
+        "  TAKES: y: str\n"
+        "  GIVES: z: int\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW p\n"
+        "  TAKES: x: str\n"
+        "  GIVES: z: int\n"
+        "  s1(x=x) -> s2(y=y)\n"
+    )
+    graph = build_ir(parse(src))
+    assert {f.name for f in graph.flow.gives} == {"z"}
+
+
+def test_flow_duplicate_gives_field_rejected_at_ir_build():
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW p\n"
+        "  GIVES: a: str, b: int, a: float\n"
+        "  s(x=\"hi\")\n"
+    )
+    with pytest.raises(IRBuildError, match="duplicate GIVES field"):
+        build_ir(parse(src))

@@ -543,6 +543,37 @@ def _build_flow(
     top_level_step_names: set[str] = {
         item.step_name for item in items if isinstance(item, CallIR)
     }
+    # v0.16: validate FLOW.GIVES against the chain's final effective state.
+    # Subset semantics: each declared GIVES field must exist in `available`
+    # with a structurally-equivalent type. Extra fields in `available` are
+    # allowed and remain internal to the flow.
+    gives_ir: tuple[FieldIR, ...] = tuple(
+        FieldIR(name=f.name, type=f.type) for f in decl.gives
+    )
+    if gives_ir:
+        seen: set[str] = set()
+        for f in decl.gives:
+            if f.name in seen:
+                raise IRBuildError(
+                    f"line {f.line}:{f.col}: FLOW {decl.name!r} "
+                    f"duplicate GIVES field {f.name!r}"
+                )
+            seen.add(f.name)
+        for f in decl.gives:
+            if f.name not in available:
+                raise IRBuildError(
+                    f"line {f.line}:{f.col}: FLOW {decl.name!r} declares "
+                    f"GIVES field {f.name!r} but no step in the chain "
+                    f"produces it"
+                )
+            actual_type = available[f.name]
+            if not types_equal(f.type, actual_type, contracts):
+                raise IRBuildError(
+                    f"line {f.line}:{f.col}: FLOW {decl.name!r} declares "
+                    f"GIVES field {f.name!r} as {_render(f.type)} but the "
+                    f"chain produces {_render(actual_type)}"
+                )
+
     seen_rescue_steps: set[str] = set()
     # Scope each RESCUE body to the state fields available BEFORE the
     # protected step runs. If we passed the post-chain `available` dict,
@@ -566,7 +597,7 @@ def _build_flow(
         rescues=rescues_ir,
         line=decl.line,
         takes=takes_ir,
-        gives=(),    # populated by Task 6
+        gives=gives_ir,
     )
 
 
