@@ -632,14 +632,6 @@ GIVES fields, the collector holds a list of dicts and the parent's
 declared `List<T>` annotation will not match — track this as a
 limitation pending a follow-up release.
 
-### Default exposure of FLOWs (`target: mcp-server`)
-
-When compiling to `target: mcp-server`, every FLOW that has an
-explicit signature **and** is not called by any sibling FLOW in the
-same source becomes a tool. Called sub-flows remain internal helpers
-and are not exposed. An explicit `EXPOSE` / `INTERNAL` marker is
-deferred to a later release.
-
 ### Target support for sub-flow composition
 
 | target          | Sub-flow call support (v0.17)                                         |
@@ -649,6 +641,113 @@ deferred to a later release.
 | `claude-skill`  | yes (sub-flow → standalone script invoked from main)                  |
 | `langgraph`     | yes (sub-flow → compiled sub-`StateGraph`)                            |
 | `claude-cli`    | **no** — compile-time error (deferred to a later release)             |
+
+### IMPORT and EXPOSE (v0.18)
+
+#### Cross-file imports
+
+A `.clio` file may import FLOWs and CONTRACTs from other files:
+
+```
+FROM "<path>" IMPORT <name> [AS <alias>] [, <name> [AS <alias>]] ...
+```
+
+- The path is relative to the importing file's directory.
+- The path must start with `./` or `../`. Absolute paths are rejected (E_IMP_001).
+- The path must end with `.clio` (E_IMP_002).
+- The import list must not be empty (E_IMP_003).
+- Each `AS <alias>` renames the symbol locally. Missing identifier after `AS` is E_IMP_004.
+- Duplicate names in the same import list are rejected (E_IMP_005).
+
+Multiple `FROM` declarations are allowed in a single file. The resolver
+builds the full transitive closure; import cycles are rejected (E_RES_001).
+
+**Example:**
+
+```
+FROM "./schemas.clio" IMPORT Article, AnalysisResult
+FROM "./lib/nlp.clio" IMPORT analyse AS nlp_analyse
+```
+
+#### Visibility markers
+
+The visibility of a FLOW or CONTRACT is controlled by an optional prefix:
+
+```
+EXPOSE FLOW classify_article
+  TAKES: article: Article
+  GIVES: label: str
+  ...
+
+INTERNAL FLOW _helper
+  TAKES: x: str
+  GIVES: y: str
+  ...
+
+FLOW also_internal     # absence of EXPOSE = INTERNAL
+  ...
+```
+
+**Rules:**
+
+- Only `EXPOSE`d symbols are importable by other files (E_RES_003 if attempted otherwise).
+- A declaration may have at most one visibility marker (E_VIS_001).
+- `EXPOSE` and `INTERNAL` may only prefix `FLOW` and `CONTRACT` declarations (E_VIS_002).
+- An `EXPOSE FLOW` must declare both `TAKES:` and `GIVES:` (E_VIS_003).
+- A name cannot be exposed as both a FLOW and a CONTRACT (E_VIS_004).
+
+**For `target: mcp-server`:** `EXPOSE FLOW`s in the entry file become MCP
+tools. The entry file must expose at least one FLOW (E_MCP_001). The v0.17
+heuristic (uncalled signed FLOWs are implicitly exposed) is replaced by
+explicit markers.
+
+For all other targets, visibility markers are purely informational: the
+compiler still emits all declared symbols regardless of `EXPOSE`/`INTERNAL`.
+
+#### Re-export
+
+A file may import a symbol and then re-`EXPOSE` it, making it importable
+from this file by downstream consumers:
+
+```
+FROM "./lib.clio" IMPORT classify
+EXPOSE classify       # re-exported through this file
+```
+
+A bare `EXPOSE <name>` without a full declaration re-exports an already-imported
+symbol. It is legal to re-export a CONTRACT or a FLOW this way.
+
+#### Resolution errors
+
+| Code       | Trigger                                                         |
+| ---------- | --------------------------------------------------------------- |
+| E_IMP_001  | path does not start with `./` or `../`                          |
+| E_IMP_002  | path does not end with `.clio`                                  |
+| E_IMP_003  | empty import list                                               |
+| E_IMP_004  | missing identifier after `AS`                                   |
+| E_IMP_005  | duplicate symbol name in same `FROM ... IMPORT` list            |
+| E_RES_001  | cyclic import between two or more files                         |
+| E_RES_002  | imported file not found on disk                                 |
+| E_RES_003  | symbol exists in source file but is not `EXPOSE`d               |
+| E_RES_004  | symbol not declared at all in source file                       |
+| E_RES_005  | same symbol imported twice (use `AS` to alias one)              |
+| E_RES_006  | imported name clashes with a locally declared name              |
+| E_VIS_001  | more than one visibility marker on a single declaration         |
+| E_VIS_002  | `EXPOSE` / `INTERNAL` applied to a non-FLOW / non-CONTRACT      |
+| E_VIS_003  | `EXPOSE FLOW` missing `TAKES:` or `GIVES:`                      |
+| E_VIS_004  | same name exposed as both FLOW and CONTRACT                     |
+| E_MCP_001  | `target: mcp-server` entry file has no `EXPOSE FLOW`            |
+| E_CLI_001  | `target: claude-cli` source contains `FROM ... IMPORT ...`      |
+
+#### Cross-file import support per target
+
+| target         | `FROM ... IMPORT` support (v0.18)       |
+| -------------- | --------------------------------------- |
+| `python`       | yes                                     |
+| `mcp-server`   | yes                                     |
+| `claude-skill` | yes                                     |
+| `langgraph`    | yes                                     |
+| `claude-cli`   | **no** — E_CLI_001 at compile time      |
 
 ### TEST (v0.15)
 

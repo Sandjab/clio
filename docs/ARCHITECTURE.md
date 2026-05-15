@@ -56,6 +56,34 @@ flowchart TD
 
 Each pass either succeeds or raises `IRBuildError` with a `<file>:<line>:<col>` message; later passes never see a partial graph.
 
+### Multi-file resolution (v0.18)
+
+Before the IR Builder runs, a separate **Resolver** phase resolves all cross-file
+`FROM ... IMPORT` declarations. The resolver runs in four passes:
+
+```mermaid
+flowchart TD
+    d["Pass 1 — Discovery<br/><sub>DFS walk of FROM…IMPORT declarations;<br/>cycle detection (E_RES_001)</sub>"] --> v
+    v["Pass 2 — Per-file validation<br/><sub>path syntax checks (E_IMP_001/002);<br/>symbol existence + exposure checks<br/>(E_RES_002/003/004)</sub>"] --> e
+    e["Pass 3 — Exposed-set computation<br/><sub>build each file's EXPOSE set;<br/>resolve re-exports (bare EXPOSE &lt;name&gt;);<br/>E_VIS_001/002/003/004</sub>"] --> i
+    i["Pass 4 — Import validation<br/><sub>confirm all imported names are exposed;<br/>duplicate-import detection (E_RES_005/006)</sub>"]
+```
+
+After the four passes, the resolver produces an **alpha-renamed, merged `Program`**
+that the IR Builder receives as a single flat namespace. Each imported symbol is
+prefixed with a canonical file-derived namespace (`<slug>__<name>`) to avoid
+collisions; references in the importing file's AST are rewritten to use the
+renamed form transparently. The IR Builder and all emitters are unaware of the
+cross-file origin: they see a standard single-file program.
+
+The alpha-renaming means imported CONTRACT shapes are structurally preserved —
+a `List<Article>` reference in `main.clio` that resolves to `schemas.clio::Article`
+becomes `List<schemas__Article>` in the merged namespace, with an identical `SHAPE`
+declaration carried over.
+
+**Module:** `clio/resolver/` (four files: `discovery.py`, `validation.py`,
+`exposed.py`, `import_validation.py`, plus `resolver.py` orchestrator).
+
 ### Layer 3: Emitters (IR → target project)
 
 Each target is a separate emitter class inheriting from `BaseEmitter`. An emitter takes an optimized IR graph and writes files to disk.

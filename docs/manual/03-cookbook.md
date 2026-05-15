@@ -824,9 +824,117 @@ Inside `batch`, each iteration runs `enrich` concurrently. The collector `result
 - **Recursion and cycles are rejected at compile time.** Calling itself directly or transitively raises `IRBuildError`.
 - **`target: claude-cli` is not supported.** The slash-command runtime rejects any FlowCallIR with a deferred-target message — use `--target python` or `--target mcp-server` for FLOW composition today.
 - **`target: langgraph` cannot host `FOR EACH PARALLEL` bodies.** This is a pre-existing FOR EACH limitation, not a sub-flow one — a sub-flow called sequentially (no FOR EACH) compiles to langgraph cleanly.
-- **Cross-file imports are deferred.** All sub-flows must live in the same `.clio` source.
+- **Cross-file imports are supported from v0.18.** Sub-flows in different files can be imported and composed (see recipes [#21](#21-shared-schemas-across-pipelines-v018) and [#22](#22-façade-file-barrel-file-pattern-v018)).
 
 A complete worked example with three flows (sub-flow, sequential composition, parallel composition) lives at `examples/flow_composition.clio`.
+
+## 21. Shared schemas across pipelines (v0.18)
+
+**Pattern:** Multiple pipelines need the same CONTRACT shapes. Instead of
+copy-pasting declarations, put them in a dedicated `schemas.clio` and import
+from it everywhere.
+
+```
+# schemas.clio
+EXPOSE CONTRACT Article
+  SHAPE: {title: str, body: str, lang: str}
+
+EXPOSE CONTRACT AnalysisResult
+  SHAPE: {category: enum(news|opinion|analysis|other), summary: str, confidence: float}
+  ASSERT: 0.0 <= confidence <= 1.0
+```
+
+```
+# pipeline_a.clio
+FROM "./schemas.clio" IMPORT Article, AnalysisResult
+
+STEP classify
+  MODE: judgment
+  TAKES: article: Article
+  GIVES: result: AnalysisResult
+
+EXPOSE FLOW classify_pipeline
+  TAKES: article: Article
+  GIVES: result: AnalysisResult
+  classify(article=article)
+```
+
+```
+# pipeline_b.clio
+FROM "./schemas.clio" IMPORT Article
+
+STEP summarise
+  MODE: judgment
+  TAKES: article: Article
+  GIVES: summary: str
+
+EXPOSE FLOW summarise_pipeline
+  TAKES: article: Article
+  GIVES: summary: str
+  summarise(article=article)
+```
+
+Key idea: `schemas.clio` is the single source of truth for shared types. Both
+pipelines compile independently; changing `Article.SHAPE` in one place
+propagates everywhere. The `schemas.clio` file itself has no `RESOURCES` block —
+it is a library file, not an entry point.
+
+A full three-file example is under `examples/multi_file/`.
+
+## 22. Façade file (barrel-file pattern) (v0.18)
+
+**Pattern:** You have a library of FLOWs split across several files. You want
+downstream consumers to import from a single stable entry point, without knowing
+the internal file layout.
+
+```
+# lib/text.clio
+EXPOSE CONTRACT Article
+  SHAPE: {title: str, body: str}
+
+STEP clean
+  MODE: exact
+  TAKES: article: Article
+  GIVES: cleaned: str
+
+EXPOSE FLOW clean_article
+  TAKES: article: Article
+  GIVES: cleaned: str
+  clean(article=article)
+```
+
+```
+# lib/index.clio  (the façade)
+FROM "./text.clio" IMPORT Article, clean_article
+
+EXPOSE Article
+EXPOSE clean_article
+```
+
+```
+# main.clio  (the consumer — imports from the façade, not from lib/text.clio)
+RESOURCES
+  target: python
+
+FROM "./lib/index.clio" IMPORT Article, clean_article
+
+STEP load
+  MODE: exact
+  TAKES: path: str
+  GIVES: article: Article
+
+EXPOSE FLOW pipeline
+  TAKES: path: str
+  GIVES: cleaned: str
+  load(path=path)
+  -> clean_article(article=article)
+```
+
+Key idea: the façade re-exports imported symbols via bare `EXPOSE <name>`. If
+`lib/text.clio` is later refactored or split into `lib/text.clio` +
+`lib/html.clio`, only `lib/index.clio` needs updating — `main.clio` is
+unchanged. This is the same barrel-file pattern familiar from TypeScript
+`index.ts` files, applied to CLIO.
 
 ## What's not in the cookbook (yet)
 
