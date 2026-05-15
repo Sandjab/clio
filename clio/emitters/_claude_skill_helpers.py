@@ -96,13 +96,11 @@ def render_frontmatter(
     raw_name = _flow_name(graph)
     name = raw_name.replace("_", "-")
 
-    # TODO(post-v0.14): wire FLOW.description.
-    # The parser (clio/parser/parser.py::parse_flow) currently does not capture
-    # a description from the .clio source. To enable this:
-    #   1. Add `description: str = ""` to FlowDecl in clio/parser/ast_nodes.py.
-    #   2. Add `description: str = ""` to FlowIR in clio/ir/graph.py.
-    #   3. Thread the value through clio/ir/builder.py::build_ir.
-    # Once any of those is non-empty, the lookup below will pick it up.
+    # v0.17.x: FLOW.DESCRIPTION (mirror of STEP.DESCRIPTION from v0.15) is
+    # wired through the parser, AST, and IR. Falling back to "Execute flow
+    # <name>" only when the source omits the field — and the warning still
+    # fires in that case because the SKILL.md `description:` is what the
+    # host LLM uses to auto-trigger the skill.
     description = (getattr(getattr(graph, "flow", None), "description", "") or "").strip()
     if not description:
         description = f"Execute flow {raw_name}"

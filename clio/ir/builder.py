@@ -787,6 +787,7 @@ def _build_flow(
         line=decl.line,
         takes=takes_ir,
         gives=gives_ir,
+        description=decl.description,
     )
 
 
