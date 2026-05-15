@@ -1325,3 +1325,36 @@ def test_step_flow_name_collision_rejected():
     msg = str(ei.value)
     assert "collision" in msg.lower() or "shadow" in msg.lower()
     assert "enrich" in msg
+
+
+def test_subflow_call_returns_flowcallir():
+    from clio.ir.builder import build_ir
+    from clio.ir.graph import FlowCallIR
+    from clio.parser.parser import parse
+    src = (
+        "STEP s\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n\n"
+        "FLOW inner\n  TAKES: x: str\n  GIVES: y: str\n  s(x=x)\n\n"
+        "FLOW outer\n  TAKES: x: str\n  GIVES: y: str\n  inner(x=x)\n"
+    )
+    g = build_ir(parse(src), flow_name="outer")
+    outer = g.flow
+    assert outer is not None
+    item = outer.chain[0]
+    assert isinstance(item, FlowCallIR)
+    assert item.flow_name == "inner"
+
+
+def test_call_to_unsigned_flow_rejected():
+    from clio.ir.builder import IRBuildError, build_ir
+    from clio.parser.parser import parse
+    src = (
+        "STEP s\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n\n"
+        "FLOW inner\n  s(x=\"hi\")\n\n"
+        "FLOW outer\n  TAKES: x: str\n  GIVES: y: str\n  inner(x=x)\n"
+    )
+    import pytest as _pt
+    with _pt.raises(IRBuildError) as ei:
+        build_ir(parse(src), flow_name="outer")
+    msg = str(ei.value)
+    assert "inner" in msg
+    assert "signature" in msg.lower() or "TAKES" in msg

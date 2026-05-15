@@ -15,6 +15,7 @@ from clio.ir.graph import (
     ErrorAccessIR,
     FieldIR,
     FileBodyIR,
+    FlowCallIR,
     FlowGraph,
     FlowIR,
     ForEachIR,
@@ -167,6 +168,8 @@ def build_ir(program: Program, flow_name: str | None = None) -> FlowGraph:
                 f"declared as a STEP on line {steps_by_name[d.name].line}"
             )
 
+    flow_sigs = _extract_flow_signatures(flow_decls)
+
     flow_ir: FlowIR | None = None
     if flow_name is not None:
         match = next((d for d in flow_decls if d.name == flow_name), None)
@@ -175,9 +178,9 @@ def build_ir(program: Program, flow_name: str | None = None) -> FlowGraph:
             raise IRBuildError(
                 f"flow {flow_name!r} not found in source (available: {available})"
             )
-        flow_ir = _build_flow(match, steps_by_name, contracts)
+        flow_ir = _build_flow(match, steps_by_name, flow_sigs, contracts)
     elif len(flow_decls) == 1:
-        flow_ir = _build_flow(flow_decls[0], steps_by_name, contracts)
+        flow_ir = _build_flow(flow_decls[0], steps_by_name, flow_sigs, contracts)
     elif len(flow_decls) > 1:
         names = ", ".join(d.name for d in flow_decls)
         raise IRBuildError(
@@ -590,6 +593,7 @@ def _build_on_fail(chain) -> OnFailChainIR:
 def _build_flow(
     decl: FlowDecl,
     steps_by_name: dict[str, StepIR],
+    flow_sigs: dict[str, FlowSignature],
     contracts: dict[str, ContractIR],
 ) -> FlowIR:
     available: dict[str, TypeExpr] = {}
@@ -637,7 +641,7 @@ def _build_flow(
                     if taken_type is not None and ref not in available:
                         available[ref] = taken_type
 
-    items = _build_flow_items(decl.chain, steps_by_name, contracts, available)
+    items = _build_flow_items(decl.chain, steps_by_name, flow_sigs, contracts, available)
     # The set of step names that appear directly in the top-level chain —
     # used by _build_rescue to enforce the v0.8 "top-level only" rule.
     top_level_step_names: set[str] = {
@@ -685,7 +689,7 @@ def _build_flow(
     # FOR EACH collectors expose fields to the outer scope.
     rescues_ir = tuple(
         _build_rescue(
-            rb, steps_by_name, contracts,
+            rb, steps_by_name, flow_sigs, contracts,
             _scope_before_step(items, rb.step_name, steps_by_name),
             top_level_step_names, seen_rescue_steps,
         )
@@ -764,6 +768,7 @@ def _validate_error_accesses(body_items: list, rescued_step_name: str) -> None:
 def _build_rescue(
     decl: RescueBlock,
     steps_by_name: dict[str, StepIR],
+    flow_sigs: dict[str, FlowSignature],
     contracts: dict[str, ContractIR],
     outer_available: dict[str, TypeExpr],
     top_level_step_names: set[str],
@@ -820,7 +825,7 @@ def _build_rescue(
     # tree are accepted.
     body_scope = dict(outer_available)
     body_items = _build_flow_items(
-        decl.body, steps_by_name, contracts, body_scope, in_rescue=True,
+        decl.body, steps_by_name, flow_sigs, contracts, body_scope, in_rescue=True,
     )
 
     # (6) ErrorAccessIR cross-step and unknown-field validation.
@@ -885,6 +890,7 @@ def _build_rescue(
 def _build_flow_items(
     chain: "tuple[StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock | ResumeAst, ...]",
     steps_by_name: dict[str, StepIR],
+    flow_sigs: dict[str, FlowSignature],
     contracts: dict[str, ContractIR],
     available: dict[str, TypeExpr],
     in_rescue: bool = False,
@@ -900,7 +906,7 @@ def _build_flow_items(
     for item in chain:
         if isinstance(item, ForEachBlock):
             foreach_ir = _build_for_each(
-                item, steps_by_name, contracts, available, in_rescue=in_rescue,
+                item, steps_by_name, flow_sigs, contracts, available, in_rescue=in_rescue,
             )
             out.append(foreach_ir)
             # PARALLEL FOR EACH with a collector makes List<body.gives.type> available.
@@ -913,17 +919,17 @@ def _build_flow_items(
             continue
         if isinstance(item, IfBlock):
             out.append(_build_if_block(
-                item, steps_by_name, contracts, available, in_rescue=in_rescue,
+                item, steps_by_name, flow_sigs, contracts, available, in_rescue=in_rescue,
             ))
             continue
         if isinstance(item, MatchBlock):
             out.append(_build_match_block(
-                item, steps_by_name, contracts, available, in_rescue=in_rescue,
+                item, steps_by_name, flow_sigs, contracts, available, in_rescue=in_rescue,
             ))
             continue
         if isinstance(item, WhileBlock):
             out.append(_build_while_block(
-                item, steps_by_name, contracts, available, in_rescue=in_rescue,
+                item, steps_by_name, flow_sigs, contracts, available, in_rescue=in_rescue,
             ))
             continue
         if isinstance(item, ResumeAst):
@@ -935,27 +941,33 @@ def _build_flow_items(
             continue
         # StepCall path
         out.append(_build_call(
-            item, steps_by_name, contracts, available, in_rescue=in_rescue,
+            item, steps_by_name, flow_sigs, contracts, available, in_rescue=in_rescue,
         ))
         # `abort` is a synthetic terminator inside RESCUE bodies — it has no
         # registered StepIR and produces no state field.
         if item.name == "abort":
             continue
-        step = steps_by_name[item.name]
-        if step.gives is not None:
-            available[step.gives.name] = step.gives.type
+        if item.name in steps_by_name:
+            step = steps_by_name[item.name]
+            if step.gives is not None:
+                available[step.gives.name] = step.gives.type
+        elif item.name in flow_sigs:
+            sig = flow_sigs[item.name]
+            for g in sig.gives:
+                available[g.name] = g.type
     return out
 
 
 def _build_call(
     call: StepCall,
     steps_by_name: dict[str, StepIR],
+    flow_sigs: dict[str, FlowSignature],
     contracts: dict[str, ContractIR],
     available: dict[str, TypeExpr],
     in_rescue: bool = False,
-) -> CallIR:
+) -> "CallIR | FlowCallIR":
     # `abort` is a synthetic call legal only inside RESCUE bodies. Outside a
-    # rescue body the IR builder rejects it (closes the Task 3 passthrough).
+    # rescue body the IR builder rejects it.
     if call.name == "abort":
         if not in_rescue:
             raise IRBuildError(
@@ -963,10 +975,26 @@ def _build_call(
                 f"inside a RESCUE body"
             )
         return CallIR(step_name=call.name, kwargs=call.kwargs, line=call.line)
-    if call.name not in steps_by_name:
-        raise IRBuildError(
-            f"line {call.line}:{call.col}: unknown STEP {call.name!r}"
-        )
+
+    if call.name in steps_by_name:
+        return _build_step_call(call, steps_by_name, contracts, available, in_rescue)
+    if call.name in flow_sigs:
+        return _build_flow_call(call, flow_sigs, contracts, available)
+
+    # Unknown name. Help users who tried to call an unsigned FLOW.
+    raise IRBuildError(
+        f"line {call.line}:{call.col}: unknown STEP or signed FLOW "
+        f"{call.name!r} (signed FLOWs must declare both TAKES and GIVES)"
+    )
+
+
+def _build_step_call(
+    call: StepCall,
+    steps_by_name: dict[str, StepIR],
+    contracts: dict[str, ContractIR],
+    available: dict[str, TypeExpr],
+    in_rescue: bool = False,
+) -> CallIR:
     step = steps_by_name[call.name]
 
     provided = dict(call.kwargs)
@@ -1013,9 +1041,48 @@ def _build_call(
     return CallIR(step_name=call.name, kwargs=tuple(new_kwargs), line=call.line)
 
 
+def _build_flow_call(
+    call: StepCall,
+    flow_sigs: dict[str, FlowSignature],
+    contracts: dict[str, ContractIR],
+    available: dict[str, TypeExpr],
+) -> FlowCallIR:
+    sig = flow_sigs[call.name]
+    provided = dict(call.kwargs)
+    for taken in sig.takes:
+        if taken.name not in provided:
+            raise IRBuildError(
+                f"line {call.line}:{call.col}: FLOW {sig.name} requires "
+                f"kwarg {taken.name!r}, got {sorted(provided)}"
+            )
+        value = provided[taken.name]
+        if isinstance(value, str) and value.startswith("@"):
+            ref = value[1:]
+            if ref not in available:
+                raise IRBuildError(
+                    f"line {call.line}:{call.col}: state reference "
+                    f"{ref!r} not produced by any previous step"
+                )
+            ref_type = available[ref]
+            if not (
+                types_equal(ref_type, taken.type, contracts)
+                or names_equal(ref_type, taken.type)
+            ):
+                raise IRBuildError(
+                    f"line {call.line}:{call.col}: type mismatch on "
+                    f"{taken.name!r}: FLOW {sig.name} expects "
+                    f"{_render(taken.type)}, parent provides "
+                    f"{_render(ref_type)}"
+                )
+    return FlowCallIR(
+        flow_name=call.name, kwargs=tuple(call.kwargs), line=call.line,
+    )
+
+
 def _build_if_block(
     decl: IfBlock,
     steps_by_name: dict[str, StepIR],
+    flow_sigs: dict[str, FlowSignature],
     contracts: dict[str, ContractIR],
     outer_available: dict[str, TypeExpr],
     in_rescue: bool = False,
@@ -1036,12 +1103,12 @@ def _build_if_block(
 
     then_scope = dict(outer_available)
     then_items = _build_flow_items(
-        decl.then_body, steps_by_name, contracts, then_scope, in_rescue=in_rescue,
+        decl.then_body, steps_by_name, flow_sigs, contracts, then_scope, in_rescue=in_rescue,
     )
 
     else_scope = dict(outer_available)
     else_items = _build_flow_items(
-        decl.else_body, steps_by_name, contracts, else_scope, in_rescue=in_rescue,
+        decl.else_body, steps_by_name, flow_sigs, contracts, else_scope, in_rescue=in_rescue,
     )
 
     return IfBlockIR(
@@ -1148,6 +1215,7 @@ def _build_condition(
 def _build_while_block(
     decl: WhileBlock,
     steps_by_name: dict[str, StepIR],
+    flow_sigs: dict[str, FlowSignature],
     contracts: dict[str, ContractIR],
     outer_available: dict[str, TypeExpr],
     in_rescue: bool = False,
@@ -1161,7 +1229,7 @@ def _build_while_block(
     )
     body_scope = dict(outer_available)
     body_items = _build_flow_items(
-        decl.body, steps_by_name, contracts, body_scope, in_rescue=in_rescue,
+        decl.body, steps_by_name, flow_sigs, contracts, body_scope, in_rescue=in_rescue,
     )
     return WhileBlockIR(
         condition=cond_ir,
@@ -1174,6 +1242,7 @@ def _build_while_block(
 def _build_match_block(
     decl: MatchBlock,
     steps_by_name: dict[str, StepIR],
+    flow_sigs: dict[str, FlowSignature],
     contracts: dict[str, ContractIR],
     outer_available: dict[str, TypeExpr],
     in_rescue: bool = False,
@@ -1233,7 +1302,7 @@ def _build_match_block(
         if arm.value is None:
             # DEFAULT — already enforced last by the parser.
             arm_body = _build_flow_items(
-                arm.body, steps_by_name, contracts, dict(outer_available),
+                arm.body, steps_by_name, flow_sigs, contracts, dict(outer_available),
                 in_rescue=in_rescue,
             )
             cases_ir.append(MatchCaseIR(value=None, body=tuple(arm_body), line=arm.line))
@@ -1251,7 +1320,7 @@ def _build_match_block(
             )
         seen_values.add(arm.value)
         arm_body = _build_flow_items(
-            arm.body, steps_by_name, contracts, dict(outer_available),
+            arm.body, steps_by_name, flow_sigs, contracts, dict(outer_available),
             in_rescue=in_rescue,
         )
         cases_ir.append(MatchCaseIR(value=arm.value, body=tuple(arm_body), line=arm.line))
@@ -1267,6 +1336,7 @@ def _build_match_block(
 def _build_for_each(
     decl: ForEachBlock,
     steps_by_name: dict[str, StepIR],
+    flow_sigs: dict[str, FlowSignature],
     contracts: dict[str, ContractIR],
     outer_available: dict[str, TypeExpr],
     in_rescue: bool = False,
@@ -1298,7 +1368,7 @@ def _build_for_each(
     inner_available[decl.loop_var] = coll_type.inner
 
     body_items = _build_flow_items(
-        decl.body, steps_by_name, contracts, inner_available, in_rescue=in_rescue,
+        decl.body, steps_by_name, flow_sigs, contracts, inner_available, in_rescue=in_rescue,
     )
 
     return ForEachIR(
@@ -1346,11 +1416,17 @@ def _validate_parallel_for_each(graph: FlowGraph) -> None:
 
     def _walk(chain) -> None:
         for elem in chain:
-            if hasattr(elem, "step_name"):
+            if isinstance(elem, CallIR):
                 # CallIR — record GIVES into populated state
                 step = steps_by_name.get(elem.step_name)
                 if step is not None and step.gives is not None:
                     populated.add(step.gives.name)
+                continue
+
+            if isinstance(elem, FlowCallIR):
+                # Sub-flow call — parallel-FOR-EACH constraints don't apply.
+                # Sub-flow IRs are not yet wired into FlowGraph (Task 5+6),
+                # so the produced field name is not tracked here.
                 continue
 
             if isinstance(elem, IfBlockIR):
