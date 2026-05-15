@@ -13,9 +13,10 @@ rejected at compile time with clear messages. Cache and `retry(N)` are
 honoured (the latter via `RetryPolicy`)."""
 from __future__ import annotations
 
+import keyword
+
 from clio.emitters._shared_utils import (
     _python_condition_expr,
-    _to_field_name,
     _type_to_python,
 )
 from clio.ir.graph import (
@@ -116,10 +117,20 @@ def _collect_state_fields(
 def emit_state_typeddict(
     graph: FlowGraph, contracts_by_name: dict[str, ContractIR]
 ) -> str:
-    """Generate the State TypedDict class as Python code (no leading/trailing newline)."""
+    """Generate the State TypedDict class as Python code (no leading/trailing newline).
+
+    Uses the functional `TypedDict(...)` syntax when any field name collides with
+    a Python keyword so the declared key keeps its original (unsanitized) form,
+    matching the dict-access pattern used by the emitted node wrappers (which
+    read/write `state[<original_name>]`). Falls back to the class-statement
+    syntax for the common keyword-free case to keep readability."""
     fields = _collect_state_fields(graph, contracts_by_name)
     if not fields:
         return "class State(TypedDict, total=False):\n    pass"
+    if any(keyword.iskeyword(name) for name, _ in fields):
+        # Functional syntax preserves original (unsanitized) keys.
+        field_items = ", ".join(f"{name!r}: {ty}" for name, ty in fields)
+        return f"State = TypedDict('State', {{{field_items}}}, total=False)"
     lines = [
         '"""State threaded through the LangGraph nodes.',
         "",
@@ -129,7 +140,7 @@ def emit_state_typeddict(
         "class State(TypedDict, total=False):",
     ]
     for name, ty in fields:
-        lines.append(f"    {_to_field_name(name)}: {ty}")
+        lines.append(f"    {name}: {ty}")
     return "\n".join(lines)
 
 
@@ -153,10 +164,15 @@ def _emit_node_wrapper(call: CallIR, step: StepIR) -> str:
 
 
 def _emit_flow_call_node_wrapper(call: FlowCallIR, sub_flow: FlowIR) -> str:
-    """v0.17 — generate `def <flow>_node(state: State) -> dict:` that compiles
-    the sub-flow's StateGraph, invokes it with the parent's state remapped to
-    the sub-flow's input keys, then publishes the sub-flow's GIVES back into
-    the parent state (flat, matching python/mcp-server convention)."""
+    """v0.17 — generate `def <flow>_node(state: State) -> dict:` that invokes a
+    *pre-compiled* sub-flow StateGraph (see `_emit_compiled_subflow_constant`),
+    remapping the parent's state into the sub-flow's input keys and publishing
+    the sub-flow's GIVES back into the parent state (flat, matching
+    python/mcp-server convention).
+
+    Compiling a LangGraph StateGraph is expensive; we compile each sub-flow
+    once at module load (`_compiled_<flow>` constants) and invoke the cached
+    instance on every call site."""
     input_parts = []
     for name, value in call.kwargs:
         if isinstance(value, str) and value.startswith("@"):
@@ -170,7 +186,7 @@ def _emit_flow_call_node_wrapper(call: FlowCallIR, sub_flow: FlowIR) -> str:
     )
     return (
         f"def {call.flow_name}_node(state: State) -> dict:\n"
-        f"    _result = build_{call.flow_name}_graph().invoke({input_dict})\n"
+        f"    _result = _compiled_{call.flow_name}.invoke({input_dict})\n"
         f"    return {{{output_parts}}}"
     )
 
@@ -218,12 +234,20 @@ def _emit_subgraph_builder(
     # sub-flow remains supported via this same builder, recursively).
     state_name = f"_State_{sub_flow.name}"
     fields = _collect_subflow_state_fields(sub_flow, steps_by_name, contracts_by_name)
-    state_lines = [f"    class {state_name}(TypedDict, total=False):"]
     if not fields:
-        state_lines.append("        pass")
+        state_lines = [f"    class {state_name}(TypedDict, total=False):", "        pass"]
+    elif any(keyword.iskeyword(name) for name, _ in fields):
+        # Functional syntax preserves original (unsanitized) keys — required
+        # when any TAKES/GIVES field name collides with a Python keyword.
+        field_items = ", ".join(f"{name!r}: {ty}" for name, ty in fields)
+        state_lines = [
+            f"    {state_name} = TypedDict({state_name!r}, "
+            f"{{{field_items}}}, total=False)"
+        ]
     else:
+        state_lines = [f"    class {state_name}(TypedDict, total=False):"]
         for name, ty in fields:
-            state_lines.append(f"        {_to_field_name(name)}: {ty}")
+            state_lines.append(f"        {name}: {ty}")
 
     builder_lines = [
         f"def build_{sub_flow.name}_graph():",
@@ -372,6 +396,14 @@ def emit_flow_module(
     # v0.17: emit a builder per signed sub-flow.
     subgraph_builders: list[str] = [
         _emit_subgraph_builder(sf, steps_by_name, contracts_by_name)
+        for sf in sub_flows
+    ]
+    # v0.17: compile each sub-flow exactly once at module load and reuse the
+    # cached CompiledStateGraph from every `<flow>_node` wrapper. The wrappers
+    # reference `_compiled_<flow>` lazily (function body) so the ordering is
+    # safe even though wrappers are emitted before their builders.
+    compiled_subflow_constants: list[str] = [
+        f"_compiled_{sf.name} = build_{sf.name}_graph()"
         for sf in sub_flows
     ]
 
@@ -557,6 +589,8 @@ def emit_flow_module(
         sections += ["", "", "\n\n".join(router_funcs)]
     if subgraph_builders:
         sections += ["", "", "\n\n".join(subgraph_builders)]
+    if compiled_subflow_constants:
+        sections += ["", "", "\n".join(compiled_subflow_constants)]
     sections += ["", "", "\n".join(graph_lines), "", "", run_block, ""]
     return "\n".join(sections)
 
