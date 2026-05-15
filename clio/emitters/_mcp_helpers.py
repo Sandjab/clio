@@ -3,6 +3,7 @@ import from here, never from each other."""
 from __future__ import annotations
 
 import json as _json
+from dataclasses import dataclass
 
 from clio.emitters._shared_utils import (
     _has_parallel,
@@ -26,6 +27,247 @@ from clio.ir.graph import (
     WhileBlockIR,
 )
 from clio.parser.ast_nodes import ContractRef, ListType
+
+# ---------------------------------------------------------------------------
+# Shared async-chain walker (issue #29, item 1).
+#
+# Before this extraction, `_emit_flow_module_async` (single-FLOW, byte-identical
+# from v0.16) and `_emit_flow_module_async_multi` (v0.17 multi-FLOW) each
+# defined their own nested `_emit_call` / `_emit_item` (and the multi path's
+# `_emit_flow_call`) closures. The bodies were byte-identical between the two
+# paths; the only structural difference was that the multi path also has to
+# dispatch `FlowCallIR` (single-FLOW sources cannot call another flow).
+#
+# We extract those three walkers as module-level functions parameterised by a
+# `_McpWalkerCtx` — a small mutable carrier for the state that used to live in
+# the outer closure: which step modules to import, the running list of emitted
+# lines, the active flow's RESCUE bookkeeping, and a `supports_flow_call` flag
+# that gates the `FlowCallIR` branch (defence in depth — the IR builder already
+# guarantees no `FlowCallIR` appears when `len(graph.flows) <= 1`).
+#
+# Byte-identical guarantee: the helper bodies are line-for-line transcribed
+# from the previous closures, with `chain_lines.append` rewritten as
+# `ctx.chain_lines.append`. All existing snapshot fixtures stay green.
+
+
+@dataclass
+class _McpWalkerCtx:
+    """Mutable per-flow context threaded through the async-chain walker.
+
+    `chain_lines` and `imported_steps` are mutated as the walker emits lines /
+    discovers step modules. `rescue_target_names` / `rescues_by_step` are
+    mutated only via `_set_flow_ctx` style helpers (multi-FLOW), or left
+    constant for single-FLOW. `supports_flow_call` is set once per emit
+    context — True for multi-FLOW, False for single-FLOW."""
+    steps_by_name: dict[str, StepIR]
+    imported_steps: list[str]
+    chain_lines: list[str]
+    rescue_target_names: set[str]
+    rescues_by_step: dict[str, RescueBlockIR]
+    supports_flow_call: bool
+
+
+def _emit_call_mcp_chain(
+    call: CallIR, indent: str, scope_local: set[str], ctx: _McpWalkerCtx,
+) -> None:
+    """Render a `CallIR` into `ctx.chain_lines`. Tracks `step.name` in
+    `ctx.imported_steps` for the module import emission. Threads `_session`
+    into judgment-mode call sites (mcp-server is always async). Wraps the
+    call site in try/except when the step is targeted by a RESCUE block —
+    the IR builder already restricts RESCUE targets to top-level FLOW
+    chains, so this branch is only reached when `scope_local` is empty."""
+    step = ctx.steps_by_name[call.step_name]
+    if step.name not in ctx.imported_steps:
+        ctx.imported_steps.append(step.name)
+    kw_parts = []
+    for name, value in call.kwargs:
+        py_name = _to_field_name(name)
+        if isinstance(value, ErrorAccessIR):
+            if value.field == "message":
+                kw_parts.append(f"{py_name}=str(_err)")
+            elif value.field == "type":
+                kw_parts.append(f"{py_name}=type(_err).__name__")
+            else:
+                raise AssertionError(
+                    f"unreachable: ErrorAccessIR field {value.field!r}"
+                )
+        elif isinstance(value, str) and value.startswith("@"):
+            ref = value[1:]
+            if ref in scope_local:
+                kw_parts.append(f"{py_name}={_to_field_name(ref)}")
+            else:
+                kw_parts.append(f"{py_name}=state[{ref!r}]")
+        else:
+            kw_parts.append(f"{py_name}={value!r}")
+    kwargs_str = ", ".join(kw_parts)
+    out_name = step.gives.name if step.gives is not None else "_result"
+    is_judgment = step.mode == "judgment"
+    py_step_name = _to_field_name(step.name)
+    if is_judgment:
+        if kwargs_str:
+            call_expr = f"{py_step_name}_mod.{py_step_name}({kwargs_str}, _session=_session)"
+        else:
+            call_expr = f"{py_step_name}_mod.{py_step_name}(_session=_session)"
+        call_expr = f"await {call_expr}"
+    else:
+        call_expr = f"{py_step_name}_mod.{py_step_name}({kwargs_str})"
+    if scope_local:
+        call_line = call_expr
+    else:
+        call_line = f"state[{out_name!r}] = {call_expr}"
+    if step.name in ctx.rescue_target_names and not scope_local:
+        rb = ctx.rescues_by_step[step.name]
+        terminator = rb.body[-1]
+        ctx.chain_lines.append(f"{indent}try:")
+        ctx.chain_lines.append(f"{indent}    {call_line}")
+        ctx.chain_lines.append(f"{indent}except FlowAborted:")
+        ctx.chain_lines.append(f"{indent}    raise")
+        ctx.chain_lines.append(f"{indent}except Exception as _err:")
+        if isinstance(terminator, ResumeIR):
+            assert step.gives is not None
+            rescued_gives_field = step.gives.name
+            ctx.chain_lines.append(
+                f"{indent}    state[{rescued_gives_field!r}] = "
+                f"await _rescue_{step.name}(state, _err, _session=_session)"
+            )
+        else:
+            ctx.chain_lines.append(
+                f"{indent}    await _rescue_{step.name}(state, _err, _session=_session)"
+            )
+            ctx.chain_lines.append(f"{indent}    raise")
+    else:
+        ctx.chain_lines.append(f"{indent}{call_line}")
+
+
+def _emit_flow_call_mcp_chain(
+    call: FlowCallIR, indent: str, scope_local: set[str], ctx: _McpWalkerCtx,
+) -> None:
+    """v0.17 — render a `FlowCallIR` as `state.update(await <flow>(...))` (or
+    just `await <flow>(...)` inside a nested scope, where the result is
+    discarded). The sub-FLOW function is defined later in the same module
+    (multi-FLOW emit context only), so we threaded `_session=_session` here
+    too. Only callable when `ctx.supports_flow_call` is True."""
+    kw_parts = []
+    for name, value in call.kwargs:
+        py_name = _to_field_name(name)
+        if isinstance(value, str) and value.startswith("@"):
+            ref = value[1:]
+            if ref in scope_local:
+                kw_parts.append(f"{py_name}={_to_field_name(ref)}")
+            else:
+                kw_parts.append(f"{py_name}=state[{ref!r}]")
+        else:
+            kw_parts.append(f"{py_name}={value!r}")
+    kwargs_str = ", ".join(kw_parts)
+    sep = ", " if kwargs_str else ""
+    invocation = (
+        f"await {_to_field_name(call.flow_name)}"
+        f"(_session=_session{sep}{kwargs_str})"
+    )
+    if scope_local:
+        ctx.chain_lines.append(f"{indent}{invocation}")
+    else:
+        ctx.chain_lines.append(f"{indent}state.update({invocation})")
+
+
+def _emit_item_mcp_chain(
+    item, indent: str, scope_local: set[str], ctx: _McpWalkerCtx,
+) -> None:
+    """Recursive dispatch on a chain item type. The `abort(...)` shortcut at
+    the top mirrors python.py:467 so RESCUE bodies emit `raise FlowAborted(...)`
+    uniformly. `FlowCallIR` is gated by `ctx.supports_flow_call` for defence
+    in depth — the IR builder already guarantees no `FlowCallIR` appears in
+    single-FLOW sources."""
+    if isinstance(item, CallIR) and item.step_name == "abort":
+        msg = next((v for k, v in item.kwargs if k == "message"), "")
+        ctx.chain_lines.append(f"{indent}raise FlowAborted({msg!r})")
+        return
+    if isinstance(item, ForEachIR):
+        if item.parallel:
+            ctx.chain_lines.append(
+                emit_parallel_for_each_mcp(item, ctx.steps_by_name, indent)
+            )
+            inner = item.body[0]
+            # v0.17: sub-flow body needs no step import (the sub-flow
+            # function is emitted in the same module). Only track step
+            # imports for CallIR bodies.
+            if isinstance(inner, CallIR):
+                if inner.step_name not in ctx.imported_steps:
+                    ctx.imported_steps.append(inner.step_name)
+            return
+        source = (
+            item.collection
+            if item.collection in scope_local
+            else f"state[{item.collection!r}]"
+        )
+        ctx.chain_lines.append(
+            f"{indent}for {_to_field_name(item.loop_var)} in {source}:"
+        )
+        inner_scope = scope_local | {item.loop_var}
+        inner_indent = indent + "    "
+        if not item.body:
+            ctx.chain_lines.append(f"{inner_indent}pass")
+        for sub in item.body:
+            _emit_item_mcp_chain(sub, inner_indent, inner_scope, ctx)
+        return
+    if isinstance(item, IfBlockIR):
+        cond_expr = _python_condition_expr(item.condition, scope_local)
+        ctx.chain_lines.append(f"{indent}if {cond_expr}:")
+        inner_indent = indent + "    "
+        if not item.then_body:
+            ctx.chain_lines.append(f"{inner_indent}pass")
+        for sub in item.then_body:
+            _emit_item_mcp_chain(sub, inner_indent, scope_local, ctx)
+        if item.else_body:
+            ctx.chain_lines.append(f"{indent}else:")
+            for sub in item.else_body:
+                _emit_item_mcp_chain(sub, inner_indent, scope_local, ctx)
+        return
+    if isinstance(item, MatchBlockIR):
+        base = (
+            item.state_field
+            if item.state_field in scope_local
+            else f"state[{item.state_field!r}]"
+        )
+        ctx.chain_lines.append(f"{indent}match {base}.{item.sub_field}:")
+        inner_indent = indent + "    "
+        for arm in item.cases:
+            if arm.value is None:
+                ctx.chain_lines.append(f"{inner_indent}case _:")
+            else:
+                ctx.chain_lines.append(f"{inner_indent}case {arm.value!r}:")
+            body_indent = inner_indent + "    "
+            if not arm.body:
+                ctx.chain_lines.append(f"{body_indent}pass")
+            for sub in arm.body:
+                _emit_item_mcp_chain(sub, body_indent, scope_local, ctx)
+        return
+    if isinstance(item, WhileBlockIR):
+        cond_expr = _python_condition_expr(item.condition, scope_local)
+        ctx.chain_lines.append(f"{indent}for _i in range({item.max_iters}):")
+        inner_indent = indent + "    "
+        ctx.chain_lines.append(f"{inner_indent}if not ({cond_expr}):")
+        ctx.chain_lines.append(f"{inner_indent}    break")
+        if not item.body:
+            ctx.chain_lines.append(f"{inner_indent}pass")
+        for sub in item.body:
+            _emit_item_mcp_chain(sub, inner_indent, scope_local, ctx)
+        return
+    if isinstance(item, ResumeIR):
+        ctx.chain_lines.append(f"{indent}return state[{item.field_name!r}]")
+        return
+    if isinstance(item, FlowCallIR):
+        if not ctx.supports_flow_call:
+            raise ValueError(
+                "FlowCallIR is not supported in a single-FLOW emit context; "
+                "this should be unreachable — the IR builder forbids it."
+            )
+        _emit_flow_call_mcp_chain(item, indent, scope_local, ctx)
+        return
+    if isinstance(item, CallIR):
+        _emit_call_mcp_chain(item, indent, scope_local, ctx)
+        return
+    raise ValueError(f"unknown flow item: {type(item).__name__}")
 
 
 def _emit_readme(pkg_name: str, graph: FlowGraph) -> str:
@@ -355,170 +597,24 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
     rescue_target_names = {rb.step_name for rb in graph.flow.rescues}
     rescues_by_step = {rb.step_name: rb for rb in graph.flow.rescues}
 
-    def _emit_call(call: CallIR, indent: str, scope_local: set[str]) -> None:
-        step = steps_by_name[call.step_name]
-        if step.name not in imported_steps:
-            imported_steps.append(step.name)
-        kw_parts = []
-        for name, value in call.kwargs:
-            py_name = _to_field_name(name)
-            if isinstance(value, ErrorAccessIR):
-                if value.field == "message":
-                    kw_parts.append(f"{py_name}=str(_err)")
-                elif value.field == "type":
-                    kw_parts.append(f"{py_name}=type(_err).__name__")
-                else:
-                    raise AssertionError(
-                        f"unreachable: ErrorAccessIR field {value.field!r}"
-                    )
-            elif isinstance(value, str) and value.startswith("@"):
-                ref = value[1:]
-                if ref in scope_local:
-                    kw_parts.append(f"{py_name}={_to_field_name(ref)}")
-                else:
-                    kw_parts.append(f"{py_name}=state[{ref!r}]")
-            else:
-                kw_parts.append(f"{py_name}={value!r}")
-        kwargs_str = ", ".join(kw_parts)
-        out_name = step.gives.name if step.gives is not None else "_result"
-        is_judgment = step.mode == "judgment"
-        py_step_name = _to_field_name(step.name)
-        if is_judgment:
-            if kwargs_str:
-                call_expr = f"{py_step_name}_mod.{py_step_name}({kwargs_str}, _session=_session)"
-            else:
-                call_expr = f"{py_step_name}_mod.{py_step_name}(_session=_session)"
-            call_expr = f"await {call_expr}"
-        else:
-            call_expr = f"{py_step_name}_mod.{py_step_name}({kwargs_str})"
-        if scope_local:
-            call_line = call_expr
-        else:
-            call_line = f"state[{out_name!r}] = {call_expr}"
-        # RESCUE: wrap the protected step's call site in try/except. Any
-        # uncaught Exception triggers `await _rescue_<name>(state,
-        # _session=_session)`; FlowAborted (raised by the rescue body's
-        # terminal abort) propagates verbatim. The IR builder restricts
-        # RESCUE targets to the top-level FLOW chain in v0.8, so this branch
-        # is only reached when scope_local is empty — i.e. never inside a
-        # FOR EACH / IF / MATCH / WHILE body. We still gate on
-        # `not scope_local` for defence in depth (matches python.py:450).
-        if step.name in rescue_target_names and not scope_local:
-            rb = rescues_by_step[step.name]
-            terminator = rb.body[-1]
-            chain_lines.append(f"{indent}try:")
-            chain_lines.append(f"{indent}    {call_line}")
-            chain_lines.append(f"{indent}except FlowAborted:")
-            chain_lines.append(f"{indent}    raise")
-            chain_lines.append(f"{indent}except Exception as _err:")
-            if isinstance(terminator, ResumeIR):
-                assert step.gives is not None  # T9 validates: RESUME requires GIVES
-                rescued_gives_field = step.gives.name
-                chain_lines.append(
-                    f"{indent}    state[{rescued_gives_field!r}] = "
-                    f"await _rescue_{step.name}(state, _err, _session=_session)"
-                )
-            else:
-                chain_lines.append(
-                    f"{indent}    await _rescue_{step.name}(state, _err, _session=_session)"
-                )
-                chain_lines.append(f"{indent}    raise")
-        else:
-            chain_lines.append(f"{indent}{call_line}")
-
-    def _emit_item(item, indent: str, scope_local: set[str]) -> None:
-        # `abort("msg")` is a synthetic CallIR injected by the IR builder
-        # only inside RESCUE bodies. It compiles to `raise FlowAborted(msg)`
-        # regardless of context (rescue body root, or nested IF/MATCH/
-        # WHILE/FOR EACH inside the rescue body). Placed at the top of
-        # _emit_item so every recursive call site picks it up. Mirror of
-        # python.py:467.
-        if isinstance(item, CallIR) and item.step_name == "abort":
-            msg = next(
-                (v for k, v in item.kwargs if k == "message"), ""
-            )
-            chain_lines.append(f"{indent}raise FlowAborted({msg!r})")
-            return
-        if isinstance(item, ForEachIR):
-            if item.parallel:
-                chain_lines.append(emit_parallel_for_each_mcp(item, steps_by_name, indent))
-                inner = item.body[0]
-                # v0.17: sub-flow body needs no step import (the sub-flow
-                # function is emitted in the same module). Only track step
-                # imports for CallIR bodies.
-                if isinstance(inner, CallIR):
-                    if inner.step_name not in imported_steps:
-                        imported_steps.append(inner.step_name)
-                return
-            source = (
-                item.collection
-                if item.collection in scope_local
-                else f"state[{item.collection!r}]"
-            )
-            chain_lines.append(f"{indent}for {_to_field_name(item.loop_var)} in {source}:")
-            inner_scope = scope_local | {item.loop_var}
-            inner_indent = indent + "    "
-            if not item.body:
-                chain_lines.append(f"{inner_indent}pass")
-            for sub in item.body:
-                _emit_item(sub, inner_indent, inner_scope)
-            return
-        if isinstance(item, IfBlockIR):
-            cond_expr = _python_condition_expr(item.condition, scope_local)
-            chain_lines.append(f"{indent}if {cond_expr}:")
-            inner_indent = indent + "    "
-            if not item.then_body:
-                chain_lines.append(f"{inner_indent}pass")
-            for sub in item.then_body:
-                _emit_item(sub, inner_indent, scope_local)
-            if item.else_body:
-                chain_lines.append(f"{indent}else:")
-                for sub in item.else_body:
-                    _emit_item(sub, inner_indent, scope_local)
-            return
-        if isinstance(item, MatchBlockIR):
-            base = (
-                item.state_field
-                if item.state_field in scope_local
-                else f"state[{item.state_field!r}]"
-            )
-            chain_lines.append(f"{indent}match {base}.{item.sub_field}:")
-            inner_indent = indent + "    "
-            for arm in item.cases:
-                if arm.value is None:
-                    chain_lines.append(f"{inner_indent}case _:")
-                else:
-                    chain_lines.append(f"{inner_indent}case {arm.value!r}:")
-                body_indent = inner_indent + "    "
-                if not arm.body:
-                    chain_lines.append(f"{body_indent}pass")
-                for sub in arm.body:
-                    _emit_item(sub, body_indent, scope_local)
-            return
-        if isinstance(item, WhileBlockIR):
-            cond_expr = _python_condition_expr(item.condition, scope_local)
-            chain_lines.append(f"{indent}for _i in range({item.max_iters}):")
-            inner_indent = indent + "    "
-            chain_lines.append(f"{inner_indent}if not ({cond_expr}):")
-            chain_lines.append(f"{inner_indent}    break")
-            if not item.body:
-                chain_lines.append(f"{inner_indent}pass")
-            for sub in item.body:
-                _emit_item(sub, inner_indent, scope_local)
-            return
-        if isinstance(item, ResumeIR):
-            chain_lines.append(f"{indent}return state[{item.field_name!r}]")
-            return
-        if isinstance(item, CallIR):
-            _emit_call(item, indent, scope_local)
-            return
-        raise ValueError(f"unknown flow item: {type(item).__name__}")
+    # The walker functions are now module-level (see top of file) — issue #29
+    # item 1 — so single- and multi-FLOW emit paths share one implementation.
+    # `supports_flow_call=False` here because single-FLOW sources cannot
+    # contain `FlowCallIR` (the IR builder guarantees this).
+    ctx = _McpWalkerCtx(
+        steps_by_name=steps_by_name,
+        imported_steps=imported_steps,
+        chain_lines=chain_lines,
+        rescue_target_names=rescue_target_names,
+        rescues_by_step=rescues_by_step,
+        supports_flow_call=False,
+    )
 
     for item in graph.flow.chain:
-        _emit_item(item, "    ", set())
+        _emit_item_mcp_chain(item, "    ", set(), ctx)
 
     # Snapshot the main chain lines before re-using the walker for rescue
-    # bodies (the closure mutates the shared `chain_lines` list).
+    # bodies (the walker mutates the shared `ctx.chain_lines` list).
     main_chain_lines = list(chain_lines)
 
     # Emit one async _rescue_<step_name>(state, _session=None) helper per
@@ -533,7 +629,7 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
     for rb in graph.flow.rescues:
         chain_lines.clear()
         for sub in rb.body:
-            _emit_item(sub, "    ", set())
+            _emit_item_mcp_chain(sub, "    ", set(), ctx)
         rescue_body = "\n".join(chain_lines)
         terminator = rb.body[-1]
         ret_ann = "object" if isinstance(terminator, ResumeIR) else "None"
@@ -711,10 +807,20 @@ def _emit_flow_module_async_multi(graph: FlowGraph) -> str:
     chain_lines: list[str] = []
     has_any_rescue = any(f.rescues for f in graph.flows)
 
-    # Per-flow rescue context (rebuilt before each flow's chain pass and each
-    # rescue body pass).
+    # Per-flow rescue bookkeeping. The walker functions live at module level
+    # (issue #29 item 1) so we thread them through a `_McpWalkerCtx`; the
+    # mutable rescue_target_names / rescues_by_step sets are rebuilt in place
+    # before each flow's chain pass (and each rescue body pass).
     rescue_target_names: set[str] = set()
     rescues_by_step: dict[str, RescueBlockIR] = {}
+    ctx = _McpWalkerCtx(
+        steps_by_name=steps_by_name,
+        imported_steps=imported_steps,
+        chain_lines=chain_lines,
+        rescue_target_names=rescue_target_names,
+        rescues_by_step=rescues_by_step,
+        supports_flow_call=True,  # multi-FLOW: FlowCallIR is legal here
+    )
 
     def _set_flow_ctx(flow: FlowIR) -> None:
         rescue_target_names.clear()
@@ -722,182 +828,16 @@ def _emit_flow_module_async_multi(graph: FlowGraph) -> str:
         rescues_by_step.clear()
         rescues_by_step.update({rb.step_name: rb for rb in flow.rescues})
 
-    def _emit_call(call: CallIR, indent: str, scope_local: set[str]) -> None:
-        step = steps_by_name[call.step_name]
-        if step.name not in imported_steps:
-            imported_steps.append(step.name)
-        kw_parts = []
-        for name, value in call.kwargs:
-            py_name = _to_field_name(name)
-            if isinstance(value, ErrorAccessIR):
-                if value.field == "message":
-                    kw_parts.append(f"{py_name}=str(_err)")
-                elif value.field == "type":
-                    kw_parts.append(f"{py_name}=type(_err).__name__")
-                else:
-                    raise AssertionError(
-                        f"unreachable: ErrorAccessIR field {value.field!r}"
-                    )
-            elif isinstance(value, str) and value.startswith("@"):
-                ref = value[1:]
-                if ref in scope_local:
-                    kw_parts.append(f"{py_name}={_to_field_name(ref)}")
-                else:
-                    kw_parts.append(f"{py_name}=state[{ref!r}]")
-            else:
-                kw_parts.append(f"{py_name}={value!r}")
-        kwargs_str = ", ".join(kw_parts)
-        out_name = step.gives.name if step.gives is not None else "_result"
-        is_judgment = step.mode == "judgment"
-        py_step_name = _to_field_name(step.name)
-        if is_judgment:
-            if kwargs_str:
-                call_expr = f"{py_step_name}_mod.{py_step_name}({kwargs_str}, _session=_session)"
-            else:
-                call_expr = f"{py_step_name}_mod.{py_step_name}(_session=_session)"
-            call_expr = f"await {call_expr}"
-        else:
-            call_expr = f"{py_step_name}_mod.{py_step_name}({kwargs_str})"
-        if scope_local:
-            call_line = call_expr
-        else:
-            call_line = f"state[{out_name!r}] = {call_expr}"
-        if step.name in rescue_target_names and not scope_local:
-            rb = rescues_by_step[step.name]
-            terminator = rb.body[-1]
-            chain_lines.append(f"{indent}try:")
-            chain_lines.append(f"{indent}    {call_line}")
-            chain_lines.append(f"{indent}except FlowAborted:")
-            chain_lines.append(f"{indent}    raise")
-            chain_lines.append(f"{indent}except Exception as _err:")
-            if isinstance(terminator, ResumeIR):
-                assert step.gives is not None
-                rescued_gives_field = step.gives.name
-                chain_lines.append(
-                    f"{indent}    state[{rescued_gives_field!r}] = "
-                    f"await _rescue_{step.name}(state, _err, _session=_session)"
-                )
-            else:
-                chain_lines.append(
-                    f"{indent}    await _rescue_{step.name}(state, _err, _session=_session)"
-                )
-                chain_lines.append(f"{indent}    raise")
-        else:
-            chain_lines.append(f"{indent}{call_line}")
-
-    def _emit_flow_call(call: FlowCallIR, indent: str, scope_local: set[str]) -> None:
-        kw_parts = []
-        for name, value in call.kwargs:
-            py_name = _to_field_name(name)
-            if isinstance(value, str) and value.startswith("@"):
-                ref = value[1:]
-                if ref in scope_local:
-                    kw_parts.append(f"{py_name}={_to_field_name(ref)}")
-                else:
-                    kw_parts.append(f"{py_name}=state[{ref!r}]")
-            else:
-                kw_parts.append(f"{py_name}={value!r}")
-        kwargs_str = ", ".join(kw_parts)
-        sep = ", " if kwargs_str else ""
-        invocation = (
-            f"await {_to_field_name(call.flow_name)}"
-            f"(_session=_session{sep}{kwargs_str})"
-        )
-        if scope_local:
-            chain_lines.append(f"{indent}{invocation}")
-        else:
-            chain_lines.append(f"{indent}state.update({invocation})")
-
-    def _emit_item(item, indent: str, scope_local: set[str]) -> None:
-        if isinstance(item, CallIR) and item.step_name == "abort":
-            msg = next((v for k, v in item.kwargs if k == "message"), "")
-            chain_lines.append(f"{indent}raise FlowAborted({msg!r})")
-            return
-        if isinstance(item, ForEachIR):
-            if item.parallel:
-                chain_lines.append(emit_parallel_for_each_mcp(item, steps_by_name, indent))
-                inner = item.body[0]
-                # v0.17: sub-flow body needs no step import.
-                if isinstance(inner, CallIR):
-                    if inner.step_name not in imported_steps:
-                        imported_steps.append(inner.step_name)
-                return
-            source = (
-                item.collection
-                if item.collection in scope_local
-                else f"state[{item.collection!r}]"
-            )
-            chain_lines.append(f"{indent}for {_to_field_name(item.loop_var)} in {source}:")
-            inner_scope = scope_local | {item.loop_var}
-            inner_indent = indent + "    "
-            if not item.body:
-                chain_lines.append(f"{inner_indent}pass")
-            for sub in item.body:
-                _emit_item(sub, inner_indent, inner_scope)
-            return
-        if isinstance(item, IfBlockIR):
-            cond_expr = _python_condition_expr(item.condition, scope_local)
-            chain_lines.append(f"{indent}if {cond_expr}:")
-            inner_indent = indent + "    "
-            if not item.then_body:
-                chain_lines.append(f"{inner_indent}pass")
-            for sub in item.then_body:
-                _emit_item(sub, inner_indent, scope_local)
-            if item.else_body:
-                chain_lines.append(f"{indent}else:")
-                for sub in item.else_body:
-                    _emit_item(sub, inner_indent, scope_local)
-            return
-        if isinstance(item, MatchBlockIR):
-            base = (
-                item.state_field
-                if item.state_field in scope_local
-                else f"state[{item.state_field!r}]"
-            )
-            chain_lines.append(f"{indent}match {base}.{item.sub_field}:")
-            inner_indent = indent + "    "
-            for arm in item.cases:
-                if arm.value is None:
-                    chain_lines.append(f"{inner_indent}case _:")
-                else:
-                    chain_lines.append(f"{inner_indent}case {arm.value!r}:")
-                body_indent = inner_indent + "    "
-                if not arm.body:
-                    chain_lines.append(f"{body_indent}pass")
-                for sub in arm.body:
-                    _emit_item(sub, body_indent, scope_local)
-            return
-        if isinstance(item, WhileBlockIR):
-            cond_expr = _python_condition_expr(item.condition, scope_local)
-            chain_lines.append(f"{indent}for _i in range({item.max_iters}):")
-            inner_indent = indent + "    "
-            chain_lines.append(f"{inner_indent}if not ({cond_expr}):")
-            chain_lines.append(f"{inner_indent}    break")
-            if not item.body:
-                chain_lines.append(f"{inner_indent}pass")
-            for sub in item.body:
-                _emit_item(sub, inner_indent, scope_local)
-            return
-        if isinstance(item, ResumeIR):
-            chain_lines.append(f"{indent}return state[{item.field_name!r}]")
-            return
-        if isinstance(item, FlowCallIR):
-            _emit_flow_call(item, indent, scope_local)
-            return
-        if isinstance(item, CallIR):
-            _emit_call(item, indent, scope_local)
-            return
-        raise ValueError(f"unknown flow item: {type(item).__name__}")
-
-    # Render one async def per FLOW. Iterate `graph.flows` (alphabetical via
-    # the IR's declaration order — stable across runs of the same source).
+    # Render one async def per FLOW. `graph.flows` preserves declaration
+    # order; the runtime tool registry (server.py) also lists tools in
+    # declaration order (issue #29 item 3).
     flow_funcs: list[str] = []
     has_parallel = any(_has_parallel(f.chain) for f in graph.flows)
     for flow in graph.flows:
         _set_flow_ctx(flow)
         chain_lines.clear()
         for item in flow.chain:
-            _emit_item(item, "        ", set())
+            _emit_item_mcp_chain(item, "        ", set(), ctx)
         body_lines = list(chain_lines)
 
         # Rescue helpers for this flow. Names are scoped per-flow but we keep
@@ -910,7 +850,7 @@ def _emit_flow_module_async_multi(graph: FlowGraph) -> str:
         for rb in flow.rescues:
             chain_lines.clear()
             for sub in rb.body:
-                _emit_item(sub, "    ", set())
+                _emit_item_mcp_chain(sub, "    ", set(), ctx)
             rescue_body = "\n".join(chain_lines)
             terminator = rb.body[-1]
             ret_ann = "object" if isinstance(terminator, ResumeIR) else "None"
