@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clio"
-version = "0.17.1"
+version = "0.17.2"
 description = "CLIO Compiler — Compiled Language for Intent Orchestration"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
