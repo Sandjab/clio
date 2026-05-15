@@ -553,6 +553,74 @@ FLOW classify_batch
 
 Without `TAKES:`, the FOR EACH at the head of the chain compiles to `state reference 'items' not produced by any previous step` (#21). With `TAKES:` declared, `items` is seeded as an external input and the FLOW compiles to all targets that support PARALLEL (python / mcp-server / claude-skill).
 
+### FLOW composition (v0.17)
+
+Once a FLOW declares both `TAKES:` and `GIVES:`, it is structurally
+indistinguishable from a STEP. The compiler lets you call such a FLOW
+wherever a STEP call is legal — in a chain, in a `FOR EACH PARALLEL`
+body, inside `IF` / `MATCH` / `WHILE`, or inside a `RESCUE` body.
+
+Syntax: identical to a step call.
+
+```
+pipeline(urls=raw_urls)
+```
+
+#### Resolution
+
+1. The name is looked up first in declared `STEP`s.
+2. If not found, it is looked up in `FLOW`s that have an explicit
+   signature (both `TAKES:` and `GIVES:` blocks).
+3. A name shared between a `STEP` and a `FLOW` is rejected at compile
+   time as a collision.
+4. A call to a `FLOW` that lacks `TAKES` / `GIVES` is rejected with a
+   clear error pointing at the missing signature.
+
+#### Semantics
+
+- The sub-flow's `TAKES` are bound by keyword (same as a step call),
+  and each kwarg is type-checked against the declared signature.
+- The sub-flow runs in its own scope — the parent's state is **not**
+  visible to it. Only the declared `GIVES` of the sub-flow cross
+  back into the parent, where each field is published flat into the
+  parent's state (same convention as a step's `GIVES`).
+- `RESCUE` handlers declared inside a sub-flow run only inside that
+  sub-flow's scope. If they terminate the sub-flow with `abort(...)`,
+  the abort propagates to the parent as a regular failure — the
+  parent can in turn protect the sub-flow call with its own
+  `RESCUE`.
+- Recursive sub-flows (a FLOW that calls itself) and inter-flow
+  cycles (`A → B → A`) are rejected at compile time.
+
+#### PARALLEL FOR EACH bodies
+
+A `FOR EACH ... PARALLEL` body may be either a single step call (as
+in v0.16) or a single sub-flow call (new in v0.17). The collector
+accumulates the sub-flow's GIVES across iterations. When the sub-flow
+declares a single GIVES field, the collector publishes a
+`List<<gives.type>>` cleanly. When the sub-flow declares multiple
+GIVES fields, the collector holds a list of dicts and the parent's
+declared `List<T>` annotation will not match — track this as a
+limitation pending a follow-up release.
+
+### Default exposure of FLOWs (`target: mcp-server`)
+
+When compiling to `target: mcp-server`, every FLOW that has an
+explicit signature **and** is not called by any sibling FLOW in the
+same source becomes a tool. Called sub-flows remain internal helpers
+and are not exposed. An explicit `EXPOSE` / `INTERNAL` marker is
+deferred to a later release.
+
+### Target support for sub-flow composition
+
+| target          | Sub-flow call support (v0.17)                                         |
+| --------------- | --------------------------------------------------------------------- |
+| `python`        | yes (sub-flow → function)                                             |
+| `mcp-server`    | yes (sub-flow → function; uncalled FLOWs become tools)               |
+| `claude-skill`  | yes (sub-flow → standalone script invoked from main)                  |
+| `langgraph`     | yes (sub-flow → compiled sub-`StateGraph`)                            |
+| `claude-cli`    | **no** — compile-time error (deferred to a later release)             |
+
 ### TEST (v0.15)
 
 Declarative test against a FLOW. Emitted as a pytest file under
