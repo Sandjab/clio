@@ -631,7 +631,7 @@ STEP detect
   GIVES: result: int
   MODE: judgment
 
-FLOW pipeline
+EXPOSE FLOW pipeline
   load(path="x.csv")
     -> detect(rows=rows)
 
@@ -682,7 +682,7 @@ _MCP_SRV_SRC = (
     "    server:  docs\n"
     "    tool:    search\n"
     "    args:    {q: \"${query}\"}\n"
-    "FLOW f\n"
+    "EXPOSE FLOW f\n"
     '  search(query="x")\n'
     "RESOURCES\n"
     "  target: mcp-server\n"
@@ -722,7 +722,7 @@ _SQL_SRV_SRC = (
     "    mode:  sql\n"
     "    db:    crm\n"
     '    query: "SELECT id, status FROM orders WHERE email = :email"\n'
-    "FLOW f\n"
+    "EXPOSE FLOW f\n"
     '  get_orders(email="x@y")\n'
     "RESOURCES\n"
     "  target: mcp-server\n"
@@ -771,7 +771,7 @@ STEP notify
   GIVES: sent: bool
   MODE:  exact
 
-FLOW pipeline
+EXPOSE FLOW pipeline
   load(path="x") -> detect(rows=rows)
 
   RESCUE detect:
@@ -818,7 +818,7 @@ STEP downstream
   GIVES: ok: bool
   MODE:  exact
 
-FLOW pipeline
+EXPOSE FLOW pipeline
   load(path="x") -> detect(rows=rows) -> downstream(report=report)
 
   RESCUE detect:
@@ -900,7 +900,7 @@ def test_mcp_server_schemas_from_declared_flow_signature(tmp_path):
         "  GIVES: label: str\n"
         "  MODE:  judgment\n"
         "\n"
-        "FLOW pipeline\n"
+        "EXPOSE FLOW pipeline\n"
         "  TAKES: items: List<str>\n"
         "  GIVES: labels: List<str>\n"
         "  FOR EACH item IN items PARALLEL AS labels:\n"
@@ -940,12 +940,12 @@ def test_mcp_emits_one_tool_per_exposed_flow(tmp_path):
         "  GIVES: y: str\n"
         "  MODE: exact\n"
         "\n"
-        "FLOW a\n"
+        "EXPOSE FLOW a\n"
         "  TAKES: x: str\n"
         "  GIVES: y: str\n"
         "  s(x=x)\n"
         "\n"
-        "FLOW b\n"
+        "EXPOSE FLOW b\n"
         "  TAKES: x: str\n"
         "  GIVES: y: str\n"
         "  s(x=x)\n"
@@ -981,7 +981,7 @@ def test_mcp_called_subflow_is_not_exposed(tmp_path):
         "  GIVES: y: str\n"
         "  s(x=x)\n"
         "\n"
-        "FLOW entry\n"
+        "EXPOSE FLOW entry\n"
         "  TAKES: x: str\n"
         "  GIVES: y: str\n"
         "  helper(x=x)\n"
@@ -1017,7 +1017,7 @@ def test_mcp_parallel_foreach_with_subflow_body(tmp_path):
         "  GIVES: msg:  str\n"
         "  greet(name=name)\n"
         "\n"
-        "FLOW batch\n"
+        "EXPOSE FLOW batch\n"
         "  TAKES: names: List<str>\n"
         "  FOR EACH n IN names PARALLEL AS results:\n"
         "    enrich(name=n)\n"
@@ -1052,11 +1052,11 @@ _MULTI_FLOW_DECL_ORDER_SRC = (
     "  TAKES: x: str\n"
     "  GIVES: y: str\n"
     "  MODE: exact\n"
-    "FLOW zeta\n"
+    "EXPOSE FLOW zeta\n"
     "  TAKES: x: str\n"
     "  GIVES: y: str\n"
     "  s(x=x)\n"
-    "FLOW alpha\n"
+    "EXPOSE FLOW alpha\n"
     "  TAKES: x: str\n"
     "  GIVES: y: str\n"
     "  s(x=x)\n"
@@ -1132,7 +1132,7 @@ def test_mcp_for_each_inner_collection_is_sanitized(tmp_path):
         "  TAKES: y: str\n"
         "  GIVES: z: str\n"
         "  MODE: exact\n"
-        "FLOW pipeline\n"
+        "EXPOSE FLOW pipeline\n"
         "  TAKES: xs: List<List<str>>\n"
         "  FOR EACH class IN xs:\n"
         "    FOR EACH y IN class:\n"
@@ -1170,7 +1170,7 @@ def test_mcp_match_state_field_and_sub_field_are_sanitized(tmp_path):
         "  TAKES: r: Foo\n"
         "  GIVES: y: str\n"
         "  MODE: exact\n"
-        "FLOW pipeline\n"
+        "EXPOSE FLOW pipeline\n"
         '    s(x="hello")\n'
         "    -> MATCH result.class:\n"
         "        CASE a:\n"
