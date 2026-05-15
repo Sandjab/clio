@@ -276,3 +276,59 @@ def test_e_res_004_symbol_not_found(tmp_path: Path) -> None:
     exposed_sets = compute_exposed_sets(parsed)
     with pytest.raises(CompileError, match=r"'X' not found in"):
         validate_imports(parsed, exposed_sets)
+
+
+def test_e_res_005_same_name_two_files(tmp_path: Path) -> None:
+    """Same local name imported from two different files → E_RES_005."""
+    (tmp_path / "a.clio").write_text(
+        "EXPOSE CONTRACT X\n"
+        "  SHAPE: {a: str}\n"
+    )
+    (tmp_path / "b.clio").write_text(
+        "EXPOSE CONTRACT X\n"
+        "  SHAPE: {b: int}\n"
+    )
+    (tmp_path / "main.clio").write_text(
+        'FROM "./a.clio" IMPORT X\n'
+        'FROM "./b.clio" IMPORT X\n'
+    )
+    parsed = resolve_imports(tmp_path / "main.clio")
+    sets = compute_exposed_sets(parsed)
+    with pytest.raises(CompileError, match=r"already imported from"):
+        validate_imports(parsed, sets)
+
+
+def test_e_res_005_can_be_resolved_with_alias(tmp_path: Path) -> None:
+    """Same symbol name imported from two files with an AS alias → no error."""
+    (tmp_path / "a.clio").write_text(
+        "EXPOSE CONTRACT X\n"
+        "  SHAPE: {a: str}\n"
+    )
+    (tmp_path / "b.clio").write_text(
+        "EXPOSE CONTRACT X\n"
+        "  SHAPE: {b: int}\n"
+    )
+    (tmp_path / "main.clio").write_text(
+        'FROM "./a.clio" IMPORT X\n'
+        'FROM "./b.clio" IMPORT X AS Xb\n'
+    )
+    parsed = resolve_imports(tmp_path / "main.clio")
+    sets = compute_exposed_sets(parsed)
+    validate_imports(parsed, sets)  # must not raise
+
+
+def test_e_res_006_local_clashes_with_import(tmp_path: Path) -> None:
+    """A local CONTRACT with the same name as an import → E_RES_006."""
+    (tmp_path / "lib.clio").write_text(
+        "EXPOSE CONTRACT X\n"
+        "  SHAPE: {a: str}\n"
+    )
+    (tmp_path / "main.clio").write_text(
+        'FROM "./lib.clio" IMPORT X\n'
+        "CONTRACT X\n"
+        "  SHAPE: {b: int}\n"
+    )
+    parsed = resolve_imports(tmp_path / "main.clio")
+    sets = compute_exposed_sets(parsed)
+    with pytest.raises(CompileError, match=r"clashes with import"):
+        validate_imports(parsed, sets)

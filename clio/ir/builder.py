@@ -294,8 +294,9 @@ def _file_stem(path: Path) -> str:
 
     'lib/nlp.clio' → 'nlp'
     'shared-utils.clio' → 'shared_utils'
+    'my.lib.clio' → 'my_lib'
     """
-    return path.stem.replace("-", "_")
+    return path.stem.replace("-", "_").replace(".", "_")
 
 
 def _flatten_to_program(

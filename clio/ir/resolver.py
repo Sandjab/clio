@@ -195,8 +195,11 @@ def validate_imports(
     Distinguishes:
       E_RES_003 — symbol is declared in the target file but not exposed.
       E_RES_004 — symbol is not declared in the target file at all.
+      E_RES_005 — same local name imported from two files (or twice from same file).
+      E_RES_006 — imported name clashes with a local FLOW/CONTRACT declaration.
     """
     for path, program in parsed.items():
+        seen_imports: dict[str, str] = {}  # local_name → first source path string
         for imp in program.imports:
             child = (path.parent / imp.path).resolve()
             child_exposed = exposed_sets.get(child, {})
@@ -207,6 +210,16 @@ def validate_imports(
                     if isinstance(d, (FlowDecl, ContractDecl)):
                         all_declared.add(d.name)
             for item in imp.items:
+                local_name = item.alias or item.name
+                # E_RES_005: duplicate local name across import statements
+                if local_name in seen_imports:
+                    raise CompileError(
+                        f"{path}:{item.line}:{item.col}: "
+                        f"'{local_name}' already imported from {seen_imports[local_name]!r}; "
+                        f"use AS to disambiguate"
+                    )
+                seen_imports[local_name] = imp.path
+                # E_RES_003 / E_RES_004: symbol must be exposed
                 if item.name in child_exposed:
                     continue
                 if item.name in all_declared:
@@ -218,3 +231,22 @@ def validate_imports(
                     f"{path}:{item.line}:{item.col}: "
                     f"{item.name!r} not found in {imp.path!r}"
                 )
+
+        # E_RES_006: imported name clashes with a local FLOW/CONTRACT declaration
+        local_decl_names: set[str] = set()
+        for d in program.decls:
+            if isinstance(d, (FlowDecl, ContractDecl)):
+                local_decl_names.add(d.name)
+
+        for local_name, source_path_str in seen_imports.items():
+            if local_name in local_decl_names:
+                for d in program.decls:
+                    if (
+                        isinstance(d, (FlowDecl, ContractDecl))
+                        and d.name == local_name
+                    ):
+                        raise CompileError(
+                            f"{path}:{d.line}:{d.col}: "
+                            f"name '{local_name}' clashes with import from "
+                            f"{source_path_str!r}"
+                        )

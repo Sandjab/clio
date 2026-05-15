@@ -119,6 +119,45 @@ def test_alpha_rename_in_match_scrutinee(tmp_path: Path) -> None:
     assert "main__pipeline" in flow_names  # local non-exposed, renamed
 
 
+def test_file_stem_sanitizes_dots(tmp_path: Path) -> None:
+    """Internal symbols from a file named like 'my.lib.clio' must produce
+    valid Python identifiers (dots replaced by underscores)."""
+    (tmp_path / "my.lib.clio").write_text(
+        "EXPOSE CONTRACT Article\n"
+        "  SHAPE: {title: str}\n"
+        "\n"
+        "STEP score\n"
+        "  MODE: judgment\n"
+        "  TAKES: article: Article\n"
+        "  GIVES: label: str\n"
+        "\n"
+        "EXPOSE FLOW classify\n"
+        "  TAKES: article: Article\n"
+        "  GIVES: label: str\n"
+        "  score(article=article)\n"
+    )
+    (tmp_path / "main.clio").write_text(
+        'FROM "./my.lib.clio" IMPORT Article, classify\n'
+        "\n"
+        "STEP run_pipeline\n"
+        "  MODE: judgment\n"
+        "  TAKES: article: Article\n"
+        "  GIVES: label: str\n"
+        "\n"
+        "EXPOSE FLOW pipeline\n"
+        "  TAKES: article: Article\n"
+        "  GIVES: label: str\n"
+        "  classify(article=article)\n"
+    )
+    parsed = resolve_imports(tmp_path / "main.clio")
+    graph = build_ir(parsed, entry=(tmp_path / "main.clio").resolve())
+    step_names = {s.name for s in graph.steps}
+    # Internal STEP from my.lib.clio must be alpha-renamed with dots → underscores
+    assert any(name.startswith("my_lib__") for name in step_names)
+    # No dot must appear in any step name
+    assert all("." not in name for name in step_names)
+
+
 def test_e_mcp_001_mcp_target_without_expose(tmp_path: Path) -> None:
     """target: mcp-server with no EXPOSE FLOW in the entry file is
     rejected by E_MCP_001."""
