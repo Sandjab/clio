@@ -1030,6 +1030,77 @@ def test_test_with_kwargs_match_first_step_takes():
 
 
 # ---------------------------------------------------------------------------
+# v0.16 — TEST WITH / EXPECTS type-checked against declared FLOW signature
+# ---------------------------------------------------------------------------
+
+def test_test_with_unknown_kwarg_against_declared_takes_rejected():
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW p\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  s(x=x)\n"
+        "\n"
+        "TEST t:\n"
+        "  FLOW: p\n"
+        "  WITH:\n"
+        '    not_there: "oops"\n'
+        "  EXPECTS:\n"
+        "    y: not_empty\n"
+    )
+    with pytest.raises(IRBuildError, match="not_there"):
+        build_ir(parse(src))
+
+
+def test_test_expects_unknown_root_against_declared_gives_rejected():
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW p\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  s(x=x)\n"
+        "\n"
+        "TEST t:\n"
+        "  FLOW: p\n"
+        "  WITH:\n"
+        '    x: "hi"\n'
+        "  EXPECTS:\n"
+        "    not_there: not_empty\n"
+    )
+    with pytest.raises(IRBuildError, match="not_there"):
+        build_ir(parse(src))
+
+
+def test_test_without_flow_signature_skips_type_check_v0_15_backcompat():
+    """v0.15 behaviour preserved when FLOW does not declare TAKES/GIVES."""
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW p\n"
+        "  s(x=x)\n"
+        "\n"
+        "TEST t:\n"
+        "  FLOW: p\n"
+        "  WITH:\n"
+        '    anything: "goes"\n'
+        "  EXPECTS:\n"
+        "    y: not_empty\n"
+    )
+    build_ir(parse(src))    # no exception expected
+
+
+# ---------------------------------------------------------------------------
 # v0.16 — FLOW.TAKES seeded into chain scope (closes #21)
 # ---------------------------------------------------------------------------
 

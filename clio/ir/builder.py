@@ -188,7 +188,8 @@ def build_ir(program: Program, flow_name: str | None = None) -> FlowGraph:
                 databases=tuple(_build_database_spec(s) for s in d.databases),
             )
 
-    tests_ir = _build_tests(program, flow_names_seen)
+    flows_by_name = {d.name: d for d in flow_decls}
+    tests_ir = _build_tests(program, flows_by_name)
 
     graph = FlowGraph(
         steps=tuple(steps_by_name.values()),
@@ -203,13 +204,18 @@ def build_ir(program: Program, flow_name: str | None = None) -> FlowGraph:
     return graph
 
 
-def _build_tests(program: Program, known_flow_names: set[str]) -> tuple[TestIR, ...]:
+def _build_tests(
+    program: Program,
+    flows_by_name: dict[str, FlowDecl],
+) -> tuple[TestIR, ...]:
     """Validate TEST decls and lower them to TestIR.
 
-    Validation here is intentionally minimal: the referenced FLOW must exist;
-    duplicate test names are rejected. Predicate vs field-type compatibility
-    is left to runtime — kept simple in v0.15 since tests run against a
-    dynamic state dict."""
+    When the target FLOW declares TAKES, WITH kwargs are checked at compile
+    time (name in declared set + Python literal type matches TypeExpr).
+    When the target FLOW declares GIVES, EXPECTS / EXPECTS_NOT field paths
+    are validated at compile time (root in declared set + dotted path
+    resolves through RecordType). When neither is declared, v0.15
+    runtime-only behaviour is preserved."""
     seen: set[str] = set()
     out: list[TestIR] = []
     for d in program.decls:
@@ -220,12 +226,69 @@ def _build_tests(program: Program, known_flow_names: set[str]) -> tuple[TestIR, 
                 f"line {d.line}:{d.col}: duplicate TEST name {d.name!r}"
             )
         seen.add(d.name)
-        if d.flow_name not in known_flow_names:
-            available = ", ".join(sorted(known_flow_names)) or "<none>"
+        if d.flow_name not in flows_by_name:
+            available = ", ".join(sorted(flows_by_name)) or "<none>"
             raise IRBuildError(
                 f"line {d.line}:{d.col}: TEST {d.name!r} references unknown "
                 f"flow {d.flow_name!r} (available: {available})"
             )
+        flow_decl = flows_by_name[d.flow_name]
+
+        # WITH: kwarg validation — only when FLOW declares TAKES.
+        if flow_decl.takes:
+            declared_takes = {f.name: f.type for f in flow_decl.takes}
+            for kw_name, kw_value in d.with_kwargs:
+                if kw_name not in declared_takes:
+                    available = ", ".join(sorted(declared_takes)) or "<none>"
+                    raise IRBuildError(
+                        f"line {d.line}:{d.col}: TEST {d.name!r}: WITH "
+                        f"kwarg {kw_name!r} is not declared in FLOW "
+                        f"{flow_decl.name!r}.TAKES (declared: {available})"
+                    )
+                declared_type = declared_takes[kw_name]
+                if not _literal_matches_type(kw_value, declared_type):
+                    raise IRBuildError(
+                        f"line {d.line}:{d.col}: TEST {d.name!r}: WITH "
+                        f"{kw_name}={kw_value!r} does not match declared type "
+                        f"{_render(declared_type)} in FLOW {flow_decl.name!r}.TAKES"
+                    )
+
+        # EXPECTS / EXPECTS_NOT field path validation — only when FLOW declares GIVES.
+        if flow_decl.gives:
+            declared_gives = {f.name: f.type for f in flow_decl.gives}
+            for clause_name, clauses in (("EXPECTS", d.expects), ("EXPECTS_NOT", d.expects_not)):
+                for field_path, _pred in clauses:
+                    segments = field_path.split(".")
+                    root = segments[0]
+                    if root not in declared_gives:
+                        available = ", ".join(sorted(declared_gives)) or "<none>"
+                        raise IRBuildError(
+                            f"line {d.line}:{d.col}: TEST {d.name!r}: {clause_name} "
+                            f"field path {field_path!r} root {root!r} is not in "
+                            f"FLOW {flow_decl.name!r}.GIVES (declared: {available})"
+                        )
+                    # Walk deeper segments through RecordType; defer ContractRef to runtime.
+                    cursor_type = declared_gives[root]
+                    for seg in segments[1:]:
+                        if isinstance(cursor_type, RecordType):
+                            fields_by_name = dict(cursor_type.fields)
+                            if seg not in fields_by_name:
+                                raise IRBuildError(
+                                    f"line {d.line}:{d.col}: TEST {d.name!r}: "
+                                    f"{clause_name} field path {field_path!r}: "
+                                    f"segment {seg!r} not in record"
+                                )
+                            cursor_type = fields_by_name[seg]
+                        elif isinstance(cursor_type, ContractRef):
+                            # Defer deep field-path validation to runtime.
+                            break
+                        else:
+                            raise IRBuildError(
+                                f"line {d.line}:{d.col}: TEST {d.name!r}: "
+                                f"{clause_name} field path {field_path!r}: cannot "
+                                f"navigate into {_render(cursor_type)}"
+                            )
+
         out.append(TestIR(
             name=d.name,
             flow_name=d.flow_name,
@@ -1429,3 +1492,51 @@ def _render(t: TypeExpr) -> str:
     if isinstance(t, ContractRef):
         return t.name
     return type(t).__name__
+
+
+def _literal_matches_type(value: object, t: TypeExpr) -> bool:
+    """Liberal compatibility check: does the Python value satisfy the
+    declared TypeExpr enough to be a valid TEST WITH-kwarg?
+
+    Strictness rules:
+    - PrimitiveType('int')   → int (rejects bool subclass)
+    - PrimitiveType('float') → int or float (Python convention)
+    - PrimitiveType('str')   → str
+    - PrimitiveType('bool')  → bool
+    - ListType(inner)        → list, every element matches inner
+    - RecordType(fields)     → dict, every declared key present, each value matches
+    - ContractRef(name)      → dict (delegating deep validation to runtime Pydantic)
+    - EnumType(values)       → str in values
+    - ConstrainedType(base)  → matches base (constraints checked at runtime)
+    """
+    if isinstance(t, PrimitiveType):
+        if t.name == "int":
+            return isinstance(value, int) and not isinstance(value, bool)
+        if t.name == "float":
+            return isinstance(value, (int, float)) and not isinstance(value, bool)
+        if t.name == "str":
+            return isinstance(value, str)
+        if t.name == "bool":
+            return isinstance(value, bool)
+        return False
+    if isinstance(t, ListType):
+        if not isinstance(value, list):
+            return False
+        return all(_literal_matches_type(item, t.inner) for item in value)
+    if isinstance(t, RecordType):
+        if not isinstance(value, dict):
+            return False
+        for fname, ftype in t.fields:
+            if fname not in value:
+                return False
+            if not _literal_matches_type(value[fname], ftype):
+                return False
+        return True
+    if isinstance(t, ContractRef):
+        # Compile-time defer: accept any dict (runtime Pydantic catches finer mismatches).
+        return isinstance(value, dict)
+    if isinstance(t, EnumType):
+        return isinstance(value, str) and value in t.values
+    if isinstance(t, ConstrainedType):
+        return _literal_matches_type(value, t.base)
+    return False
