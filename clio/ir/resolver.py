@@ -184,3 +184,37 @@ def compute_exposed_sets(
 
         result[path] = exposed
     return result
+
+
+def validate_imports(
+    parsed: dict[Path, Program],
+    exposed_sets: dict[Path, dict[str, object]],
+) -> None:
+    """Phase 4: every FROM ... IMPORT X resolves to an exposed symbol.
+
+    Distinguishes:
+      E_RES_003 — symbol is declared in the target file but not exposed.
+      E_RES_004 — symbol is not declared in the target file at all.
+    """
+    for path, program in parsed.items():
+        for imp in program.imports:
+            child = (path.parent / imp.path).resolve()
+            child_exposed = exposed_sets.get(child, {})
+            child_program = parsed.get(child)
+            all_declared: set[str] = set()
+            if child_program is not None:
+                for d in child_program.decls:
+                    if isinstance(d, (FlowDecl, ContractDecl)):
+                        all_declared.add(d.name)
+            for item in imp.items:
+                if item.name in child_exposed:
+                    continue
+                if item.name in all_declared:
+                    raise CompileError(
+                        f"{path}:{item.line}:{item.col}: "
+                        f"{item.name!r} is not exposed by {imp.path!r}"
+                    )
+                raise CompileError(
+                    f"{path}:{item.line}:{item.col}: "
+                    f"{item.name!r} not found in {imp.path!r}"
+                )

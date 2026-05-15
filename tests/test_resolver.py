@@ -8,6 +8,7 @@ from clio.ir.resolver import (
     CompileError,
     compute_exposed_sets,
     resolve_imports,
+    validate_imports,
     validate_per_file,
 )
 
@@ -221,3 +222,57 @@ def test_reexport_of_nonimported_name(tmp_path: Path) -> None:
     parsed = resolve_imports(entry)
     with pytest.raises(CompileError, match=r"'NotImported' is not imported"):
         compute_exposed_sets(parsed)
+
+
+# ---------------------------------------------------------------------------
+# validate_imports — Task 7
+# ---------------------------------------------------------------------------
+
+def test_e_res_003_symbol_not_exposed(tmp_path: Path) -> None:
+    """X is declared in lib.clio but NOT marked EXPOSE → E_RES_003."""
+    (tmp_path / "lib.clio").write_text(
+        "CONTRACT X\n"
+        "  SHAPE: {val: str}\n"
+        "STEP noop\n"
+        "  MODE: judgment\n"
+        "  TAKES: val: str\n"
+        "  GIVES: out: str\n"
+    )
+    (tmp_path / "main.clio").write_text(
+        'FROM "./lib.clio" IMPORT X\n'
+        "STEP run\n"
+        "  MODE: judgment\n"
+        "  TAKES: val: str\n"
+        "  GIVES: out: str\n"
+        "EXPOSE FLOW pipeline\n"
+        "  TAKES: val: str\n"
+        "  GIVES: out: str\n"
+        "  run(val=val)\n"
+    )
+    parsed = resolve_imports(tmp_path / "main.clio")
+    exposed_sets = compute_exposed_sets(parsed)
+    with pytest.raises(CompileError, match=r"'X' is not exposed by"):
+        validate_imports(parsed, exposed_sets)
+
+
+def test_e_res_004_symbol_not_found(tmp_path: Path) -> None:
+    """X is not declared in lib.clio at all → E_RES_004."""
+    (tmp_path / "lib.clio").write_text(
+        "EXPOSE CONTRACT Y\n"
+        "  SHAPE: {val: str}\n"
+    )
+    (tmp_path / "main.clio").write_text(
+        'FROM "./lib.clio" IMPORT X\n'
+        "STEP run\n"
+        "  MODE: judgment\n"
+        "  TAKES: val: str\n"
+        "  GIVES: out: str\n"
+        "EXPOSE FLOW pipeline\n"
+        "  TAKES: val: str\n"
+        "  GIVES: out: str\n"
+        "  run(val=val)\n"
+    )
+    parsed = resolve_imports(tmp_path / "main.clio")
+    exposed_sets = compute_exposed_sets(parsed)
+    with pytest.raises(CompileError, match=r"'X' not found in"):
+        validate_imports(parsed, exposed_sets)
