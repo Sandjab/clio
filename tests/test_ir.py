@@ -1069,7 +1069,7 @@ def test_flow_with_declared_takes_disables_autopromote():
         "  TAKES: a: str\n"
         "  s(x=x)\n"
     )
-    with pytest.raises(IRBuildError):
+    with pytest.raises(IRBuildError, match="state reference 'x' not produced"):
         build_ir(parse(src))
 
 
@@ -1104,7 +1104,7 @@ def test_flow_with_declared_takes_rejects_top_level_for_each_over_undeclared():
         "  FOR EACH x IN items:\n"
         "    s(x=x)\n"
     )
-    with pytest.raises(IRBuildError):
+    with pytest.raises(IRBuildError, match="FOR EACH iterates over 'items'"):
         build_ir(parse(src))
 
 

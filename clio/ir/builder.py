@@ -494,33 +494,36 @@ def _build_flow(
 ) -> FlowIR:
     available: dict[str, TypeExpr] = {}
 
-    # v0.16: convert FLOW.TAKES (AST Field) → IR FieldIR + reject duplicates
-    flow_takes_ir: tuple[FieldIR, ...] = tuple(
-        FieldIR(name=f.name, type=f.type) for f in decl.takes
-    )
-    if flow_takes_ir:
+    # Reject duplicate FLOW.TAKES at the AST Field's own source position
+    # so the error points at the offending line/col, matching the rest of
+    # this file's `line {L}:{C}: ...` IRBuildError convention.
+    if decl.takes:
         seen: set[str] = set()
-        for f in flow_takes_ir:
+        for f in decl.takes:
             if f.name in seen:
                 raise IRBuildError(
-                    f"FLOW {decl.name!r} declares duplicate TAKES field "
-                    f"{f.name!r} (line {decl.line})"
+                    f"line {f.line}:{f.col}: FLOW {decl.name!r} "
+                    f"duplicate TAKES field {f.name!r}"
                 )
             seen.add(f.name)
+
+    takes_ir: tuple[FieldIR, ...] = tuple(
+        FieldIR(name=f.name, type=f.type) for f in decl.takes
+    )
+    if takes_ir:
         # Declared TAKES is the single source of truth — seed `available`
-        # directly and DO NOT run the v0.15.1 auto-promote.
-        for f in flow_takes_ir:
+        # directly and DO NOT run the auto-promote.
+        for f in takes_ir:
             available[f.name] = f.type
     else:
-        # v0.15.1 fallback: keep the issue-#19 first-step StepCall auto-promote
-        # exactly as before. Issue #19: auto-promote the first step's identifier
-        # kwargs that don't match an upstream produced field as FLOW-level inputs.
-        # They are passed at runtime via `run(**initial)` and seeded into
-        # `state[]`, so the IR builder must accept them here even though no prior
-        # step produced them. Only the FIRST step gets this treatment — every
-        # later call still strictly validates against produced fields. Type is
-        # taken from the matching TAKES entry on the first step so downstream
-        # type-checks work.
+        # Issue #19: auto-promote the first step's identifier kwargs that
+        # don't match an upstream produced field as FLOW-level inputs. They
+        # are passed at runtime via `run(**initial)` and seeded into
+        # `state[]`, so the IR builder must accept them here even though no
+        # prior step produced them. Only the FIRST step gets this treatment
+        # — every later call still strictly validates against produced
+        # fields. Type is taken from the matching TAKES entry on the first
+        # step so downstream type-checks work.
         if decl.chain and isinstance(decl.chain[0], StepCall):
             first = decl.chain[0]
             first_step = steps_by_name.get(first.name)
@@ -562,7 +565,7 @@ def _build_flow(
         chain=tuple(items),
         rescues=rescues_ir,
         line=decl.line,
-        takes=flow_takes_ir,
+        takes=takes_ir,
         gives=(),    # populated by Task 6
     )
 
