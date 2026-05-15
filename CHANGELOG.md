@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.16.0 — 2026-05-15
+
+Adds optional `TAKES:` / `GIVES:` blocks to `FLOW` declarations, mirroring `STEP`. Shipped as PR #25; closes #21 and #23.
 
 ### Language
 
