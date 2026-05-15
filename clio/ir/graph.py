@@ -368,6 +368,8 @@ class FlowIR:
     chain: "tuple[CallIR | ForEachIR | IfBlockIR | MatchBlockIR | WhileBlockIR, ...]"
     rescues: "tuple[RescueBlockIR, ...]"
     line: int
+    takes: tuple[FieldIR, ...] = ()      # v0.16 — empty = not declared
+    gives: tuple[FieldIR, ...] = ()      # v0.16 — empty = not declared
 
 
 @dataclass(frozen=True)
