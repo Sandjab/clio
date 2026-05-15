@@ -788,6 +788,46 @@ The declared `TAKES:` makes `articles` a first-class external input. `run(articl
 
 A complete worked example lives at `examples/flow_signature.clio`.
 
+## 20. Composing FLOWs (v0.17+)
+
+A signed FLOW (`TAKES` + `GIVES`) is callable as a step in another FLOW. The compiler resolves a call by name in this order: STEP first, then signed FLOW. Unsigned flows are not callable as sub-flows. Sub-flows can be invoked inside `FOR EACH PARALLEL`, lifting the v0.16 "exactly one step call" restriction — the v0.17 killer pattern.
+
+```clio
+STEP fetch_article
+  TAKES:   url:     str
+  GIVES:   article: str
+  MODE:    exact
+
+STEP summarize
+  TAKES:   article: str
+  GIVES:   summary: str
+  MODE:    judgment
+
+FLOW enrich
+  TAKES:   url:     str
+  GIVES:   summary: str
+  fetch_article(url=url) -> summarize(article=article)
+
+FLOW batch
+  TAKES:   urls: List<str>
+  FOR EACH u IN urls PARALLEL AS results:
+    enrich(url=u)
+```
+
+Inside `batch`, each iteration runs `enrich` concurrently. The collector `results` accumulates a list of the sub-flow's GIVES dicts — for a single-GIVES sub-flow the publish type is `List<<gives.type>>` (so a parent flow can declare `GIVES: results: List<str>` consistent with this). For multi-GIVES sub-flows, the collector still exists at runtime as `list[dict]` but no parent type can claim it (the compiler does not yet validate that shape).
+
+**Encapsulated RESCUE.** A sub-flow's `RESCUE` handler is local to that sub-flow's chain — it does not bubble up into the parent's RESCUE scope. Each sub-flow brings its own failure-handling.
+
+**Limitations (v0.17):**
+
+- **Unsigned flows are not callable.** A sub-flow MUST declare both `TAKES` and `GIVES`. An unsigned FLOW can still be the program's main flow but cannot be invoked from another flow.
+- **Recursion and cycles are rejected at compile time.** Calling itself directly or transitively raises `IRBuildError`.
+- **`target: claude-cli` is not supported.** The slash-command runtime rejects any FlowCallIR with a deferred-target message — use `--target python` or `--target mcp-server` for FLOW composition today.
+- **`target: langgraph` cannot host `FOR EACH PARALLEL` bodies.** This is a pre-existing FOR EACH limitation, not a sub-flow one — a sub-flow called sequentially (no FOR EACH) compiles to langgraph cleanly.
+- **Cross-file imports are deferred.** All sub-flows must live in the same `.clio` source.
+
+A complete worked example with three flows (sub-flow, sequential composition, parallel composition) lives at `examples/flow_composition.clio`.
+
 ## What's not in the cookbook (yet)
 
 - **Multi-field ASSERT** — accept `a > b` between two fields. Specced, planned.

@@ -1,0 +1,49 @@
+# v0.17 — FLOW composition.
+#
+# A signed sub-flow (TAKES + GIVES) is callable as a step inside another
+# FLOW, including inside a FOR EACH PARALLEL body — that lifts the v0.16
+# "exactly one step" restriction (issue #24). Each iteration runs the
+# sub-flow concurrently; the collector accumulates the sub-flow's GIVES
+# dicts into a list.
+#
+# Three flows in one file:
+#   * `enrich` — the reusable sub-flow (fetch + summarize per URL).
+#   * `single` — calls `enrich` once. Compiles to every target (incl.
+#                claude-skill and langgraph; langgraph can't model FOR
+#                EACH yet, so this is the only entrypoint it accepts).
+#   * `batch`  — calls `enrich` inside FOR EACH PARALLEL. The v0.17
+#                killer pattern. Compiles to python, mcp-server, and
+#                claude-skill (which serializes iterations).
+#
+# claude-cli rejects every flow in this file because v0.17 FLOW
+# composition is not yet supported on the slash-command runtime.
+
+STEP fetch_article
+  TAKES:   url:     str
+  GIVES:   article: str
+  MODE:    exact
+
+STEP summarize
+  TAKES:   article: str
+  GIVES:   summary: str
+  MODE:    judgment
+  CACHE:   ttl(1d)
+
+FLOW enrich
+  TAKES:   url:     str
+  GIVES:   summary: str
+  fetch_article(url=url) -> summarize(article=article)
+
+FLOW single
+  TAKES:   url:     str
+  GIVES:   summary: str
+  enrich(url=url)
+
+FLOW batch
+  TAKES:   urls:    List<str>
+  FOR EACH u IN urls PARALLEL AS results:
+    enrich(url=u)
+
+RESOURCES
+  target: python
+  models: [haiku, sonnet]
