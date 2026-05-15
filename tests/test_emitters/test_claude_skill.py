@@ -90,14 +90,29 @@ def test_frontmatter_uses_flow_description_when_present(tmp_path):
     assert front["description"] == graph.flow.description.strip()
 
 
-def test_detect_skill_language_handles_uppercase_french_diacritics():
-    """Issue #40 — `detect_skill_language` must recognise both lowercase
-    AND uppercase French diacritics. Before the fix, the marker set
-    `set("éèàçôîêûïü")` was lowercase-only; a description opening with a
-    capital diacritic like `Évaluer le risque` (a natural French sentence
-    opener) was silently classified as English. The dedicated import is
-    inside the test body so this stays a pure unit assertion of the
-    heuristic, independent of full emission."""
+@pytest.mark.parametrize(
+    "description",
+    [
+        # Capital first-letter diacritics (issue #40 — pre-fix all classified as EN)
+        "Évaluer le risque de churn.",
+        "Être ou ne pas être, telle est la question.",
+        "Âme et conscience d'un système.",
+        # Marker expansion (Gemini PR #42 medium feedback)
+        "Château pour évasion estivale.",  # â
+        "Où dois-je router cette requête ?",  # ù
+        "Noël arrive bientôt et bouscule l'agenda.",  # ë
+        # Lowercase baseline (was already working pre-#40)
+        "évaluer le risque de churn.",
+    ],
+)
+def test_detect_skill_language_handles_french_diacritics(description: str):
+    """Issue #40 + Gemini PR #42 feedback — `detect_skill_language` must
+    recognise both lowercase AND uppercase French diacritics, and cover
+    the common letters that appear at sentence start in natural French
+    (`É`, `Ê`, `Â`) plus the diacritics that mark uniquely French words
+    (`ù` in `où`, `ë` in `Noël`)."""
+    import pytest  # noqa: F401 — silence unused-import warning if collected without param
+
     from clio.emitters._claude_skill_helpers import detect_skill_language
 
     src = (
@@ -107,14 +122,14 @@ def test_detect_skill_language_handles_uppercase_french_diacritics():
         "  MODE: exact\n"
         "\n"
         "FLOW pipeline\n"
-        '  DESCRIPTION: "Évaluer le risque de churn."\n'
+        f'  DESCRIPTION: "{description}"\n'
         '  s(x="hi")\n'
     )
     graph = build_ir(parse(src))
     assert detect_skill_language(graph) == "fr", (
-        "FR must be detected from a description opening with a capital "
-        "diacritic (`É`); got `en`. The heuristic's marker set must include "
-        "uppercase variants `ÉÈÀÇÔÎÊÛÏÜ` (or normalise via `text.lower()`)."
+        f"FR must be detected from {description!r}; got `en`. The heuristic "
+        "must either case-fold the samples (issue #40 fix) or include uppercase "
+        "and broader-coverage markers (PR #42 expansion)."
     )
 
 
