@@ -967,14 +967,15 @@ def emit_parallel_for_each_python(
     scope_local = {elem.loop_var}
     kw_parts: list[str] = []
     for name, value in inner.kwargs:
+        py_name = _to_field_name(name)
         if isinstance(value, str) and value.startswith("@"):
             ref = value[1:]
             if ref in scope_local:
-                kw_parts.append(f"{name}={ref}")
+                kw_parts.append(f"{py_name}={ref}")
             else:
-                kw_parts.append(f"{name}=state[{ref!r}]")
+                kw_parts.append(f"{py_name}=state[{ref!r}]")
         else:
-            kw_parts.append(f"{name}={value!r}")
+            kw_parts.append(f"{py_name}={value!r}")
     kwargs_str = ", ".join(kw_parts)
 
     if isinstance(inner, CallIR):

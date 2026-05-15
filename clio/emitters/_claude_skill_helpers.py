@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 
+from clio.emitters._shared_utils import _to_field_name
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
     BoolOpIR,
@@ -154,12 +155,16 @@ def render_exact_script(step: StepIR, contracts_by_name: dict, idx: int) -> str:
     )
 
     # Build the parameter unpacking lines for the step function call.
+    # `_to_field_name` sanitizes Python keywords in identifier positions
+    # (local var LHS, kwarg LHS); dict-key positions keep the original.
     if step.takes:
         param_lines = "\n".join(
-            f"    {t.name} = state.get({step.name!r}, {{}}).get({t.name!r})"
+            f"    {_to_field_name(t.name)} = state.get({step.name!r}, {{}}).get({t.name!r})"
             for t in step.takes
         )
-        call_kwargs = ", ".join(f"{t.name}={t.name}" for t in step.takes)
+        call_kwargs = ", ".join(
+            f"{_to_field_name(t.name)}={_to_field_name(t.name)}" for t in step.takes
+        )
         call_expr = f"result = {step.name}({call_kwargs})"
     else:
         param_lines = "    # no TAKES"
@@ -188,7 +193,7 @@ def render_exact_script(step: StepIR, contracts_by_name: dict, idx: int) -> str:
         f"import sys\n"
         f"\n"
         f"\n"
-        f"def {step.name}({', '.join(t.name for t in step.takes)}):\n"
+        f"def {step.name}({', '.join(_to_field_name(t.name) for t in step.takes)}):\n"
         f'    """Implement the body of STEP {step.name} here.\n'
         f"\n"
         f"    TAKES:\n"
