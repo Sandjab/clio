@@ -374,7 +374,7 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
             elif isinstance(value, str) and value.startswith("@"):
                 ref = value[1:]
                 if ref in scope_local:
-                    kw_parts.append(f"{py_name}={ref}")
+                    kw_parts.append(f"{py_name}={_to_field_name(ref)}")
                 else:
                     kw_parts.append(f"{py_name}=state[{ref!r}]")
             else:
@@ -454,7 +454,7 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
                 if item.collection in scope_local
                 else f"state[{item.collection!r}]"
             )
-            chain_lines.append(f"{indent}for {item.loop_var} in {source}:")
+            chain_lines.append(f"{indent}for {_to_field_name(item.loop_var)} in {source}:")
             inner_scope = scope_local | {item.loop_var}
             inner_indent = indent + "    "
             if not item.body:
@@ -730,7 +730,7 @@ def _emit_flow_module_async_multi(graph: FlowGraph) -> str:
             elif isinstance(value, str) and value.startswith("@"):
                 ref = value[1:]
                 if ref in scope_local:
-                    kw_parts.append(f"{py_name}={ref}")
+                    kw_parts.append(f"{py_name}={_to_field_name(ref)}")
                 else:
                     kw_parts.append(f"{py_name}=state[{ref!r}]")
             else:
@@ -780,7 +780,7 @@ def _emit_flow_module_async_multi(graph: FlowGraph) -> str:
             if isinstance(value, str) and value.startswith("@"):
                 ref = value[1:]
                 if ref in scope_local:
-                    kw_parts.append(f"{py_name}={ref}")
+                    kw_parts.append(f"{py_name}={_to_field_name(ref)}")
                 else:
                     kw_parts.append(f"{py_name}=state[{ref!r}]")
             else:
@@ -815,7 +815,7 @@ def _emit_flow_module_async_multi(graph: FlowGraph) -> str:
                 if item.collection in scope_local
                 else f"state[{item.collection!r}]"
             )
-            chain_lines.append(f"{indent}for {item.loop_var} in {source}:")
+            chain_lines.append(f"{indent}for {_to_field_name(item.loop_var)} in {source}:")
             inner_scope = scope_local | {item.loop_var}
             inner_indent = indent + "    "
             if not item.body:
@@ -996,7 +996,7 @@ def emit_parallel_for_each_mcp(
         if isinstance(value, str) and value.startswith("@"):
             ref = value[1:]
             if ref in scope_local:
-                kw_parts.append(f"{py_name}={ref}")
+                kw_parts.append(f"{py_name}={_to_field_name(ref)}")
             else:
                 kw_parts.append(f"{py_name}=state[{ref!r}]")
         else:
@@ -1033,7 +1033,7 @@ def emit_parallel_for_each_mcp(
     return (
         f"{indent}_items = {items_lookup}\n"
         f"{indent}_sem = asyncio.Semaphore(10)\n"
-        f"{indent}async def {bound_name}({elem.loop_var}):\n"
+        f"{indent}async def {bound_name}({_to_field_name(elem.loop_var)}):\n"
         f"{indent}    async with _sem:\n"
         f"{indent}        return {call_expr}\n"
         f'{indent}_log.emit("parallel_block_start", {unit_kv}, '

@@ -971,7 +971,7 @@ def emit_parallel_for_each_python(
         if isinstance(value, str) and value.startswith("@"):
             ref = value[1:]
             if ref in scope_local:
-                kw_parts.append(f"{py_name}={ref}")
+                kw_parts.append(f"{py_name}={_to_field_name(ref)}")
             else:
                 kw_parts.append(f"{py_name}=state[{ref!r}]")
         else:
@@ -993,6 +993,7 @@ def emit_parallel_for_each_python(
 
     # The collection always lives in state for a parallel FOR EACH.
     items_lookup = f"state[{elem.collection!r}]"
+    py_loop_var = _to_field_name(elem.loop_var)
 
     return (
         f"{indent}_items = {items_lookup}\n"
@@ -1002,11 +1003,11 @@ def emit_parallel_for_each_python(
         f"{indent}_pblock_t0 = time.monotonic()\n"
         f"{indent}_pblock_success = False\n"
         f"{indent}try:\n"
-        f"{indent}    def _task({elem.loop_var}):\n"
+        f"{indent}    def _task({py_loop_var}):\n"
         f"{indent}        return {body_call_expr}\n"
         f"{indent}    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as _ex:\n"
-        f"{indent}        _futures = {{_ex.submit(contextvars.copy_context().run, _task, {elem.loop_var}): _i "
-        f"for _i, {elem.loop_var} in enumerate(_items)}}\n"
+        f"{indent}        _futures = {{_ex.submit(contextvars.copy_context().run, _task, {py_loop_var}): _i "
+        f"for _i, {py_loop_var} in enumerate(_items)}}\n"
         f"{indent}        for _fut in concurrent.futures.as_completed(_futures):\n"
         f"{indent}            _idx = _futures[_fut]\n"
         f"{indent}            _results[_idx] = _fut.result()\n"

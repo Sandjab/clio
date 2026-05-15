@@ -609,7 +609,7 @@ class PythonEmitter(BaseEmitter):
                 elif isinstance(value, str) and value.startswith("@"):
                     ref = value[1:]
                     if ref in scope_local:
-                        kw_parts.append(f"{py_name}={ref}")
+                        kw_parts.append(f"{py_name}={_to_field_name(ref)}")
                     else:
                         kw_parts.append(f"{py_name}=state[{ref!r}]")
                 else:
@@ -666,7 +666,7 @@ class PythonEmitter(BaseEmitter):
                 if isinstance(value, str) and value.startswith("@"):
                     ref = value[1:]
                     if ref in scope_local:
-                        kw_parts.append(f"{py_name}={ref}")
+                        kw_parts.append(f"{py_name}={_to_field_name(ref)}")
                     else:
                         kw_parts.append(f"{py_name}=state[{ref!r}]")
                 else:
@@ -721,7 +721,7 @@ class PythonEmitter(BaseEmitter):
                     if item.collection in scope_local
                     else f"state[{item.collection!r}]"
                 )
-                _current.append(f"{indent}for {item.loop_var} in {source}:")
+                _current.append(f"{indent}for {_to_field_name(item.loop_var)} in {source}:")
                 inner_scope = scope_local | {item.loop_var}
                 inner_indent = indent + "    "
                 if not item.body:
