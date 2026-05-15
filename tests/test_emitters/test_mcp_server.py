@@ -1001,3 +1001,41 @@ def test_mcp_called_subflow_is_not_exposed(tmp_path):
     # `helper` should be present as an orchestrator function in flow.py.
     flow_py = (proj / "flow.py").read_text()
     assert "async def helper(" in flow_py or "def helper(" in flow_py
+
+
+def test_mcp_parallel_foreach_with_subflow_body(tmp_path):
+    """v0.17 — PARALLEL FOR EACH body can be a signed sub-flow. Each iteration
+    awaits the sub-flow function defined in the same module (issue #24)."""
+    src = (
+        "STEP greet\n"
+        "  TAKES: name: str\n"
+        "  GIVES: msg:  str\n"
+        "  MODE: exact\n"
+        "\n"
+        "FLOW enrich\n"
+        "  TAKES: name: str\n"
+        "  GIVES: msg:  str\n"
+        "  greet(name=name)\n"
+        "\n"
+        "FLOW batch\n"
+        "  TAKES: names: List<str>\n"
+        "  FOR EACH n IN names PARALLEL AS results:\n"
+        "    enrich(name=n)\n"
+        "\n"
+        "RESOURCES\n"
+        "  target: mcp-server\n"
+    )
+    g = build_ir(parse(src), flow_name="batch")
+    MCPServerEmitter().emit(g, tmp_path)
+    proj = next(p for p in tmp_path.iterdir() if p.is_dir())
+    flow_py = (proj / "flow.py").read_text()
+    # The sub-flow function is async-defined in-module.
+    assert "async def enrich(" in flow_py
+    # The parallel block awaits the sub-flow per item, threading _session.
+    assert "await enrich(_session=_session, name=n)" in flow_py
+    # asyncio.gather is still used (same parallel skeleton).
+    assert "asyncio.gather" in flow_py
+    # The collector lands in state.
+    assert "state['results']" in flow_py
+    # Log events distinguish a sub-flow body via the `flow=` key.
+    assert "flow='enrich'" in flow_py

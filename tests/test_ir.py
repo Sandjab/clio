@@ -545,7 +545,7 @@ def test_ir_rejects_parallel_multi_step_body():
         "         a(x=item)\n"
         "           -> b(y)\n"
     )
-    with pytest.raises(ValueError, match="must contain exactly one step call"):
+    with pytest.raises(ValueError, match="must contain exactly one step or sub-flow call"):
         build_ir(parse(src))
 
 

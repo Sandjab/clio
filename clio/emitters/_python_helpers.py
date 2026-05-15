@@ -22,6 +22,7 @@ from clio.ir.graph import (
     ContractIR,
     DatabaseSpecIR,
     FileBodyIR,
+    FlowCallIR,
     ForEachIR,
     FormBodyIR,
     HttpServerSpecIR,
@@ -939,24 +940,26 @@ def emit_parallel_for_each_python(
 ) -> str:
     """Emit a ThreadPoolExecutor block for a parallel FOR EACH (python target).
 
-    The body is guaranteed (by IR validation) to be a single CallIR with a
-    GIVES. Default cap is 10. Failure semantics: ThreadPoolExecutor's `with`
+    v0.17 — the body is either:
+      * a CallIR whose step has a GIVES (each task returns the step's value;
+        the collector list contains the per-iteration GIVES values), or
+      * a FlowCallIR onto a signed sub-flow (each task invokes the sub-flow's
+        `run_<name>` and returns its GIVES dict; the collector contains
+        list[dict[str, ...]] of the sub-flow's GIVES).
+
+    Default cap is 10. Failure semantics: ThreadPoolExecutor's `with`
     exit cancels queued futures; in-flight tasks finish; the first
     `_fut.result()` to raise propagates.
 
     Each task is wrapped in contextvars.copy_context().run(...) so the
     _current_flow ContextVar set by run() propagates into worker threads.
-    Without this wrapping, in-block step events would lack the 'flow' field
-    because ThreadPoolExecutor workers don't inherit the parent's
-    ContextVar copy by default.
 
     The block is bracketed by parallel_block_start/parallel_block_end events;
     the end event is emitted in a finally clause and reports duration_ms +
-    success.
+    success. The event carries `step=<name>` for a step body and `flow=<name>`
+    for a sub-flow body so consumers can distinguish them.
     """
     inner = elem.body[0]
-    assert isinstance(inner, CallIR)  # IR builder enforces
-    step = steps_by_name[inner.step_name]
 
     # Render kwargs using the @-prefix disambiguation. Loop var is in scope.
     scope_local = {elem.loop_var}
@@ -972,20 +975,32 @@ def emit_parallel_for_each_python(
             kw_parts.append(f"{name}={value!r}")
     kwargs_str = ", ".join(kw_parts)
 
+    if isinstance(inner, CallIR):
+        step = steps_by_name[inner.step_name]
+        unit_kv = f"step={step.name!r}"
+        body_call_expr = f"{step.name}_mod.{step.name}({kwargs_str})"
+    elif isinstance(inner, FlowCallIR):
+        unit_kv = f"flow={inner.flow_name!r}"
+        body_call_expr = f"run_{inner.flow_name}({kwargs_str})"
+    else:
+        raise AssertionError(
+            f"unreachable: PARALLEL FOR EACH body must be CallIR or "
+            f"FlowCallIR, got {type(inner).__name__}"
+        )
+
     # The collection always lives in state for a parallel FOR EACH.
     items_lookup = f"state[{elem.collection!r}]"
-    step_call = f"{step.name}_mod.{step.name}"
 
     return (
         f"{indent}_items = {items_lookup}\n"
         f"{indent}_results = [None] * len(_items)\n"
-        f'{indent}_log.emit("parallel_block_start", step={step.name!r}, '
+        f'{indent}_log.emit("parallel_block_start", {unit_kv}, '
         f"collector={elem.collector!r}, total_iterations=len(_items), max_workers=10)\n"
         f"{indent}_pblock_t0 = time.monotonic()\n"
         f"{indent}_pblock_success = False\n"
         f"{indent}try:\n"
         f"{indent}    def _task({elem.loop_var}):\n"
-        f"{indent}        return {step_call}({kwargs_str})\n"
+        f"{indent}        return {body_call_expr}\n"
         f"{indent}    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as _ex:\n"
         f"{indent}        _futures = {{_ex.submit(contextvars.copy_context().run, _task, {elem.loop_var}): _i "
         f"for _i, {elem.loop_var} in enumerate(_items)}}\n"
@@ -995,7 +1010,7 @@ def emit_parallel_for_each_python(
         f"{indent}    state[{elem.collector!r}] = _results\n"
         f"{indent}    _pblock_success = True\n"
         f"{indent}finally:\n"
-        f'{indent}    _log.emit("parallel_block_end", step={step.name!r}, '
+        f'{indent}    _log.emit("parallel_block_end", {unit_kv}, '
         f"collector={elem.collector!r}, total_iterations=len(_items), "
         f"duration_ms=int((time.monotonic() - _pblock_t0) * 1000), success=_pblock_success)"
     )

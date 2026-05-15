@@ -2584,3 +2584,37 @@ def test_python_emits_subflow_as_function_call(tmp_path):
     assert "def run_inner" in flow_py
     # The outer chain invokes it.
     assert "run_inner(name=" in flow_py
+
+
+def test_python_parallel_foreach_with_subflow_body(tmp_path):
+    """v0.17 — PARALLEL FOR EACH body can be a signed sub-flow. The collector
+    accumulates the sub-flow's GIVES dicts (issue #24)."""
+    src = (
+        "STEP greet\n"
+        "  TAKES: name: str\n"
+        "  GIVES: msg:  str\n"
+        "  MODE: exact\n"
+        "\n"
+        "FLOW enrich\n"
+        "  TAKES: name: str\n"
+        "  GIVES: msg:  str\n"
+        "  greet(name=name)\n"
+        "\n"
+        "FLOW batch\n"
+        "  TAKES: names: List<str>\n"
+        "  FOR EACH n IN names PARALLEL AS results:\n"
+        "    enrich(name=n)\n"
+    )
+    g = build_ir(parse(src), flow_name="batch")
+    PythonEmitter().emit(g, tmp_path)
+    flow_py = (tmp_path / "batch" / "flow.py").read_text()
+    # The sub-flow function is emitted in-module.
+    assert "def run_enrich" in flow_py
+    # The parallel block invokes the sub-flow per item.
+    assert "return run_enrich(name=n)" in flow_py
+    # ThreadPoolExecutor is still used (same parallel skeleton).
+    assert "ThreadPoolExecutor(max_workers=10)" in flow_py
+    # The collector lands in state.
+    assert "state['results'] = _results" in flow_py
+    # Log events distinguish a sub-flow body via the `flow=` key.
+    assert "flow='enrich'" in flow_py

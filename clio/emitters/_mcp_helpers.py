@@ -440,9 +440,12 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
             if item.parallel:
                 chain_lines.append(emit_parallel_for_each_mcp(item, steps_by_name, indent))
                 inner = item.body[0]
-                assert isinstance(inner, CallIR)  # IR builder enforces
-                if inner.step_name not in imported_steps:
-                    imported_steps.append(inner.step_name)
+                # v0.17: sub-flow body needs no step import (the sub-flow
+                # function is emitted in the same module). Only track step
+                # imports for CallIR bodies.
+                if isinstance(inner, CallIR):
+                    if inner.step_name not in imported_steps:
+                        imported_steps.append(inner.step_name)
                 return
             source = (
                 item.collection
@@ -792,9 +795,10 @@ def _emit_flow_module_async_multi(graph: FlowGraph) -> str:
             if item.parallel:
                 chain_lines.append(emit_parallel_for_each_mcp(item, steps_by_name, indent))
                 inner = item.body[0]
-                assert isinstance(inner, CallIR)
-                if inner.step_name not in imported_steps:
-                    imported_steps.append(inner.step_name)
+                # v0.17: sub-flow body needs no step import.
+                if isinstance(inner, CallIR):
+                    if inner.step_name not in imported_steps:
+                        imported_steps.append(inner.step_name)
                 return
             source = (
                 item.collection
@@ -964,11 +968,13 @@ def emit_parallel_for_each_mcp(
     steps_by_name: dict,
     indent: str,
 ) -> str:
-    """Emit an asyncio.gather block for a parallel FOR EACH (mcp-server target)."""
+    """Emit an asyncio.gather block for a parallel FOR EACH (mcp-server target).
+
+    v0.17 — body is either a CallIR (step body) or a FlowCallIR (sub-flow body).
+    For sub-flows the per-iteration call is `await <flow_name>(...)` and the
+    collector receives `list[dict[str, ...]]` of the sub-flow's GIVES.
+    """
     inner = elem.body[0]
-    assert isinstance(inner, CallIR)  # IR builder enforces
-    step = steps_by_name[inner.step_name]
-    is_judgment = step.mode == "judgment"
 
     scope_local = {elem.loop_var}
     kw_parts: list[str] = []
@@ -983,13 +989,26 @@ def emit_parallel_for_each_mcp(
             kw_parts.append(f"{name}={value!r}")
     kwargs_str = ", ".join(kw_parts)
 
-    if is_judgment:
-        if kwargs_str:
-            call_expr = f"await {step.name}_mod.{step.name}({kwargs_str}, _session=_session)"
+    if isinstance(inner, CallIR):
+        step = steps_by_name[inner.step_name]
+        is_judgment = step.mode == "judgment"
+        if is_judgment:
+            if kwargs_str:
+                call_expr = f"await {step.name}_mod.{step.name}({kwargs_str}, _session=_session)"
+            else:
+                call_expr = f"await {step.name}_mod.{step.name}(_session=_session)"
         else:
-            call_expr = f"await {step.name}_mod.{step.name}(_session=_session)"
+            call_expr = f"{step.name}_mod.{step.name}({kwargs_str})"
+        unit_kv = f"step={step.name!r}"
+    elif isinstance(inner, FlowCallIR):
+        sep = ", " if kwargs_str else ""
+        call_expr = f"await {inner.flow_name}(_session=_session{sep}{kwargs_str})"
+        unit_kv = f"flow={inner.flow_name!r}"
     else:
-        call_expr = f"{step.name}_mod.{step.name}({kwargs_str})"
+        raise AssertionError(
+            f"unreachable: PARALLEL FOR EACH body must be CallIR or "
+            f"FlowCallIR, got {type(inner).__name__}"
+        )
 
     items_lookup = f"state[{elem.collection!r}]"
     bound_name = f"_bound_{elem.collector}"
@@ -1000,7 +1019,7 @@ def emit_parallel_for_each_mcp(
         f"{indent}async def {bound_name}({elem.loop_var}):\n"
         f"{indent}    async with _sem:\n"
         f"{indent}        return {call_expr}\n"
-        f'{indent}_log.emit("parallel_block_start", step={step.name!r}, '
+        f'{indent}_log.emit("parallel_block_start", {unit_kv}, '
         f"collector={elem.collector!r}, total_iterations=len(_items), max_workers=10)\n"
         f"{indent}_pblock_t0 = time.monotonic()\n"
         f"{indent}_pblock_success = False\n"
@@ -1009,7 +1028,7 @@ def emit_parallel_for_each_mcp(
         f"*[{bound_name}(_x) for _x in _items])\n"
         f"{indent}    _pblock_success = True\n"
         f"{indent}finally:\n"
-        f'{indent}    _log.emit("parallel_block_end", step={step.name!r}, '
+        f'{indent}    _log.emit("parallel_block_end", {unit_kv}, '
         f"collector={elem.collector!r}, total_iterations=len(_items), "
         f"duration_ms=int((time.monotonic() - _pblock_t0) * 1000), success=_pblock_success)"
     )

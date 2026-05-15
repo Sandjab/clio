@@ -701,9 +701,12 @@ class PythonEmitter(BaseEmitter):
                 if item.parallel:
                     _current.append(emit_parallel_for_each_python(item, steps_by_name, indent))
                     inner = item.body[0]
-                    assert isinstance(inner, CallIR)  # IR builder enforces
-                    if inner.step_name not in imported_steps:
-                        imported_steps.append(inner.step_name)
+                    # v0.17: a sub-flow body needs no step import (the sub-flow
+                    # function is emitted in the same module). Only register
+                    # step-name imports for CallIR bodies.
+                    if isinstance(inner, CallIR):
+                        if inner.step_name not in imported_steps:
+                            imported_steps.append(inner.step_name)
                     return
                 # FOR EACH item IN collection:
                 #     <body>

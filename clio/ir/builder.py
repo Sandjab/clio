@@ -995,12 +995,20 @@ def _build_flow_items(
             )
             out.append(foreach_ir)
             # PARALLEL FOR EACH with a collector makes List<body.gives.type> available.
+            # v0.17: a sub-flow body publishes List<sub_flow.gives.type> when the
+            # sub-flow has a single GIVES; multi-GIVES sub-flows defer publishing
+            # (the collector still exists at runtime as a list[dict] but no
+            # parent type-check can rely on it).
             if foreach_ir.parallel and foreach_ir.collector and len(foreach_ir.body) == 1:
                 body_call = foreach_ir.body[0]
-                if hasattr(body_call, "step_name"):
+                if isinstance(body_call, CallIR):
                     body_step = steps_by_name.get(body_call.step_name)
                     if body_step is not None and body_step.gives is not None:
                         available[foreach_ir.collector] = ListType(inner=body_step.gives.type)
+                elif isinstance(body_call, FlowCallIR):
+                    sub_sig = flow_sigs.get(body_call.flow_name)
+                    if sub_sig is not None and len(sub_sig.gives) == 1:
+                        available[foreach_ir.collector] = ListType(inner=sub_sig.gives[0].type)
             continue
         if isinstance(item, IfBlock):
             out.append(_build_if_block(
@@ -1488,6 +1496,8 @@ def _validate_parallel_for_each(graph: FlowGraph) -> None:
         return
 
     steps_by_name = {s.name: s for s in graph.steps}
+    # v0.17 — FlowCallIR body lookup (validates the called sub-flow declares GIVES).
+    flows_by_name = {f.name: f for f in graph.flows}
 
     # Track state-field names populated upstream so we can detect collector collisions.
     populated: set[str] = set()
@@ -1537,10 +1547,31 @@ def _validate_parallel_for_each(graph: FlowGraph) -> None:
                 if len(elem.body) != 1:
                     raise IRBuildError(
                         f"FOR EACH PARALLEL body must contain exactly one "
-                        f"step call in v1 (line {elem.line})"
+                        f"step or sub-flow call in v1 (line {elem.line})"
                     )
                 inner = elem.body[0]
-                if not hasattr(inner, "step_name"):
+                if isinstance(inner, CallIR):
+                    step = steps_by_name.get(inner.step_name)
+                    if step is None or step.gives is None:
+                        raise IRBuildError(
+                            f"FOR EACH PARALLEL body step "
+                            f"{inner.step_name!r} must have a GIVES "
+                            f"(line {elem.line})"
+                        )
+                elif isinstance(inner, FlowCallIR):
+                    # v0.17 — sub-flow call as the body. The sub-flow must be
+                    # signed (declares GIVES); the IR builder already enforces
+                    # signature presence when resolving FlowCallIR, so we only
+                    # need a defensive lookup here. The collector receives a
+                    # list of the sub-flow's GIVES dicts at runtime.
+                    sub = flows_by_name.get(inner.flow_name)
+                    if sub is None or not sub.gives:
+                        raise IRBuildError(
+                            f"FOR EACH PARALLEL body sub-flow "
+                            f"{inner.flow_name!r} must declare GIVES "
+                            f"(line {elem.line})"
+                        )
+                else:
                     if hasattr(inner, "parallel") and inner.parallel:
                         raise IRBuildError(
                             f"FOR EACH PARALLEL cannot be nested inside another "
@@ -1549,13 +1580,6 @@ def _validate_parallel_for_each(graph: FlowGraph) -> None:
                     raise IRBuildError(
                         f"FOR EACH PARALLEL cannot contain nested FOR EACH "
                         f"in v1 (line {elem.line})"
-                    )
-                step = steps_by_name.get(inner.step_name)
-                if step is None or step.gives is None:
-                    raise IRBuildError(
-                        f"FOR EACH PARALLEL body step "
-                        f"{inner.step_name!r} must have a GIVES "
-                        f"(line {elem.line})"
                     )
                 if elem.collector in populated:
                     raise IRBuildError(
