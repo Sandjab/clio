@@ -13,10 +13,13 @@ from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
     CallIR,
     ErrorAccessIR,
+    FlowCallIR,
     FlowGraph,
+    FlowIR,
     ForEachIR,
     IfBlockIR,
     MatchBlockIR,
+    RescueBlockIR,
     ResumeIR,
     StepIR,
     WhileBlockIR,
@@ -122,12 +125,14 @@ def _emit_main_module(pkg_name: str) -> str:
     )
 
 
-def _first_step_of_flow(graph: FlowGraph) -> StepIR | None:
-    """Returns the StepIR for the first CallIR in the flow chain, or None."""
-    if graph.flow is None:
+def _first_step_of_flow(graph: FlowGraph, flow: FlowIR | None = None) -> StepIR | None:
+    """Returns the StepIR for the first CallIR in `flow`'s chain (defaults to
+    `graph.flow`), or None."""
+    target = flow if flow is not None else graph.flow
+    if target is None:
         return None
     by_name = {s.name: s for s in graph.steps}
-    for elem in graph.flow.chain:
+    for elem in target.chain:
         if isinstance(elem, CallIR):
             return by_name.get(elem.step_name)
         if isinstance(elem, ForEachIR):
@@ -137,9 +142,11 @@ def _first_step_of_flow(graph: FlowGraph) -> StepIR | None:
     return None
 
 
-def _last_step_of_flow(graph: FlowGraph) -> StepIR | None:
-    """Returns the StepIR for the last CallIR in the flow chain, or None."""
-    if graph.flow is None:
+def _last_step_of_flow(graph: FlowGraph, flow: FlowIR | None = None) -> StepIR | None:
+    """Returns the StepIR for the last CallIR in `flow`'s chain (defaults to
+    `graph.flow`), or None."""
+    target = flow if flow is not None else graph.flow
+    if target is None:
         return None
     by_name = {s.name: s for s in graph.steps}
     last_call: CallIR | None = None
@@ -152,7 +159,7 @@ def _last_step_of_flow(graph: FlowGraph) -> StepIR | None:
             elif isinstance(elem, ForEachIR):
                 _walk(elem.body)
 
-    _walk(graph.flow.chain)
+    _walk(target.chain)
     return by_name.get(last_call.step_name) if last_call else None
 
 
@@ -175,18 +182,19 @@ def _declared_field_schema(t, contracts_by_name: dict) -> dict | None:
         return None
 
 
-def _output_schema_for_flow(graph: FlowGraph) -> dict | None:
+def _output_schema_for_flow(graph: FlowGraph, flow: FlowIR | None = None) -> dict | None:
+    target = flow if flow is not None else graph.flow
     # v0.16: prefer declared FLOW.GIVES when present.
-    if graph.flow is not None and graph.flow.gives:
+    if target is not None and target.gives:
         contracts_by_name = {c.name: c for c in graph.contracts}
 
-        if len(graph.flow.gives) == 1:
-            return _declared_field_schema(graph.flow.gives[0].type, contracts_by_name)
+        if len(target.gives) == 1:
+            return _declared_field_schema(target.gives[0].type, contracts_by_name)
 
         # Multi-field GIVES: wrap in an object schema.
         properties = {}
         required = []
-        for f in graph.flow.gives:
+        for f in target.gives:
             schema = _declared_field_schema(f.type, contracts_by_name)
             if schema is not None:
                 properties[f.name] = schema
@@ -194,7 +202,7 @@ def _output_schema_for_flow(graph: FlowGraph) -> dict | None:
         return {"type": "object", "properties": properties, "required": required}
 
     # v0.15 fallback: infer from the last step's GIVES.
-    last = _last_step_of_flow(graph)
+    last = _last_step_of_flow(graph, target)
     if last is None or last.gives is None:
         return None
     t = last.gives.type
@@ -218,14 +226,15 @@ def _output_schema_for_flow(graph: FlowGraph) -> dict | None:
         return None
 
 
-def _input_schema_for_flow(graph: FlowGraph) -> dict:
+def _input_schema_for_flow(graph: FlowGraph, flow: FlowIR | None = None) -> dict:
+    target = flow if flow is not None else graph.flow
     # v0.16: prefer declared FLOW.TAKES when present. Uses the same
     # ContractRef-inlining helper as the output schema for symmetry.
-    if graph.flow is not None and graph.flow.takes:
+    if target is not None and target.takes:
         contracts_by_name = {c.name: c for c in graph.contracts}
         properties = {}
         required = []
-        for f in graph.flow.takes:
+        for f in target.takes:
             schema = _declared_field_schema(f.type, contracts_by_name)
             if schema is not None:
                 properties[f.name] = schema
@@ -233,13 +242,13 @@ def _input_schema_for_flow(graph: FlowGraph) -> dict:
         return {"type": "object", "properties": properties, "required": required}
 
     # v0.15 fallback: infer from the first step's TAKES, with literal-kwarg defaults.
-    first = _first_step_of_flow(graph)
+    first = _first_step_of_flow(graph, target)
     if first is None or not first.takes:
         return {"type": "object", "properties": {}, "required": []}
 
     literal_defaults: dict[str, object] = {}
-    if graph.flow is not None:
-        for elem in graph.flow.chain:
+    if target is not None:
+        for elem in target.chain:
             if isinstance(elem, CallIR) and elem.step_name == first.name:
                 for kw_name, kw_val in elem.kwargs:
                     if not (isinstance(kw_val, str) and kw_val.startswith("@")):
@@ -585,6 +594,368 @@ def _emit_flow_module_async(graph: FlowGraph) -> str:
         "success=_success)\n"
         "        _log.set_flow(None)\n"
         f"{rescue_helpers_block}"
+    )
+
+
+def _emit_server_module_multi(pkg_name: str, graph: FlowGraph) -> str:
+    """v0.17 multi-FLOW server: one Tool entry per exposed FLOW, dispatched by
+    name. Each tool delegates to the corresponding async function in flow.py."""
+    exposed = sorted(graph.exposed_flow_names)
+    flows_by_name = {f.name: f for f in graph.flows}
+
+    tool_entries: list[str] = []
+    dispatch_lines: list[str] = []
+    for flow_name in exposed:
+        flow = flows_by_name[flow_name]
+        schema = _input_schema_for_flow(graph, flow)
+        output_schema = _output_schema_for_flow(graph, flow)
+        output_field = (
+            f"            outputSchema={output_schema!r},\n" if output_schema else ""
+        )
+        tool_entries.append(
+            f"        Tool(\n"
+            f"            name={flow_name!r},\n"
+            f'            description="Auto-generated from FLOW {flow_name}",\n'
+            f"            inputSchema={schema!r},\n"
+            f"{output_field}"
+            f"        )"
+        )
+        dispatch_lines.append(
+            f"    if name == {flow_name!r}:\n"
+            f"        result = await _flow.{flow_name}(_session=ctx.session, **arguments)\n"
+            f'        return [TextContent(type="text", text=json.dumps(result, default=str))]'
+        )
+
+    if not tool_entries:
+        # Every FLOW is called by a sibling — no tools exposed. Emit an empty
+        # server rather than failing, matching the v0.16 "no flow" stub.
+        return (
+            '"""MCP server for this CLIO-compiled package."""\n'
+            "from __future__ import annotations\n"
+            "\n"
+            "from mcp.server.lowlevel import Server\n"
+            "from mcp.types import TextContent, Tool\n"
+            "\n"
+            f"server = Server({pkg_name!r})\n"
+            "\n"
+            "\n"
+            "@server.list_tools()\n"
+            "async def list_tools() -> list[Tool]:\n"
+            "    return []\n"
+            "\n"
+            "\n"
+            "@server.call_tool()\n"
+            "async def call_tool(name: str, arguments: dict) -> list[TextContent]:\n"
+            "    raise ValueError(f'unknown tool: {name}')\n"
+        )
+
+    tools_block = ",\n".join(tool_entries) + ",\n"
+    dispatch_block = "\n".join(dispatch_lines)
+    return (
+        '"""MCP server for this CLIO-compiled package."""\n'
+        "from __future__ import annotations\n"
+        "\n"
+        "import json\n"
+        "\n"
+        "from mcp.server.lowlevel import Server\n"
+        "from mcp.types import TextContent, Tool\n"
+        "\n"
+        "from . import flow as _flow\n"
+        "\n"
+        f"server = Server({pkg_name!r})\n"
+        "\n"
+        "\n"
+        "@server.list_tools()\n"
+        "async def list_tools() -> list[Tool]:\n"
+        "    return [\n"
+        f"{tools_block}"
+        "    ]\n"
+        "\n"
+        "\n"
+        "@server.call_tool()\n"
+        "async def call_tool(name: str, arguments: dict) -> list[TextContent]:\n"
+        "    ctx = server.request_context\n"
+        f"{dispatch_block}\n"
+        "    raise ValueError(f'unknown tool: {name}')\n"
+    )
+
+
+def _emit_flow_module_async_multi(graph: FlowGraph) -> str:
+    """v0.17 multi-FLOW flow.py: one async function per FLOW in `graph.flows`.
+
+    Each function chains its own steps, handles its own RESCUE blocks, and
+    returns either its declared GIVES (when signed) or the full state. Sub-flow
+    calls compile to `state.update(await <name>(...))` — same flat-GIVES
+    convention as the python target's `state.update(run_<name>(...))`."""
+    steps_by_name = {s.name: s for s in graph.steps}
+    imported_steps: list[str] = []
+    chain_lines: list[str] = []
+    has_any_rescue = any(f.rescues for f in graph.flows)
+
+    # Per-flow rescue context (rebuilt before each flow's chain pass and each
+    # rescue body pass).
+    rescue_target_names: set[str] = set()
+    rescues_by_step: dict[str, RescueBlockIR] = {}
+
+    def _set_flow_ctx(flow: FlowIR) -> None:
+        rescue_target_names.clear()
+        rescue_target_names.update(rb.step_name for rb in flow.rescues)
+        rescues_by_step.clear()
+        rescues_by_step.update({rb.step_name: rb for rb in flow.rescues})
+
+    def _emit_call(call: CallIR, indent: str, scope_local: set[str]) -> None:
+        step = next(s for s in graph.steps if s.name == call.step_name)
+        if step.name not in imported_steps:
+            imported_steps.append(step.name)
+        kw_parts = []
+        for name, value in call.kwargs:
+            if isinstance(value, ErrorAccessIR):
+                if value.field == "message":
+                    kw_parts.append(f"{name}=str(_err)")
+                elif value.field == "type":
+                    kw_parts.append(f"{name}=type(_err).__name__")
+                else:
+                    raise AssertionError(
+                        f"unreachable: ErrorAccessIR field {value.field!r}"
+                    )
+            elif isinstance(value, str) and value.startswith("@"):
+                ref = value[1:]
+                if ref in scope_local:
+                    kw_parts.append(f"{name}={ref}")
+                else:
+                    kw_parts.append(f"{name}=state[{ref!r}]")
+            else:
+                kw_parts.append(f"{name}={value!r}")
+        kwargs_str = ", ".join(kw_parts)
+        out_name = step.gives.name if step.gives is not None else "_result"
+        is_judgment = step.mode == "judgment"
+        if is_judgment:
+            if kwargs_str:
+                call_expr = f"{step.name}_mod.{step.name}({kwargs_str}, _session=_session)"
+            else:
+                call_expr = f"{step.name}_mod.{step.name}(_session=_session)"
+            call_expr = f"await {call_expr}"
+        else:
+            call_expr = f"{step.name}_mod.{step.name}({kwargs_str})"
+        if scope_local:
+            call_line = call_expr
+        else:
+            call_line = f"state[{out_name!r}] = {call_expr}"
+        if step.name in rescue_target_names and not scope_local:
+            rb = rescues_by_step[step.name]
+            terminator = rb.body[-1]
+            chain_lines.append(f"{indent}try:")
+            chain_lines.append(f"{indent}    {call_line}")
+            chain_lines.append(f"{indent}except FlowAborted:")
+            chain_lines.append(f"{indent}    raise")
+            chain_lines.append(f"{indent}except Exception as _err:")
+            if isinstance(terminator, ResumeIR):
+                assert step.gives is not None
+                rescued_gives_field = step.gives.name
+                chain_lines.append(
+                    f"{indent}    state[{rescued_gives_field!r}] = "
+                    f"await _rescue_{step.name}(state, _err, _session=_session)"
+                )
+            else:
+                chain_lines.append(
+                    f"{indent}    await _rescue_{step.name}(state, _err, _session=_session)"
+                )
+                chain_lines.append(f"{indent}    raise")
+        else:
+            chain_lines.append(f"{indent}{call_line}")
+
+    def _emit_flow_call(call: FlowCallIR, indent: str, scope_local: set[str]) -> None:
+        kw_parts = []
+        for name, value in call.kwargs:
+            if isinstance(value, str) and value.startswith("@"):
+                ref = value[1:]
+                if ref in scope_local:
+                    kw_parts.append(f"{name}={ref}")
+                else:
+                    kw_parts.append(f"{name}=state[{ref!r}]")
+            else:
+                kw_parts.append(f"{name}={value!r}")
+        kwargs_str = ", ".join(kw_parts)
+        sep = ", " if kwargs_str else ""
+        invocation = f"await {call.flow_name}(_session=_session{sep}{kwargs_str})"
+        if scope_local:
+            chain_lines.append(f"{indent}{invocation}")
+        else:
+            chain_lines.append(f"{indent}state.update({invocation})")
+
+    def _emit_item(item, indent: str, scope_local: set[str]) -> None:
+        if isinstance(item, CallIR) and item.step_name == "abort":
+            msg = next((v for k, v in item.kwargs if k == "message"), "")
+            chain_lines.append(f"{indent}raise FlowAborted({msg!r})")
+            return
+        if isinstance(item, ForEachIR):
+            if item.parallel:
+                chain_lines.append(emit_parallel_for_each_mcp(item, steps_by_name, indent))
+                inner = item.body[0]
+                assert isinstance(inner, CallIR)
+                if inner.step_name not in imported_steps:
+                    imported_steps.append(inner.step_name)
+                return
+            source = (
+                item.collection
+                if item.collection in scope_local
+                else f"state[{item.collection!r}]"
+            )
+            chain_lines.append(f"{indent}for {item.loop_var} in {source}:")
+            inner_scope = scope_local | {item.loop_var}
+            inner_indent = indent + "    "
+            if not item.body:
+                chain_lines.append(f"{inner_indent}pass")
+            for sub in item.body:
+                _emit_item(sub, inner_indent, inner_scope)
+            return
+        if isinstance(item, IfBlockIR):
+            cond_expr = _python_condition_expr(item.condition, scope_local)
+            chain_lines.append(f"{indent}if {cond_expr}:")
+            inner_indent = indent + "    "
+            if not item.then_body:
+                chain_lines.append(f"{inner_indent}pass")
+            for sub in item.then_body:
+                _emit_item(sub, inner_indent, scope_local)
+            if item.else_body:
+                chain_lines.append(f"{indent}else:")
+                for sub in item.else_body:
+                    _emit_item(sub, inner_indent, scope_local)
+            return
+        if isinstance(item, MatchBlockIR):
+            base = (
+                item.state_field
+                if item.state_field in scope_local
+                else f"state[{item.state_field!r}]"
+            )
+            chain_lines.append(f"{indent}match {base}.{item.sub_field}:")
+            inner_indent = indent + "    "
+            for arm in item.cases:
+                if arm.value is None:
+                    chain_lines.append(f"{inner_indent}case _:")
+                else:
+                    chain_lines.append(f"{inner_indent}case {arm.value!r}:")
+                body_indent = inner_indent + "    "
+                if not arm.body:
+                    chain_lines.append(f"{body_indent}pass")
+                for sub in arm.body:
+                    _emit_item(sub, body_indent, scope_local)
+            return
+        if isinstance(item, WhileBlockIR):
+            cond_expr = _python_condition_expr(item.condition, scope_local)
+            chain_lines.append(f"{indent}for _i in range({item.max_iters}):")
+            inner_indent = indent + "    "
+            chain_lines.append(f"{inner_indent}if not ({cond_expr}):")
+            chain_lines.append(f"{inner_indent}    break")
+            if not item.body:
+                chain_lines.append(f"{inner_indent}pass")
+            for sub in item.body:
+                _emit_item(sub, inner_indent, scope_local)
+            return
+        if isinstance(item, ResumeIR):
+            chain_lines.append(f"{indent}return state[{item.field_name!r}]")
+            return
+        if isinstance(item, FlowCallIR):
+            _emit_flow_call(item, indent, scope_local)
+            return
+        if isinstance(item, CallIR):
+            _emit_call(item, indent, scope_local)
+            return
+        raise ValueError(f"unknown flow item: {type(item).__name__}")
+
+    # Render one async def per FLOW. Iterate `graph.flows` (alphabetical via
+    # the IR's declaration order — stable across runs of the same source).
+    flow_funcs: list[str] = []
+    has_parallel = any(_has_parallel(f.chain) for f in graph.flows)
+    for flow in graph.flows:
+        _set_flow_ctx(flow)
+        chain_lines.clear()
+        for item in flow.chain:
+            _emit_item(item, "        ", set())
+        body_lines = list(chain_lines)
+
+        # Rescue helpers for this flow. Names are scoped per-flow but we keep
+        # the existing `_rescue_<step_name>` convention; since IR-level
+        # validation forbids duplicate step names across STEPs, and RESCUE
+        # bindings are step-by-name, helpers don't collide. Still, multiple
+        # flows can rescue the same step — emit one helper per RESCUE
+        # declaration via a flow-suffixed name.
+        rescue_helpers_for_flow: list[str] = []
+        for rb in flow.rescues:
+            chain_lines.clear()
+            for sub in rb.body:
+                _emit_item(sub, "    ", set())
+            rescue_body = "\n".join(chain_lines)
+            terminator = rb.body[-1]
+            ret_ann = "object" if isinstance(terminator, ResumeIR) else "None"
+            rescue_helpers_for_flow.append(
+                f"async def _rescue_{rb.step_name}(state: dict, _err: BaseException, _session=None) -> {ret_ann}:\n"
+                + rescue_body
+                + "\n"
+            )
+
+        flow_name_lit = _json.dumps(flow.name)
+        # Initialize state and emit chain.
+        body = (
+            f"async def {flow.name}(*, _session=None, **initial: object) -> dict:\n"
+            "    state: dict = dict(initial)\n"
+            f"    _log.set_flow({flow_name_lit})\n"
+            '    _log.emit("flow_start")\n'
+            "    _success = False\n"
+            "    _t0 = time.monotonic()\n"
+            "    try:\n"
+        )
+        if body_lines:
+            body += "\n".join(body_lines) + "\n"
+        else:
+            body += "        pass\n"
+        body += "        _success = True\n"
+        if flow.gives:
+            return_expr = (
+                "        return {"
+                + ", ".join(f"{f.name!r}: state[{f.name!r}]" for f in flow.gives)
+                + "}\n"
+            )
+        else:
+            return_expr = "        return state\n"
+        body += return_expr
+        body += (
+            "    finally:\n"
+            '        _log.emit("flow_end", '
+            "duration_ms=int((time.monotonic() - _t0) * 1000), "
+            "success=_success)\n"
+            "        _log.set_flow(None)\n"
+        )
+        if rescue_helpers_for_flow:
+            body += "\n\n" + "\n\n".join(rescue_helpers_for_flow)
+        flow_funcs.append(body)
+
+    imports = "\n".join(f"from .steps import {n} as {n}_mod" for n in imported_steps)
+    asyncio_import = "import asyncio\n\n" if has_parallel else ""
+    flow_aborted_block = (
+        "class FlowAborted(Exception):\n"
+        "    \"\"\"Raised by RESCUE bodies' terminal abort(...) call. Propagates out\n"
+        "    of the enclosing flow function and is re-raised verbatim by any\n"
+        "    try/except wrapper around a protected step's call site.\"\"\"\n"
+        "    pass\n"
+        "\n"
+        "\n"
+        if has_any_rescue else ""
+    )
+
+    return (
+        '"""Async FLOW orchestrators (multi-FLOW). Auto-generated; do not edit."""\n'
+        "from __future__ import annotations\n"
+        "\n"
+        "import time\n"
+        f"{asyncio_import}"
+        + (f"{imports}\n" if imports else "")
+        + "\n"
+        "from .clio_runtime import logging as _log\n"
+        "\n"
+        "\n"
+        f"{flow_aborted_block}"
+        + "\n\n".join(flow_funcs)
     )
 
 

@@ -9,9 +9,11 @@ from pathlib import Path
 
 from clio.emitters._mcp_helpers import (
     _emit_flow_module_async,
+    _emit_flow_module_async_multi,
     _emit_main_module,
     _emit_readme,
     _emit_server_module,
+    _emit_server_module_multi,
     _pyproject_for_mcp,
     emit_judgment_step_via_sampling,
 )
@@ -58,8 +60,15 @@ class MCPServerEmitter(BaseEmitter):
         (output_dir / "README.md").write_text(_emit_readme(pkg_name, graph))
         (pkg_dir / "__init__.py").write_text("")
         (pkg_dir / "__main__.py").write_text(_emit_main_module(pkg_name))
-        (pkg_dir / "server.py").write_text(_emit_server_module(pkg_name, graph))
-        (pkg_dir / "flow.py").write_text(_emit_flow_module_async(graph))
+        # v0.17: multi-FLOW sources emit one tool per exposed FLOW (each as
+        # its own async function in flow.py). Single-FLOW sources keep the
+        # v0.16 byte-identical layout (one `def run(...)` in flow.py).
+        if len(graph.flows) > 1:
+            (pkg_dir / "server.py").write_text(_emit_server_module_multi(pkg_name, graph))
+            (pkg_dir / "flow.py").write_text(_emit_flow_module_async_multi(graph))
+        else:
+            (pkg_dir / "server.py").write_text(_emit_server_module(pkg_name, graph))
+            (pkg_dir / "flow.py").write_text(_emit_flow_module_async(graph))
         (pkg_dir / "contracts.py").write_text(emit_contracts(graph))
 
         from clio import runtime as src_pkg
@@ -112,7 +121,10 @@ class MCPServerEmitter(BaseEmitter):
             (steps_dir / f"{step.name}.py").write_text(body)
 
     def _validate_for_mcp(self, graph: FlowGraph) -> None:
-        if graph.flow is None:
+        # v0.17: with multi-FLOW sources, `graph.flow` may be None (no `--flow`
+        # selected), but `graph.flows` still carries every declared FLOW. We
+        # only reject when NO FLOW exists at all.
+        if not graph.flows and graph.flow is None:
             raise ValueError(
                 "mcp-server target requires at least one FLOW (each FLOW becomes a tool)"
             )

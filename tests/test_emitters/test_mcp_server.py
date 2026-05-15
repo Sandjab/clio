@@ -931,3 +931,73 @@ def test_mcp_server_schemas_from_declared_flow_signature(tmp_path):
     assert "outputSchema=" in server_py, "outputSchema must be present when FLOW.GIVES is declared"
     assert "'type': 'array'" in server_py or '"type": "array"' in server_py
     assert "'type': 'string'" in server_py or '"type": "string"' in server_py
+
+
+def test_mcp_emits_one_tool_per_exposed_flow(tmp_path):
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE: exact\n"
+        "\n"
+        "FLOW a\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  s(x=x)\n"
+        "\n"
+        "FLOW b\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  s(x=x)\n"
+        "\n"
+        "RESOURCES\n"
+        "  target: mcp-server\n"
+    )
+    g = build_ir(parse(src))
+    MCPServerEmitter().emit(g, tmp_path)
+    # Find the generated project directory.
+    proj = next(p for p in tmp_path.iterdir() if p.is_dir())
+    server_py = (proj / "server.py").read_text()
+    # Both FLOWs are exposed (neither calls the other).
+    assert "@mcp.tool" in server_py or "Tool(" in server_py
+    # The mcp lowlevel API registers tools as `Tool(name=...)` entries in
+    # `list_tools()`. Each exposed FLOW gets exactly one such entry.
+    assert server_py.count("name='a'") + server_py.count('name="a"') >= 1
+    assert server_py.count("name='b'") + server_py.count('name="b"') >= 1
+    # Both tool dispatch branches must exist in call_tool.
+    assert "name == 'a'" in server_py or 'name == "a"' in server_py
+    assert "name == 'b'" in server_py or 'name == "b"' in server_py
+
+
+def test_mcp_called_subflow_is_not_exposed(tmp_path):
+    src = (
+        "STEP s\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE: exact\n"
+        "\n"
+        "FLOW helper\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  s(x=x)\n"
+        "\n"
+        "FLOW entry\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  helper(x=x)\n"
+        "\n"
+        "RESOURCES\n"
+        "  target: mcp-server\n"
+    )
+    g = build_ir(parse(src))
+    MCPServerEmitter().emit(g, tmp_path)
+    proj = next(p for p in tmp_path.iterdir() if p.is_dir())
+    server_py = (proj / "server.py").read_text()
+    # Only `entry` is exposed; `helper` is called internally.
+    assert "name == 'entry'" in server_py or 'name == "entry"' in server_py
+    assert "name == 'helper'" not in server_py and 'name == "helper"' not in server_py
+    # `helper` must NOT appear as a Tool() entry.
+    assert "name='helper'" not in server_py and 'name="helper"' not in server_py
+    # `helper` should be present as an orchestrator function in flow.py.
+    flow_py = (proj / "flow.py").read_text()
+    assert "async def helper(" in flow_py or "def helper(" in flow_py
