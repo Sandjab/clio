@@ -4,6 +4,8 @@
 
 ### Added
 
+- **Optional `FLOW.DESCRIPTION` field** — mirror of `STEP.DESCRIPTION` (v0.15). A FLOW may now declare a free-text `DESCRIPTION:` (quoted string or `|` block scalar) alongside `TAKES:` / `GIVES:`. The `claude-skill` target injects it verbatim into the `SKILL.md` frontmatter `description:`, which is the signal the host LLM uses to auto-trigger the skill on intent match. When omitted, the emitter still falls back to `Execute flow <name>` with the existing weak-auto-trigger warning. Captured on `FlowDecl.description` (AST) and `FlowIR.description` (IR); other emitters currently ignore the field. Parser exposes it as an optional FLOW header block; duplicate `DESCRIPTION:` is a parse error. New tests cover the parser (quoted string + block scalar + ordering with TAKES/GIVES + duplicate rejection + backcompat default-None) and the claude-skill frontmatter wire-through. The previously-skipped `test_frontmatter_uses_flow_description_when_present` is now a regular passing test.
+
 ### Changed
 
 ### Fixed

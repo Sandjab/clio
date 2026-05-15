@@ -2127,3 +2127,99 @@ FLOW pipeline
     flow = next(d for d in program.decls if isinstance(d, FlowDecl))
     assert flow.takes == ()
     assert flow.gives == ()
+
+
+# v0.17.x — FLOW.DESCRIPTION (mirror of STEP.DESCRIPTION from v0.15).
+# The motivation is the claude-skill emitter: its SKILL.md frontmatter
+# `description:` field is what the host LLM uses to auto-trigger the
+# skill. Without an explicit FLOW description, the emitter today defaults
+# to "Execute flow <name>" and prints a runtime warning that auto-trigger
+# will be weak. These tests cover the parser's acceptance of the field
+# (quoted string OR `|` block scalar), its placement (anywhere among
+# TAKES / GIVES, before the chain), and the duplicate-field rejection.
+
+
+def test_flow_description_quoted_string_parses():
+    """`DESCRIPTION: "..."` on a FLOW lands on FlowDecl.description."""
+    src = """STEP s
+  TAKES: x: str
+  GIVES: y: str
+  MODE:  exact
+
+FLOW pipeline
+  DESCRIPTION: "Refine a draft into a final version."
+  s(x="hi")
+"""
+    program = parse(src)
+    flow = next(d for d in program.decls if isinstance(d, FlowDecl))
+    assert flow.description == "Refine a draft into a final version."
+
+
+def test_flow_description_block_scalar_parses():
+    """Multi-line `DESCRIPTION: |` block scalars are accepted, same as STEP."""
+    src = """STEP s
+  TAKES: x: str
+  GIVES: y: str
+  MODE:  exact
+
+FLOW pipeline
+  DESCRIPTION: |
+    Refine a draft into a final version.
+    Use this skill when the user wants polished prose.
+  s(x="hi")
+"""
+    program = parse(src)
+    flow = next(d for d in program.decls if isinstance(d, FlowDecl))
+    assert flow.description is not None
+    assert flow.description.startswith("Refine a draft")
+    assert "polished prose" in flow.description
+
+
+def test_flow_description_with_takes_gives_in_any_order():
+    """DESCRIPTION sits next to TAKES / GIVES in the FLOW header — any order."""
+    src = """STEP s
+  TAKES: x: str
+  GIVES: y: str
+  MODE:  exact
+
+FLOW pipeline
+  GIVES: y: str
+  DESCRIPTION: "Polish a draft."
+  TAKES: x: str
+  s(x=x)
+"""
+    program = parse(src)
+    flow = next(d for d in program.decls if isinstance(d, FlowDecl))
+    assert flow.description == "Polish a draft."
+    assert len(flow.takes) == 1 and flow.takes[0].name == "x"
+    assert len(flow.gives) == 1 and flow.gives[0].name == "y"
+
+
+def test_flow_duplicate_description_rejected():
+    src = """STEP s
+  TAKES: x: str
+  GIVES: y: str
+  MODE:  exact
+
+FLOW pipeline
+  DESCRIPTION: "First."
+  DESCRIPTION: "Second."
+  s(x="hi")
+"""
+    with pytest.raises(ParseError, match="duplicate DESCRIPTION"):
+        parse(src)
+
+
+def test_flow_description_absent_defaults_to_none():
+    """Backcompat: a FLOW without DESCRIPTION leaves `description=None`."""
+    src = """STEP s
+  TAKES: x: str
+  GIVES: y: str
+  MODE:  exact
+
+FLOW pipeline
+  s(x="hi")
+"""
+    program = parse(src)
+    flow = next(d for d in program.decls if isinstance(d, FlowDecl))
+    assert flow.description is None

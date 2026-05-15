@@ -63,22 +63,54 @@ def test_cli_compile_claude_skill_produces_skill_md(tmp_path):
 
 
 def test_frontmatter_uses_flow_description_when_present(tmp_path):
-    """Option B taken in Task 2: FlowIR has no description field as of v0.14.
-
-    The parser grammar does not capture a FLOW description string, so
-    FlowIR.description does not exist.  This test is skipped until
-    TODO(post-v0.14) is resolved and Option A is implemented.
-    """
-    import pytest
-
-    src = (FIXTURES / "mvp_phase2.clio").read_text()
+    """v0.17.x: FLOW.DESCRIPTION (mirror of STEP.DESCRIPTION from v0.15) is
+    captured by the parser, plumbed through the IR, and consumed by the
+    claude-skill emitter to populate the SKILL.md frontmatter `description:`
+    field — the signal the host LLM uses to auto-trigger the skill on intent
+    match. Previously this test skipped because FlowIR.description did not
+    exist ("Option B taken in Task 2"); now it asserts the wire-through."""
+    src = (
+        "STEP echo_str\n"
+        "  TAKES: input: str\n"
+        "  GIVES: output: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW pipeline\n"
+        '  DESCRIPTION: "Refine a draft into a final, polished version."\n'
+        '  echo_str(input="hello")\n'
+    )
     graph = build_ir(parse(src))
-    if not getattr(getattr(graph, "flow", None), "description", None):
-        pytest.skip("FlowIR.description not yet wired (Option B taken in Task 2)")
+    assert graph.flow is not None and graph.flow.description is not None, (
+        "FLOW.DESCRIPTION must be wired through parser → IR before the emitter "
+        "can pick it up"
+    )
     ClaudeSkillEmitter().emit(graph, tmp_path)
     body = (tmp_path / "SKILL.md").read_text()
     front = _parse_frontmatter(body)
     assert front["description"] == graph.flow.description.strip()
+
+
+def test_frontmatter_no_warning_when_flow_description_set(tmp_path, capsys):
+    """v0.17.x — when FLOW.DESCRIPTION is provided, the "weak auto-trigger"
+    warning must NOT fire. The complementary case (warning fires when
+    DESCRIPTION is absent) is covered by
+    `test_frontmatter_warns_when_no_description`."""
+    src = (
+        "STEP echo_str\n"
+        "  TAKES: input: str\n"
+        "  GIVES: output: str\n"
+        "  MODE:  exact\n"
+        "\n"
+        "FLOW pipeline\n"
+        '  DESCRIPTION: "Refine a draft into a final, polished version."\n'
+        '  echo_str(input="hello")\n'
+    )
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    captured = capsys.readouterr()
+    assert "claude-skill warning" not in captured.err, (
+        "no warning when FLOW.DESCRIPTION is explicit; got stderr:\n" + captured.err
+    )
 
 
 def test_frontmatter_warns_when_no_description(tmp_path, capsys):

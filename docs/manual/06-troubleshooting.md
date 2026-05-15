@@ -387,17 +387,28 @@ Your `ASSERT` expression references more than one field name, e.g. `ASSERT: a > 
 
 ### `claude-skill warning: FLOW <name> has no description`
 
-The source FLOW has no description string. The emitter writes a placeholder in `SKILL.md` and continues — the skill is still valid.
+The source FLOW has no `DESCRIPTION:` field. The emitter writes a placeholder (`Execute flow <name>`) in `SKILL.md` and continues — the skill is still valid, but the host LLM's auto-trigger heuristics see only the generic placeholder and the skill will rarely fire on intent.
 
-**Fix:** add a description string to the FLOW block in your source:
+**Fix (v0.17.x):** add a `DESCRIPTION:` block to the FLOW header (same form as `STEP.DESCRIPTION`):
 
 ```
 FLOW my_pipeline
-    "Brief description of what this flow does."
-    load_data() -> process(data=data)
+  DESCRIPTION: "Refine a draft into a final, polished version."
+  load_data() -> process(data=data)
 ```
 
-The description populates the overview section of `SKILL.md`, which the LLM host uses to understand the skill's purpose. A clear description reduces host drift.
+Or, for multi-line descriptions, use a `|` block scalar:
+
+```
+FLOW my_pipeline
+  DESCRIPTION: |
+    Refine a draft into a final, polished version.
+    Use this skill when the user wants polished prose
+    from a rough first draft.
+  load_data() -> process(data=data)
+```
+
+The string is written verbatim into the `SKILL.md` frontmatter `description:` field — the signal the host LLM uses to auto-trigger the skill on intent match. A clear description reduces host drift.
 
 ### `claude-skill v1 supports python and bash for exact steps; got '<lang>' at line <L>`
 

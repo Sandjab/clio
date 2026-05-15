@@ -553,6 +553,35 @@ FLOW classify_batch
 
 Without `TAKES:`, the FOR EACH at the head of the chain compiles to `state reference 'items' not produced by any previous step` (#21). With `TAKES:` declared, `items` is seeded as an external input and the FLOW compiles to all targets that support PARALLEL (python / mcp-server / claude-skill).
 
+### FLOW description (v0.17.x, optional)
+
+A FLOW may declare a free-text `DESCRIPTION:` that mirrors `STEP.DESCRIPTION` from v0.15. The field sits next to `TAKES:` / `GIVES:` in the FLOW header (any order) and accepts either a quoted string or a `|` block scalar.
+
+```
+FLOW <name>
+  TAKES: <field>: <type>, ...
+  GIVES: <field>: <type>, ...
+  DESCRIPTION: "Short imperative sentence describing the FLOW's intent."
+  <chain>
+```
+
+**Consumed by:**
+
+- **`target: claude-skill`** — injected verbatim into the `SKILL.md` frontmatter `description:`, which is the signal the host LLM uses to auto-trigger the skill on intent match. Without an explicit description, the emitter defaults to `Execute flow <name>` and prints a runtime warning that auto-trigger will be weak.
+- Other targets currently ignore the field. It is captured on `FlowIR.description` and available for future emitter use.
+
+**Block-scalar form** (multi-line, same as `STEP.DESCRIPTION`):
+
+```
+FLOW retention_analysis
+  DESCRIPTION: |
+    Score each customer's churn risk from a CSV and route high-risk
+    accounts to a follow-up flow.
+  <chain>
+```
+
+Duplicate `DESCRIPTION:` on the same FLOW is a parse error (`line:col`).
+
 ### FLOW composition (v0.17)
 
 Once a FLOW declares both `TAKES:` and `GIVES:`, it is structurally

@@ -380,6 +380,7 @@ class FlowIR:
     line: int
     takes: tuple[FieldIR, ...] = ()      # v0.16 — empty = not declared
     gives: tuple[FieldIR, ...] = ()      # v0.16 — empty = not declared
+    description: str | None = None       # v0.17.x — free-text intent; consumed by claude-skill frontmatter
 
 
 @dataclass(frozen=True)

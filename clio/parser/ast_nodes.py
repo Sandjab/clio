@@ -184,6 +184,11 @@ class FlowDecl:
     col: int
     takes: tuple[Field, ...] = ()      # v0.16 — empty tuple = field not declared
     gives: tuple[Field, ...] = ()      # v0.16 — empty tuple = field not declared
+    # v0.17.x — free-text intent. Mirrors STEP.DESCRIPTION (v0.15); the
+    # claude-skill emitter injects it into the SKILL.md frontmatter
+    # `description:` so the host LLM can auto-trigger the skill on
+    # intent match.
+    description: str | None = None
 
 
 @dataclass(frozen=True)

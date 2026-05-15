@@ -2037,8 +2037,10 @@ class _Parser:
 
         takes: tuple[Field, ...] = ()
         gives: tuple[Field, ...] = ()
+        description: str | None = None
         # v0.16: optional FLOW.TAKES / FLOW.GIVES blocks before the chain.
-        # Either order; duplicates rejected; absent fields default to ().
+        # v0.17.x: optional FLOW.DESCRIPTION (mirrors STEP.DESCRIPTION).
+        # Either order; duplicates rejected; absent fields default to ()/None.
         while True:
             t = self.peek()
             if t.type != TokenType.KEYWORD:
@@ -2061,6 +2063,15 @@ class _Parser:
                 self.expect(TokenType.COLON)
                 gives = self.parse_field_list()
                 self.expect(TokenType.NEWLINE)
+            elif t.value == "DESCRIPTION":
+                if description is not None:
+                    raise ParseError(
+                        f"FLOW {ident.value} has duplicate DESCRIPTION field",
+                        t.line, t.col,
+                    )
+                self.advance()
+                self.expect(TokenType.COLON)
+                description = self._parse_text_scalar(t.line, t.col, "DESCRIPTION")
             else:
                 break
 
@@ -2124,6 +2135,7 @@ class _Parser:
             line=kw.line, col=kw.col,
             takes=takes,
             gives=gives,
+            description=description,
         )
 
     def parse_flow_item(self) -> "StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock | ResumeAst":
