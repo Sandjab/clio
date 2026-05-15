@@ -133,7 +133,7 @@ class _Parser:
                     )
                 if not (nxt.type == TokenType.KEYWORD and nxt.value in ("FLOW", "CONTRACT")):
                     raise ParseError(
-                        f"EXPOSE applies only to FLOW and CONTRACT (got {nxt.value!r})",
+                        f"{vis_tok.value} applies only to FLOW and CONTRACT (got {nxt.value!r})",
                         vis_tok.line, vis_tok.col,
                     )
                 t = nxt

@@ -84,3 +84,12 @@ def test_e_vis_002_expose_on_resources():
     )
     with pytest.raises(ParseError, match=r"EXPOSE applies only to FLOW and CONTRACT"):
         parse(src)
+
+
+def test_e_vis_002_internal_on_step():
+    src = (
+        'INTERNAL STEP foo\n'
+        '  MODE: exact\n'
+    )
+    with pytest.raises(ParseError, match=r"INTERNAL applies only to FLOW and CONTRACT"):
+        parse(src)
