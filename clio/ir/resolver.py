@@ -9,6 +9,7 @@ added in later tasks.
 """
 from __future__ import annotations
 
+from collections import deque
 from pathlib import Path
 
 from clio.parser.ast_nodes import (
@@ -137,10 +138,10 @@ def compute_exposed_sets(
                 edges[child].append(path)
                 in_degree[path] += 1
 
-    queue: list[Path] = [p for p, d in in_degree.items() if d == 0]
+    queue: deque[Path] = deque(p for p, d in in_degree.items() if d == 0)
     topo: list[Path] = []
     while queue:
-        current = queue.pop(0)
+        current = queue.popleft()
         topo.append(current)
         for nxt in edges[current]:
             in_degree[nxt] -= 1

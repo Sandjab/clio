@@ -289,14 +289,58 @@ def _build_ir_single(program: Program, flow_name: str | None = None) -> FlowGrap
     return graph
 
 
-def _file_stem(path: Path) -> str:
-    """Derive a safe identifier prefix from a file path.
+def _build_unique_stems(paths: list[Path]) -> dict[Path, str]:
+    """Return a mapping from each path to a unique safe identifier prefix.
 
-    'lib/nlp.clio' → 'nlp'
-    'shared-utils.clio' → 'shared_utils'
-    'my.lib.clio' → 'my_lib'
+    For non-colliding basenames, returns just the basename stem.
+    When two or more files share a basename, prefix with the parent
+    dir name(s) to disambiguate. If still ambiguous after 8 levels,
+    fall back to a 6-char sha1 suffix.
+
+    Examples:
+        lib/utils.clio  → 'lib_utils'
+        core/utils.clio → 'core_utils'
+        shared.clio     → 'shared'
+        my.lib.clio     → 'my_lib'
     """
-    return path.stem.replace("-", "_").replace(".", "_")
+    import hashlib
+
+    def _safe(s: str) -> str:
+        return s.replace("-", "_").replace(".", "_")
+
+    base = {p: _safe(p.stem) for p in paths}
+
+    by_stem: dict[str, list[Path]] = {}
+    for p, s in base.items():
+        by_stem.setdefault(s, []).append(p)
+
+    result: dict[Path, str] = {}
+    for stem, ps in by_stem.items():
+        if len(ps) == 1:
+            result[ps[0]] = stem
+            continue
+        # Disambiguate using parent directory name(s).
+        # Walk from the closest parent outward until each path has a unique prefix.
+        depth = 1
+        while True:
+            candidates: dict[Path, str] = {}
+            for p in ps:
+                parts = list(p.parts)
+                # Take last `depth` parents (excluding the file itself)
+                parents = parts[-(depth + 1):-1]
+                prefix = "_".join(_safe(part) for part in parents if part)
+                candidates[p] = f"{prefix}_{stem}" if prefix else stem
+            if len(set(candidates.values())) == len(ps):
+                result.update(candidates)
+                break
+            depth += 1
+            if depth > 8:
+                # Pathological case: fall back to stable hash suffix
+                for p in ps:
+                    h = hashlib.sha1(str(p).encode()).hexdigest()[:6]
+                    result[p] = f"{stem}_{h}"
+                break
+    return result
 
 
 def _flatten_to_program(
@@ -308,9 +352,12 @@ def _flatten_to_program(
     symbols alpha-renamed.
 
     Convention: internal name X in file 'lib/nlp.clio' becomes
-    'nlp__X'. Exposed names keep their original form. RESOURCES
-    and TEST blocks are taken only from the entry file. ReexportDecls
-    contribute no IR decls (they're consumed by the resolver phases)."""
+    'nlp__X'. When two files share a basename (e.g. lib/utils.clio
+    and core/utils.clio), unique stems are derived by prefixing parent
+    dir names: lib_utils__X and core_utils__X. Exposed names keep
+    their original form. RESOURCES and TEST blocks are taken only from
+    the entry file. ReexportDecls contribute no IR decls (they're
+    consumed by the resolver phases)."""
     all_decls: list[object] = []
 
     # Per-file rename tables: {original_name: renamed_name}
@@ -321,10 +368,14 @@ def _flatten_to_program(
     # have no cross-file collisions to avoid, so all tables stay empty and
     # every name keeps its original form (preserves v0.17 ergonomics).
     is_multifile = len(parsed) > 1
+
+    if is_multifile:
+        unique_stems = _build_unique_stems(list(parsed.keys()))
+
     for path, program in parsed.items():
         local_renames: dict[str, str] = {}
         if is_multifile:
-            stem = _file_stem(path)
+            stem = unique_stems[path]
             for decl in program.decls:
                 if isinstance(decl, (FlowDecl, ContractDecl)):
                     if not decl.exposed:
@@ -379,7 +430,12 @@ def _flatten_to_program(
                     )
                 continue
             renamed_decl = _rename_decl(
-                decl, rename_tables[path], imported_scope,
+                cast(
+                    "StepDecl | ContractDecl | FlowDecl | ResourcesDecl | TestDecl | ReexportDecl",
+                    decl,
+                ),
+                rename_tables[path],
+                imported_scope,
             )
             # Only entry-file FLOW/CONTRACT declarations keep the EXPOSE
             # marker in the merged Program. Imported exposed symbols
@@ -401,10 +457,10 @@ _NestedItem = StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock
 
 
 def _rename_decl(
-    decl: object,
-    local_renames: dict[str, str],
-    imported_scope: dict[str, str],
-) -> object:
+    decl: "StepDecl | ContractDecl | FlowDecl | ResourcesDecl | TestDecl | ReexportDecl",
+    local_renames: "dict[str, str]",
+    imported_scope: "dict[str, str]",
+) -> "StepDecl | ContractDecl | FlowDecl | ResourcesDecl | TestDecl | ReexportDecl":
     """Apply alpha-renames to one decl. The decl's own name is rewritten
     if it's in `local_renames`; references to other symbols (in type
     expressions, step calls, rescues, on_fail) go through the combined
@@ -439,20 +495,13 @@ def _rename_decl(
     def rename_kwargs(
         kwargs: tuple[tuple[str, object], ...],
     ) -> tuple[tuple[str, object], ...]:
-        out: list[tuple[str, object]] = []
-        for kname, value in kwargs:
-            if isinstance(value, ErrorAccessExpr):
-                out.append((
-                    kname,
-                    ErrorAccessExpr(
-                        step_name=resolve_name(value.step_name),
-                        field=value.field,
-                        line=value.line,
-                    ),
-                ))
-            else:
-                out.append((kname, value))
-        return tuple(out)
+        # Delegate any ExprNode kwarg value through rename_expr so that
+        # FieldRefExpr (e.g. step(x: $upstream.field)) and all other expr
+        # variants have their embedded step_name references updated.
+        return tuple(
+            (kname, rename_expr(value) if isinstance(value, ExprNode) else value)
+            for kname, value in kwargs
+        )
 
     def rename_expr(e: ExprNode) -> ExprNode:
         """Recurse into expression trees and rewrite step_name references."""
@@ -493,9 +542,14 @@ def _rename_decl(
                 col=c.col,
             )
         if isinstance(c, ForEachBlock):
+            # `collection` is a state field key (the GIVES field name of an
+            # upstream step), not a step name — state field names are in a
+            # separate namespace from step names so resolve_name is a no-op
+            # here in practice, but we call it for consistency and to guard
+            # against any future grammar change that aliases them.
             return ForEachBlock(
                 loop_var=c.loop_var,
-                collection=c.collection,
+                collection=resolve_name(c.collection),
                 body=tuple(rename_call(x) for x in c.body),
                 line=c.line,
                 col=c.col,

@@ -158,6 +158,78 @@ def test_file_stem_sanitizes_dots(tmp_path: Path) -> None:
     assert all("." not in name for name in step_names)
 
 
+def test_build_unique_stems_cross_directory_collision(tmp_path: Path) -> None:
+    """Two files sharing the same basename in different directories must produce
+    distinct alpha-rename prefixes so their internal symbols don't collide.
+
+    lib/utils.clio  → prefix 'lib_utils'  → step 'score' becomes 'lib_utils__score'
+    core/utils.clio → prefix 'core_utils' → step 'score' becomes 'core_utils__score'
+
+    Each library is imported by a separate entry-level wrapper flow so
+    both scores appear in the merged FlowGraph simultaneously.
+    """
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    core_dir = tmp_path / "core"
+    core_dir.mkdir()
+
+    (lib_dir / "utils.clio").write_text(
+        "EXPOSE CONTRACT LibResult\n"
+        "  SHAPE: {value: str}\n"
+        "\n"
+        "STEP score\n"
+        "  MODE: judgment\n"
+        "  TAKES: text: str\n"
+        "  GIVES: value: str\n"
+        "\n"
+        "EXPOSE FLOW lib_classify\n"
+        "  TAKES: text: str\n"
+        "  GIVES: value: str\n"
+        "  score(text=text)\n"
+    )
+
+    (core_dir / "utils.clio").write_text(
+        "EXPOSE CONTRACT CoreResult\n"
+        "  SHAPE: {out: str}\n"
+        "\n"
+        "STEP score\n"
+        "  MODE: judgment\n"
+        "  TAKES: text: str\n"
+        "  GIVES: out: str\n"
+        "\n"
+        "EXPOSE FLOW core_classify\n"
+        "  TAKES: text: str\n"
+        "  GIVES: out: str\n"
+        "  score(text=text)\n"
+    )
+
+    entry = tmp_path / "main.clio"
+    entry.write_text(
+        'FROM "./lib/utils.clio" IMPORT LibResult, lib_classify\n'
+        'FROM "./core/utils.clio" IMPORT CoreResult, core_classify\n'
+        "\n"
+        "STEP run\n"
+        "  MODE: judgment\n"
+        "  TAKES: text: str\n"
+        "  GIVES: value: str\n"
+        "\n"
+        "EXPOSE FLOW pipeline\n"
+        "  TAKES: text: str\n"
+        "  GIVES: value: str\n"
+        "  lib_classify(text=text)\n"
+    )
+
+    parsed = resolve_imports(entry)
+    graph = build_ir(parsed, entry=entry.resolve())
+    step_names = {s.name for s in graph.steps}
+
+    # Both 'score' steps must be renamed with distinct prefixes.
+    assert "score" not in step_names, "raw 'score' should not appear — must be renamed"
+    # lib/utils.clio → 'lib_utils__score', core/utils.clio → 'core_utils__score'
+    assert "lib_utils__score" in step_names, f"expected 'lib_utils__score' in {step_names}"
+    assert "core_utils__score" in step_names, f"expected 'core_utils__score' in {step_names}"
+
+
 def test_e_mcp_001_mcp_target_without_expose(tmp_path: Path) -> None:
     """target: mcp-server with no EXPOSE FLOW in the entry file is
     rejected by E_MCP_001."""
