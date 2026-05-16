@@ -491,6 +491,185 @@ The emitted project has a flat layout (no `src/`). Setuptools 68+ wants this con
 
 **Fix:** the emitted `pyproject.toml` already declares `[tool.setuptools.packages.find]` correctly. If you're seeing this, your local setuptools may be older than 68 — `pip install -U setuptools` first.
 
+## Cross-file imports (v0.18)
+
+### E_IMP_001 — `ParseError: import path must start with "./" or "../"`
+
+```
+FROM "schemas.clio" IMPORT Article    # bad — no "./"
+FROM "/abs/path.clio" IMPORT Article  # bad — absolute path
+```
+
+**Fix:** prefix the path: `FROM "./schemas.clio" IMPORT Article`. Absolute
+paths and unqualified names are rejected; relative paths keep imports
+portable across machines.
+
+### E_IMP_002 — `ParseError: import path must end with ".clio"`
+
+```
+FROM "./lib" IMPORT Article      # bad — no extension
+FROM "./lib.py" IMPORT Article   # bad — wrong extension
+```
+
+**Fix:** use `FROM "./lib.clio" IMPORT Article`.
+
+### E_IMP_003 — `ParseError: empty import list after IMPORT`
+
+```
+FROM "./lib.clio" IMPORT     # nothing after IMPORT
+```
+
+**Fix:** name at least one symbol: `FROM "./lib.clio" IMPORT Article`.
+
+### E_IMP_004 — `ParseError: expected identifier after AS`
+
+```
+FROM "./lib.clio" IMPORT Article AS     # missing alias
+```
+
+**Fix:** supply the alias: `FROM "./lib.clio" IMPORT Article AS Art`.
+
+### E_IMP_005 — `ParseError: duplicate name 'X' in IMPORT list`
+
+```
+FROM "./lib.clio" IMPORT Article, Article    # listed twice
+```
+
+**Fix:** remove the duplicate. If you need two aliases for the same name,
+use `AS`: `FROM "./lib.clio" IMPORT Article AS A1, Article AS A2` —
+though in practice this is a sign the importing file needs refactoring.
+
+### E_RES_001 — `ResolveError: import cycle detected: A.clio -> B.clio -> A.clio`
+
+Two or more files import each other in a cycle. The resolver performs a
+depth-first traversal and raises as soon as it closes a loop.
+
+**Fix:** break the cycle. Move the shared declarations to a third file
+(`schemas.clio` or similar) that neither A nor B imports indirectly.
+
+### E_RES_002 — `ResolveError: imported file not found: "./missing.clio"`
+
+The path does not exist on disk relative to the importing file.
+
+**Fix:** check the path spelling and make sure the file exists. The resolver
+reports the absolute resolved path in the error to avoid guessing.
+
+### E_RES_003 — `ResolveError: 'Article' is not exposed by "./lib.clio"`
+
+The symbol exists in `lib.clio` but is not marked `EXPOSE`. Only `EXPOSE`d
+symbols are importable.
+
+**Fix:** add `EXPOSE` to the declaration in `lib.clio`:
+
+```
+EXPOSE CONTRACT Article      # was: CONTRACT Article
+  SHAPE: {title: str, body: str}
+```
+
+If you own `lib.clio` and intentionally kept the symbol private, the fix is
+to duplicate the declaration in the importing file instead of sharing it.
+
+### E_RES_004 — `ResolveError: 'Foo' is not declared in "./lib.clio"`
+
+The symbol does not exist at all in the source file — likely a typo or a name
+that moved to a different file.
+
+**Fix:** check the spelling. Run `clio check ./lib.clio` to list all declared
+symbols and their visibility.
+
+### E_RES_005 — `ResolveError: 'Article' imported twice — use AS to alias one`
+
+The same name appears in two separate `FROM … IMPORT` declarations without an alias.
+
+```
+FROM "./schemas.clio" IMPORT Article
+FROM "./v2/schemas.clio" IMPORT Article    # collision
+```
+
+**Fix:** alias one of them: `FROM "./v2/schemas.clio" IMPORT Article AS ArticleV2`.
+
+### E_RES_006 — `ResolveError: imported name 'Article' clashes with a local declaration`
+
+A `FROM … IMPORT` brings in a name that you also declared locally in the same file.
+
+```
+FROM "./schemas.clio" IMPORT Article
+CONTRACT Article             # clashes
+  SHAPE: {title: str}
+```
+
+**Fix:** rename one of the two. Either alias the import (`IMPORT Article AS ExtArticle`)
+or rename the local declaration.
+
+### E_VIS_001 — `ParseError: only one visibility marker allowed per declaration`
+
+```
+EXPOSE INTERNAL FLOW classify    # two markers
+```
+
+**Fix:** use exactly one: `EXPOSE FLOW classify` or `INTERNAL FLOW classify`.
+
+### E_VIS_002 — `ParseError: EXPOSE / INTERNAL can only prefix FLOW or CONTRACT`
+
+```
+EXPOSE STEP load_data    # STEP cannot be prefixed
+```
+
+**Fix:** remove the marker. Visibility applies only to `FLOW` and `CONTRACT`
+declarations. STEPs are always internal to their file.
+
+### E_VIS_003 — `IRBuildError: EXPOSE FLOW 'X' must declare both TAKES and GIVES`
+
+```
+EXPOSE FLOW classify         # missing TAKES / GIVES
+  score(text=text)
+```
+
+**Fix:** add the signature. An exposed FLOW must have an explicit interface so
+importers can type-check calls against it:
+
+```
+EXPOSE FLOW classify
+  TAKES: text: str
+  GIVES: label: str
+  score(text=text)
+```
+
+### E_VIS_004 — `IRBuildError: 'Article' is exposed as both FLOW and CONTRACT`
+
+A re-export `EXPOSE Article` is ambiguous when both a `CONTRACT Article` and a
+`FLOW Article` exist in the imported namespace (unlikely but possible).
+
+**Fix:** use qualified re-export by fully declaring the name locally under a
+distinct alias, or rename one of the two symbols at the source.
+
+### E_MCP_001 — `ValueError: target=mcp-server requires at least one EXPOSE FLOW in the entry file`
+
+The entry file has no `EXPOSE FLOW` declarations. The `mcp-server` target
+derives its tool list from exposed FLOWs; without one it would emit an empty
+server.
+
+**Fix:** mark the FLOW(s) you want to expose:
+
+```
+EXPOSE FLOW classify_article
+  TAKES: article: Article
+  GIVES: label: str
+  ...
+```
+
+If you're migrating from v0.17, run `clio doctor --migrate-v018` to apply
+the v0.17 heuristic (any signed FLOW not called by a sibling) automatically.
+
+### E_CLI_001 — `ValueError: target=claude-cli does not support FROM … IMPORT`
+
+The `claude-cli` emitter produces a self-contained bash project; multi-file
+resolution is deferred for this target.
+
+**Fix:** compile to `--target python`, `--target mcp-server`,
+`--target claude-skill`, or `--target langgraph` instead. If you must use
+`claude-cli`, inline all imported declarations directly in the entry file.
+
 ## When the docs and code diverge
 
 The CHANGELOG, language spec, and this manual are kept in sync **per release tag**. If you're on `main` between tags, expect occasional drift.

@@ -1,0 +1,4 @@
+FROM "./lib.clio" IMPORT Article, classify
+
+EXPOSE Article
+EXPOSE classify

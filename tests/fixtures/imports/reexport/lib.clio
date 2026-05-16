@@ -1,0 +1,12 @@
+EXPOSE CONTRACT Article
+  SHAPE: {title: str, body: str}
+
+STEP score
+  MODE: judgment
+  TAKES: text: str
+  GIVES: label: str
+
+EXPOSE FLOW classify
+  TAKES: article: Article
+  GIVES: label: str
+  score(text=article)

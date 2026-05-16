@@ -4,25 +4,25 @@ Each target is an emitter module that transforms the IR graph into a runnable pr
 
 ## Targets at a glance
 
-| Target | Status | Output | Why / Use case | Effort |
-|---|---|---|---|---|
-| `claude-cli` | Implemented | Claude Code project (bash + `claude -p` subprocess) | Prototype + reference target | — |
-| `python` | Implemented | Python package (Anthropic SDK + Pydantic v2) | Production-grade Python deployment | — |
-| `claude-skill` | Implemented | Claude Code skill directory (`SKILL.md` + `scripts/` + `schemas/` + `prompts/`) | Turn a `.clio` into an LLM-host-orchestrated skill; no external runtime or API key needed after install | — |
-| `local` | Future | Same as `python`, with Ollama/vLLM | Offline / data-privacy constraints | High (Outlines/Guidance) |
-| `rust` | Future | Cargo async project | Performance-critical `exact` steps | High |
-| `go` | Future | Go module with goroutines + `net/http` | Concurrent `exact` steps, single static binary | Medium |
-| `docker` | Future | Multi-stage Dockerfile + compose | Mixed-language flows | Medium |
-| `hybrid` | Future | Claude CLI + precompiled binaries for `exact` | Heavy `exact` within CLI orchestration | Medium |
-| `mcp-server` | Implemented | MCP server, each FLOW exposed as a tool with sampling-based judgment | Native Anthropic ecosystem integration; turn a `.clio` into a structured MCP tool | — |
-| `fastapi` | Candidate | HTTP server (FLOW = endpoint, CONTRACT = `response_model`) | Deploy a `.clio` as a microservice | Low–Medium |
-| `temporal` | Candidate | Temporal workflow (Python/Go), STEPs = activities | Enterprise durability, retry, observability — maps 1:1 onto `ON_FAIL` semantics | Medium–High |
-| `typescript` | Candidate | TS/Node package with `@anthropic-ai/sdk` | Frontend / Vercel / edge audiences | Medium |
-| `langgraph` | Candidate | LangGraph graph (nodes = STEPs, state = CONTRACTs) | Adoption by existing LangChain users; positions CLIO as a meta-language | Medium |
-| `dspy` | Candidate | DSPy signatures + composed module | Research-oriented audiences | Medium |
-| `modal` | Candidate | Python with `@modal.function` decorators | Frictionless cloud deployment | Low |
-| `step-functions` | Candidate | AWS States Language JSON + Bedrock integration | AWS-native enterprise | Medium–High |
-| `jupyter` | Candidate | Notebook with one cell per STEP | Exploration / demo / pedagogy | Low |
+| Target | Status | Output | Why / Use case | IMPORT (v0.18) | Effort |
+|---|---|---|---|---|---|
+| `claude-cli` | Implemented | Claude Code project (bash + `claude -p` subprocess) | Prototype + reference target | ❌ E_CLI_001 | — |
+| `python` | Implemented | Python package (Anthropic SDK + Pydantic v2) | Production-grade Python deployment | ✅ | — |
+| `claude-skill` | Implemented | Claude Code skill directory (`SKILL.md` + `scripts/` + `schemas/` + `prompts/`) | Turn a `.clio` into an LLM-host-orchestrated skill; no external runtime or API key needed after install | ✅ | — |
+| `mcp-server` | Implemented | MCP server, each FLOW exposed as a tool with sampling-based judgment | Native Anthropic ecosystem integration; turn a `.clio` into a structured MCP tool | ✅ | — |
+| `langgraph` | Candidate | LangGraph graph (nodes = STEPs, state = CONTRACTs) | Adoption by existing LangChain users; positions CLIO as a meta-language | ✅ | Medium |
+| `local` | Future | Same as `python`, with Ollama/vLLM | Offline / data-privacy constraints | ✅ (planned) | High (Outlines/Guidance) |
+| `rust` | Future | Cargo async project | Performance-critical `exact` steps | planned | High |
+| `go` | Future | Go module with goroutines + `net/http` | Concurrent `exact` steps, single static binary | planned | Medium |
+| `docker` | Future | Multi-stage Dockerfile + compose | Mixed-language flows | planned | Medium |
+| `hybrid` | Future | Claude CLI + precompiled binaries for `exact` | Heavy `exact` within CLI orchestration | planned | Medium |
+| `fastapi` | Candidate | HTTP server (FLOW = endpoint, CONTRACT = `response_model`) | Deploy a `.clio` as a microservice | planned | Low–Medium |
+| `temporal` | Candidate | Temporal workflow (Python/Go), STEPs = activities | Enterprise durability, retry, observability — maps 1:1 onto `ON_FAIL` semantics | planned | Medium–High |
+| `typescript` | Candidate | TS/Node package with `@anthropic-ai/sdk` | Frontend / Vercel / edge audiences | planned | Medium |
+| `dspy` | Candidate | DSPy signatures + composed module | Research-oriented audiences | planned | Medium |
+| `modal` | Candidate | Python with `@modal.function` decorators | Frictionless cloud deployment | planned | Low |
+| `step-functions` | Candidate | AWS States Language JSON + Bedrock integration | AWS-native enterprise | planned | Medium–High |
+| `jupyter` | Candidate | Notebook with one cell per STEP | Exploration / demo / pedagogy | planned | Low |
 
 **Status legend**:
 - *Implemented* — emitter shipped, tests green.
@@ -132,7 +132,13 @@ state and skips items 1..N. Path via `CLIO_STATE_FILE` env var.
 
 ## `target: mcp-server`
 
-Produces a runnable MCP (Model Context Protocol) server. Each *exposed* `FLOW` (since v0.17: every signed FLOW that is not called by a sibling FLOW; pre-v0.17 sources expose every FLOW) becomes a tool registered with the official `mcp` Python SDK. Judgment steps are handled by the MCP client via `sampling/createMessage` — the server itself carries no API key and no `anthropic`/`openai` dependency.
+Produces a runnable MCP (Model Context Protocol) server. Each `EXPOSE FLOW` in
+the entry file (v0.18+) becomes a tool registered with the official `mcp` Python
+SDK. The entry file must expose at least one FLOW (E_MCP_001). Prior to v0.18,
+every signed FLOW not called by a sibling was implicitly exposed — sources relying
+on that heuristic must be migrated (see `docs/manual/06-migration-v018.md`).
+Judgment steps are handled by the MCP client via `sampling/createMessage` — the
+server itself carries no API key and no `anthropic`/`openai` dependency.
 
 ### Layout
 

@@ -1,0 +1,14 @@
+RESOURCES
+  target: python
+
+FROM "./lib.clio" IMPORT Article, classify
+
+STEP run_pipeline
+  MODE: judgment
+  TAKES: article: Article
+  GIVES: label: str
+
+EXPOSE FLOW pipeline
+  TAKES: article: Article
+  GIVES: label: str
+  classify(article=article)

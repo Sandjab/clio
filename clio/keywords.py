@@ -95,3 +95,7 @@ class Keyword(StrEnum):
     WITH = "WITH"
     EXPECTS = "EXPECTS"
     EXPECTS_NOT = "EXPECTS_NOT"
+    FROM = "FROM"
+    IMPORT = "IMPORT"
+    EXPOSE = "EXPOSE"
+    INTERNAL = "INTERNAL"

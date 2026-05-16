@@ -1,0 +1,16 @@
+RESOURCES
+  target: python
+
+FROM "./schemas.clio" IMPORT Article, AnalysisResult
+FROM "./nlp/nlp.clio" IMPORT analyse
+
+STEP load_article
+  MODE: exact
+  TAKES: path: str
+  GIVES: article: Article
+
+EXPOSE FLOW pipeline
+  TAKES: path: str
+  GIVES: result: AnalysisResult
+  load_article(path=path)
+  -> analyse(article=article)

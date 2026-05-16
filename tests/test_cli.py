@@ -326,3 +326,94 @@ def test_status_reads_state_and_log(tmp_path, monkeypatch, capsys):
     assert "flow_start" in out
     assert "step_end" in out
     assert rc == 0
+
+
+# -- v0.18 multi-file CLI tests --
+
+
+def test_cli_compile_multifile(tmp_path):
+    """_cmd_compile resolves imports and compiles a two-file project."""
+    from clio.cli import _cmd_compile
+
+    (tmp_path / "lib.clio").write_text(
+        "EXPOSE CONTRACT Article\n"
+        "  SHAPE: {title: str, body: str}\n"
+        "\n"
+        "STEP score\n"
+        "  MODE: judgment\n"
+        "  TAKES: article: Article\n"
+        "  GIVES: label: str\n"
+        "\n"
+        "EXPOSE FLOW classify\n"
+        "  TAKES: article: Article\n"
+        "  GIVES: label: str\n"
+        "  score(article=article)\n"
+    )
+    (tmp_path / "main.clio").write_text(
+        "RESOURCES\n"
+        "  target: python\n"
+        "\n"
+        "FROM \"./lib.clio\" IMPORT Article, classify\n"
+        "\n"
+        "STEP run_pipeline\n"
+        "  MODE: judgment\n"
+        "  TAKES: article: Article\n"
+        "  GIVES: label: str\n"
+        "\n"
+        "EXPOSE FLOW pipeline\n"
+        "  TAKES: article: Article\n"
+        "  GIVES: label: str\n"
+        "  classify(article=article)\n"
+    )
+    rc = _cmd_compile(
+        str(tmp_path / "main.clio"),
+        target="python",
+        output=str(tmp_path / "out"),
+    )
+    assert rc == 0
+    assert (tmp_path / "out" / "pyproject.toml").exists()
+
+
+def test_cli_check_multifile(tmp_path):
+    """_cmd_check resolves imports and returns 0 for a valid two-file project."""
+    from clio.cli import _cmd_check
+
+    (tmp_path / "lib.clio").write_text(
+        "EXPOSE CONTRACT Tag\n"
+        "  SHAPE: {label: str}\n"
+        "\n"
+        "STEP tag\n"
+        "  MODE: judgment\n"
+        "  TAKES: text: str\n"
+        "  GIVES: result: Tag\n"
+        "\n"
+        "EXPOSE FLOW tagger\n"
+        "  TAKES: text: str\n"
+        "  GIVES: result: Tag\n"
+        "  tag(text=text)\n"
+    )
+    (tmp_path / "main.clio").write_text(
+        "FROM \"./lib.clio\" IMPORT Tag, tagger\n"
+        "\n"
+        "STEP use_tag\n"
+        "  MODE: judgment\n"
+        "  TAKES: text: str\n"
+        "  GIVES: result: Tag\n"
+        "\n"
+        "EXPOSE FLOW pipeline\n"
+        "  TAKES: text: str\n"
+        "  GIVES: result: Tag\n"
+        "  tagger(text=text)\n"
+    )
+    rc = _cmd_check(str(tmp_path / "main.clio"))
+    assert rc == 0
+
+
+def test_cli_check_reports_missing_import(tmp_path):
+    """_cmd_check returns non-zero when a FROM ... IMPORT references a missing file."""
+    from clio.cli import _cmd_check
+
+    src = tmp_path / "main.clio"
+    src.write_text('FROM "./missing.clio" IMPORT X\n')
+    rc = _cmd_check(str(src))
+    assert rc != 0

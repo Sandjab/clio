@@ -4,9 +4,32 @@
 
 ### Added
 
+- Cross-file imports: new `FROM "<path>" IMPORT <name> [AS <alias>], ...`
+  declaration enables sharing of `FLOW`s and `CONTRACT`s across `.clio`
+  files. Paths are relative to the importing file, posix-style, with
+  `.clio` extension.
+- Explicit visibility markers: `EXPOSE` and `INTERNAL` may now prefix
+  `FLOW` and `CONTRACT` declarations. The v0.17 sibling-call heuristic
+  for `target: mcp-server` is replaced by explicit `EXPOSE` markers.
+- Re-export support: a top-level `EXPOSE <name>` re-exports a
+  previously-imported symbol.
+- `clio doctor --migrate-v018 [--write]`: mechanical migration tool
+  that applies the v0.17 heuristic and proposes/applies `EXPOSE`
+  insertions.
+- New multi-file example project under `examples/multi_file/`.
+
 ### Changed
 
-### Fixed
+- `target: mcp-server` now requires at least one `EXPOSE FLOW` in the
+  entry file (E_MCP_001). Files relying on the v0.17 implicit exposure
+  must be migrated.
+- `target: claude-cli` rejects sources containing `FROM ... IMPORT ...`
+  (E_CLI_001). Use `python`, `mcp-server`, `claude-skill`, or
+  `langgraph` for multi-file projects, or inline the imported FLOWs.
+
+### Migration
+
+See `docs/manual/06-migration-v018.md` for the full migration guide.
 
 ## v0.17.3 — 2026-05-15
 

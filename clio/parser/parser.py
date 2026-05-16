@@ -25,6 +25,8 @@ from clio.parser.ast_nodes import (
     IdentExpr,
     IfBlock,
     ImplBlock,
+    ImportDecl,
+    ImportItem,
     IntExpr,
     InvokeBlock,
     JsonBody,
@@ -41,6 +43,7 @@ from clio.parser.ast_nodes import (
     Program,
     RawBody,
     RecordType,
+    ReexportDecl,
     RescueBlock,
     ResourcesDecl,
     RestBody,
@@ -107,27 +110,62 @@ class _Parser:
 
     def parse_program(self) -> Program:
         decls: list[object] = []
+        imports: list[ImportDecl] = []
         self.skip_newlines()
         while self.peek().type != TokenType.EOF:
             t = self.peek()
+            if t.type == TokenType.KEYWORD and t.value == "FROM":
+                imports.append(self.parse_import_decl())
+                self.skip_newlines()
+                continue
+
+            # Visibility prefix detection (EXPOSE / INTERNAL)
+            exposed: bool | None = None
+            vis_tok = None
+            if t.type == TokenType.KEYWORD and t.value in ("EXPOSE", "INTERNAL"):
+                vis_tok = t
+                exposed = (t.value == "EXPOSE")
+                self.advance()
+                nxt = self.peek()
+                if nxt.type == TokenType.KEYWORD and nxt.value in ("EXPOSE", "INTERNAL"):
+                    raise ParseError(
+                        "only one visibility marker allowed before FLOW/CONTRACT",
+                        nxt.line, nxt.col,
+                    )
+                # Re-export form: EXPOSE <IDENT> (no FLOW/CONTRACT keyword, no body).
+                # Only valid with EXPOSE; INTERNAL <name> stays an error (E_VIS_002).
+                if exposed is True and nxt.type == TokenType.IDENT:
+                    name_tok = self.expect(TokenType.IDENT)
+                    decls.append(ReexportDecl(
+                        name=name_tok.value, line=vis_tok.line, col=vis_tok.col,
+                    ))
+                    self.skip_newlines()
+                    continue
+                if not (nxt.type == TokenType.KEYWORD and nxt.value in ("FLOW", "CONTRACT")):
+                    raise ParseError(
+                        f"{vis_tok.value} applies only to FLOW and CONTRACT (got {nxt.value!r})",
+                        vis_tok.line, vis_tok.col,
+                    )
+                t = nxt
+
             if t.type == TokenType.KEYWORD and t.value == "STEP":
                 decls.append(self.parse_step())
             elif t.type == TokenType.KEYWORD and t.value == "CONTRACT":
-                decls.append(self.parse_contract())
+                decls.append(self.parse_contract(exposed=exposed or False))
             elif t.type == TokenType.KEYWORD and t.value == "FLOW":
-                decls.append(self.parse_flow())
+                decls.append(self.parse_flow(exposed=exposed or False))
             elif t.type == TokenType.KEYWORD and t.value == "RESOURCES":
                 decls.append(self.parse_resources())
             elif t.type == TokenType.KEYWORD and t.value == "TEST":
                 decls.append(self.parse_test())
             else:
                 raise ParseError(
-                    f"expected STEP / CONTRACT / FLOW / RESOURCES / TEST, "
+                    f"expected FROM / STEP / CONTRACT / FLOW / RESOURCES / TEST, "
                     f"got {t.type.value} {t.value!r}",
                     t.line, t.col,
                 )
             self.skip_newlines()
-        return Program(tuple(decls))
+        return Program(tuple(decls), imports=tuple(imports))
 
     def parse_test(self) -> TestDecl:
         """Parse a `TEST <name>: ... ` top-level block.
@@ -299,6 +337,67 @@ class _Parser:
             f"expected predicate (not_empty / empty / == … / != … / > … / >= … / "
             f"< … / <= … / contains …), got {t.type.value} {t.value!r}",
             t.line, t.col,
+        )
+
+    def parse_import_decl(self) -> ImportDecl:
+        """Parse a top-level FROM "<path>" IMPORT <item>, <item>, ... line.
+
+        Grammar:
+          FROM STRING_LIT IMPORT IDENT [AS IDENT] ("," IDENT [AS IDENT])* NEWLINE
+        """
+        tok_from = self.expect(TokenType.KEYWORD, "FROM")
+        path_tok = self.expect(TokenType.STRING)
+        path = path_tok.value
+        if not (path.startswith("./") or path.startswith("../")):
+            raise ParseError(
+                f"path must start with './' or '../', got {path!r}",
+                path_tok.line, path_tok.col,
+            )
+        if not path.endswith(".clio"):
+            raise ParseError(
+                f"path must end with '.clio', got {path!r}",
+                path_tok.line, path_tok.col,
+            )
+        self.expect(TokenType.KEYWORD, "IMPORT")
+        items: list[ImportItem] = []
+        seen_names: set[str] = set()
+        while True:
+            if self.peek().type in (TokenType.NEWLINE, TokenType.EOF):
+                if not items:
+                    raise ParseError(
+                        "expected at least one symbol after IMPORT",
+                        tok_from.line, tok_from.col,
+                    )
+                break
+            name_tok = self.expect(TokenType.IDENT)
+            alias: str | None = None
+            if self.peek().type == TokenType.KEYWORD and self.peek().value == "AS":
+                self.advance()  # consume AS
+                if self.peek().type != TokenType.IDENT:
+                    raise ParseError(
+                        "expected identifier after AS",
+                        self.peek().line, self.peek().col,
+                    )
+                alias_tok = self.advance()
+                alias = alias_tok.value
+            if name_tok.value in seen_names:
+                raise ParseError(
+                    f"duplicate symbol {name_tok.value!r} in same IMPORT statement",
+                    name_tok.line, name_tok.col,
+                )
+            seen_names.add(name_tok.value)
+            items.append(ImportItem(
+                name=name_tok.value, alias=alias,
+                line=name_tok.line, col=name_tok.col,
+            ))
+            if self.peek().type == TokenType.COMMA:
+                self.advance()
+                continue
+            break
+        self.skip_newlines()
+        return ImportDecl(
+            path=path, items=tuple(items),
+            line=tok_from.line, col=tok_from.col,
         )
 
     def parse_resources(self) -> ResourcesDecl:
@@ -1869,7 +1968,7 @@ class _Parser:
             t.line, t.col,
         )
 
-    def parse_contract(self) -> "ContractDecl":
+    def parse_contract(self, exposed: bool = False) -> "ContractDecl":
         from clio.parser.expressions import parse_expression
         kw = self.expect(TokenType.KEYWORD, "CONTRACT")
         ident = self.expect(TokenType.IDENT)
@@ -1919,6 +2018,7 @@ class _Parser:
             assert_expr=assert_expr,
             line=kw.line,
             col=kw.col,
+            exposed=exposed,
         )
 
     def parse_field_list(self) -> tuple[Field, ...]:
@@ -2029,7 +2129,7 @@ class _Parser:
         self.expect(TokenType.RPAREN)
         return EnumType(values=tuple(values))
 
-    def parse_flow(self) -> FlowDecl:
+    def parse_flow(self, exposed: bool = False) -> FlowDecl:
         kw = self.expect(TokenType.KEYWORD, "FLOW")
         ident = self.expect(TokenType.IDENT)
         self.expect(TokenType.NEWLINE)
@@ -2136,6 +2236,7 @@ class _Parser:
             takes=takes,
             gives=gives,
             description=description,
+            exposed=exposed,
         )
 
     def parse_flow_item(self) -> "StepCall | ForEachBlock | IfBlock | MatchBlock | WhileBlock | ResumeAst":

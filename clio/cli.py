@@ -8,8 +8,9 @@ from pathlib import Path
 from clio.emitters.claude_cli import ClaudeCLIEmitter
 from clio.emitters.python import PythonEmitter
 from clio.graph_render import to_dot, to_html, to_mermaid
-from clio.ir.builder import build_ir
-from clio.parser.parser import ParseError, parse
+from clio.ir.builder import IRBuildError, build_ir
+from clio.ir.resolver import CompileError, resolve_imports
+from clio.parser.parser import ParseError
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -52,6 +53,14 @@ def main(argv: list[str] | None = None) -> int:
         "--flow", dest="flow", default=None,
         help="select a FLOW by name when the source declares more than one",
     )
+    doctor_p.add_argument(
+        "--migrate-v018", dest="migrate_v018", action="store_true", default=False,
+        help="propose (or apply with --write) the v0.17 → v0.18 EXPOSE migration",
+    )
+    doctor_p.add_argument(
+        "--write", dest="write", action="store_true", default=False,
+        help="write migration changes back to the source file (use with --migrate-v018)",
+    )
 
     status_p = sub.add_parser("status")
     status_p.add_argument("--state-file", dest="state_file", default=None)
@@ -73,7 +82,8 @@ def main(argv: list[str] | None = None) -> int:
             model=args.model,
         )
     if args.cmd == "doctor":
-        return _cmd_doctor(args.source, args.flow)
+        return _cmd_doctor(args.source, args.flow,
+                           migrate_v018=args.migrate_v018, write=args.write)
     if args.cmd == "status":
         return _cmd_status(args.state_file, args.log_file, args.limit)
     return 2
@@ -86,12 +96,18 @@ def _cmd_compile(source: str, target: str, output: str, flow: str | None = None)
         return 2
 
     try:
-        graph = build_ir(parse(src_path.read_text()), flow_name=flow)
-    except ParseError as e:
-        print(f"{src_path.name}:{e}", flush=True)
-        return 1
-    except ValueError as e:
-        print(f"{src_path.name}: {e}", flush=True)
+        parsed = resolve_imports(src_path)
+        had_imports = any(p.imports for p in parsed.values())
+        if target == "claude-cli" and had_imports:
+            print(
+                "error: target 'claude-cli' does not support cross-file imports "
+                "(deferred to a future release)",
+                file=sys.stderr,
+            )
+            return 1
+        graph = build_ir(parsed, entry=src_path.resolve(), flow_name=flow)
+    except (ParseError, IRBuildError, CompileError) as e:
+        print(f"error: {e}", file=sys.stderr)
         return 1
 
     out_path = Path(output)
@@ -119,10 +135,12 @@ def _cmd_check(source: str) -> int:
         print(f"clio: source file not found: {source}", flush=True)
         return 2
     try:
-        parse(src_path.read_text())
-    except ParseError as e:
-        print(f"{src_path.name}:{e}", flush=True)
+        parsed = resolve_imports(src_path)
+        build_ir(parsed, entry=src_path.resolve())
+    except (ParseError, IRBuildError, CompileError) as e:
+        print(f"error: {e}", file=sys.stderr)
         return 1
+    print("ok")
     return 0
 
 
@@ -132,12 +150,10 @@ def _cmd_graph(source: str, fmt: str, output: str | None, flow: str | None = Non
         print(f"clio: source file not found: {source}", flush=True)
         return 2
     try:
-        graph = build_ir(parse(src_path.read_text()), flow_name=flow)
-    except ParseError as e:
-        print(f"{src_path.name}:{e}", flush=True)
-        return 1
-    except ValueError as e:
-        print(f"{src_path.name}: {e}", flush=True)
+        parsed = resolve_imports(src_path)
+        graph = build_ir(parsed, entry=src_path.resolve(), flow_name=flow)
+    except (ParseError, IRBuildError, CompileError) as e:
+        print(f"error: {e}", file=sys.stderr)
         return 1
 
     if fmt == "mermaid":
@@ -200,7 +216,33 @@ def _cmd_gen(
     return 0
 
 
-def _cmd_doctor(source: str | None, flow: str | None = None) -> int:
+def _cmd_doctor(
+    source: str | None,
+    flow: str | None = None,
+    *,
+    migrate_v018: bool = False,
+    write: bool = False,
+) -> int:
+    if migrate_v018:
+        if not source:
+            print("clio doctor --migrate-v018: a source file is required", file=sys.stderr)
+            return 2
+        from clio.diagnostics import migrate_v018 as do_migrate
+        src_path = Path(source)
+        new_text, changes = do_migrate(src_path)
+        if not changes:
+            print(f"{source}: no v0.18 migration needed")
+            return 0
+        print(f"file: {source}")
+        print("Proposed changes (using v0.17 sibling-call heuristic):")
+        for line_num, _prefix in changes:
+            print(f"  line {line_num}: + EXPOSE before existing declaration")
+        if write:
+            src_path.write_text(new_text)
+            print(f"\nWrote {len(changes)} change(s) to {source}")
+        else:
+            print("\nRun with --write to apply.")
+        return 0
     from clio.diagnostics import run_doctor
     src = Path(source) if source else None
     code, report = run_doctor(src, flow_name=flow)

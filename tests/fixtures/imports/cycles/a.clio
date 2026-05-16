@@ -1,0 +1,11 @@
+FROM "./b.clio" IMPORT X
+
+STEP helper_a
+  MODE: judgment
+  TAKES: x: int
+  GIVES: y: int
+
+FLOW main
+  TAKES: x: int
+  GIVES: y: int
+  helper_a(x=x)

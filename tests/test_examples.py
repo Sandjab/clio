@@ -164,8 +164,9 @@ def test_compile_critical_pipeline_mcp_server(tmp_path):
     from clio.emitters.mcp_server import MCPServerEmitter
 
     src = (REPO_ROOT / "examples/critical_pipeline.clio").read_text()
-    # Override target to mcp-server for this test only.
+    # Override target to mcp-server and add EXPOSE marker for this test only.
     src_mcp = src.replace("target:   python", "target:   mcp-server")
+    src_mcp = src_mcp.replace("FLOW pipeline", "EXPOSE FLOW pipeline")
     program = parse(src_mcp)
     ir = build_ir(program)
     MCPServerEmitter().emit(ir, tmp_path)
@@ -201,6 +202,7 @@ def test_compile_flow_composition_example_mcp_batch(tmp_path):
 
     src = (REPO_ROOT / "examples/flow_composition.clio").read_text()
     src_mcp = src.replace("target: python", "target: mcp-server")
+    src_mcp = src_mcp.replace("FLOW batch", "EXPOSE FLOW batch")
     program = parse(src_mcp)
     ir = build_ir(program, flow_name="batch")
     MCPServerEmitter().emit(ir, tmp_path)

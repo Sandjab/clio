@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,7 @@ class ContractDecl:
     assert_expr: "ExprNode | None"
     line: int
     col: int
+    exposed: bool = False         # v0.18 — set True by EXPOSE prefix
 
 
 @dataclass(frozen=True)
@@ -189,6 +191,7 @@ class FlowDecl:
     # `description:` so the host LLM can auto-trigger the skill on
     # intent match.
     description: str | None = None
+    exposed: bool = False         # v0.18 — set True by EXPOSE prefix
 
 
 @dataclass(frozen=True)
@@ -227,6 +230,34 @@ class TestDecl:
 @dataclass(frozen=True)
 class Program:
     decls: tuple[object, ...]    # StepDecl | ContractDecl | FlowDecl | TestDecl
+    imports: "tuple[ImportDecl, ...]" = ()     # v0.18
+    source_path: Path | None = None            # v0.18 — for error messages
+
+
+@dataclass(frozen=True)
+class ImportItem:
+    """One symbol in a FROM ... IMPORT ... list."""
+    name: str
+    alias: str | None    # None means: imported under its original name
+    line: int
+    col: int
+
+
+@dataclass(frozen=True)
+class ImportDecl:
+    """FROM "<path>" IMPORT <item>, <item>, ..."""
+    path: str            # raw path as in source ("./lib/nlp.clio")
+    items: tuple[ImportItem, ...]
+    line: int
+    col: int
+
+
+@dataclass(frozen=True)
+class ReexportDecl:
+    """Top-level 'EXPOSE <name>' re-exports a previously imported symbol."""
+    name: str
+    line: int
+    col: int
 
 
 @dataclass(frozen=True)

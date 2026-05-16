@@ -1,0 +1,7 @@
+
+EXPOSE CONTRACT Article
+  SHAPE: {title: str, body: str, lang: str}
+
+EXPOSE CONTRACT AnalysisResult
+  SHAPE: {category: enum(news|opinion|analysis|other), summary: str, confidence: float}
+  ASSERT: 0.0 <= confidence <= 1.0

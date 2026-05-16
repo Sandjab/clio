@@ -418,4 +418,7 @@ class FlowGraph:
     resources: ResourcesIR | None = None
     tests: tuple[TestIR, ...] = ()
     flows: tuple[FlowIR, ...] = ()                         # v0.17 — every FLOW, signed or not
-    exposed_flow_names: frozenset[str] = frozenset()       # v0.17 — for target=mcp-server
+    exposed_flow_names: frozenset[str] = frozenset()
+    # v0.18 — names of entry-file FLOWs marked EXPOSE; for target=mcp-server
+    # these become the public tools. Imported FLOWs are never exposed
+    # transitively by the importing file.

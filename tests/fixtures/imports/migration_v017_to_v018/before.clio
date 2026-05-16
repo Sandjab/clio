@@ -1,0 +1,27 @@
+RESOURCES
+  target: mcp-server
+  models: [sonnet]
+
+CONTRACT Article
+  SHAPE: {title: str}
+
+FLOW classify_article
+  TAKES: article: Article
+  GIVES: label: str
+  internal_helper(x=article)
+  -> score(text=article)
+
+FLOW internal_helper
+  TAKES: x: str
+  GIVES: y: str
+  bump(x=x)
+
+STEP score
+  MODE: judgment
+  TAKES: text: str
+  GIVES: label: str
+
+STEP bump
+  MODE: judgment
+  TAKES: x: str
+  GIVES: y: str

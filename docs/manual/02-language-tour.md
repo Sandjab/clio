@@ -325,3 +325,125 @@ FLOW news_pipeline
 This is `examples/entities.clio` (with `summarize_entities` removed). Three primitives, twelve lines, runnable on three different targets.
 
 Next: [the cookbook](03-cookbook.md) for common patterns built from these primitives.
+
+## Splitting your code across files (v0.18)
+
+Large pipelines accumulate STEPs, CONTRACTs, and FLOWs in a single `.clio` file.
+When the file grows past a few dozen declarations, a three-file layout keeps
+things clean: shared shapes in one file, library logic in a second, entry point
+in a third.
+
+### The `FROM … IMPORT` declaration
+
+```
+FROM "<path>" IMPORT <name> [AS <alias>] [, <name> [AS <alias>]] ...
+```
+
+- The path is relative to the importing file's directory.
+- It must start with `./` or `../`.
+- It must end with `.clio`.
+
+```
+FROM "./schemas.clio" IMPORT Article, AnalysisResult
+FROM "./nlp/nlp.clio" IMPORT analyse AS nlp_analyse
+```
+
+Multiple `FROM` declarations are allowed in a single file. The compiler
+builds the full transitive closure of imports and rejects cycles.
+
+### Visibility markers: `EXPOSE` and `INTERNAL`
+
+Only explicitly `EXPOSE`d symbols are importable. Symbols with no marker
+or with `INTERNAL` are private to their file.
+
+```
+EXPOSE CONTRACT Article        # importable
+  SHAPE: {title: str, body: str, lang: str}
+
+INTERNAL FLOW _helper          # private helper — not importable
+  TAKES: x: str
+  GIVES: y: str
+  ...
+
+FLOW also_private              # no marker = INTERNAL
+  ...
+```
+
+An `EXPOSE FLOW` must declare both `TAKES:` and `GIVES:`.
+
+### Worked example: `examples/multi_file/`
+
+The project under `examples/multi_file/` shows the pattern with three files:
+
+**`schemas.clio`** — shared CONTRACT definitions:
+
+```
+EXPOSE CONTRACT Article
+  SHAPE: {title: str, body: str, lang: str}
+
+EXPOSE CONTRACT AnalysisResult
+  SHAPE: {category: enum(news|opinion|analysis|other), summary: str, confidence: float}
+  ASSERT: 0.0 <= confidence <= 1.0
+```
+
+**`nlp/nlp.clio`** — reusable NLP FLOW that imports the shared shapes:
+
+```
+FROM "../schemas.clio" IMPORT Article, AnalysisResult
+
+STEP preprocess
+  MODE: exact
+  TAKES: article: Article
+  GIVES: cleaned: str
+
+EXPOSE FLOW analyse
+  TAKES: article: Article
+  GIVES: result: AnalysisResult
+  preprocess(article=article)
+  -> classify(text=cleaned)
+
+STEP classify
+  MODE: judgment
+  TAKES: text: str
+  GIVES: result: AnalysisResult
+```
+
+**`main.clio`** — the entry point:
+
+```
+RESOURCES
+  target: python
+
+FROM "./schemas.clio" IMPORT Article, AnalysisResult
+FROM "./nlp/nlp.clio" IMPORT analyse
+
+STEP load_article
+  MODE: exact
+  TAKES: path: str
+  GIVES: article: Article
+
+EXPOSE FLOW pipeline
+  TAKES: path: str
+  GIVES: result: AnalysisResult
+  load_article(path=path)
+  -> analyse(article=article)
+```
+
+Compile it:
+
+```bash
+clio compile examples/multi_file/main.clio --target python --output ./out --flow pipeline
+```
+
+### `target: mcp-server` and visibility
+
+For `target: mcp-server`, `EXPOSE FLOW`s in the entry file become MCP tools.
+The entry file must expose at least one FLOW. Files that relied on the v0.17
+implicit-exposure heuristic must be migrated — run `clio doctor --migrate-v018`
+to apply the heuristic automatically (see `docs/manual/06-migration-v018.md`).
+
+### `target: claude-cli` limitation
+
+`target: claude-cli` rejects sources containing `FROM … IMPORT`. Use
+`--target python`, `--target mcp-server`, `--target claude-skill`, or
+`--target langgraph` for multi-file projects.

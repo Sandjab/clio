@@ -1394,15 +1394,18 @@ def test_subflow_mutual_recursion_rejected():
 def test_graph_exposes_all_flows():
     from clio.ir.builder import build_ir
     from clio.parser.parser import parse
+    # v0.18: exposure is now an explicit marker (EXPOSE FLOW), no longer
+    # derived by the sibling-call heuristic. `a` is called by `b`; only
+    # `b` is marked EXPOSE here, so only `b` is in exposed_flow_names.
     src = (
         "STEP s\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n\n"
         "FLOW a\n  TAKES: x: str\n  GIVES: y: str\n  s(x=x)\n\n"
-        "FLOW b\n  TAKES: x: str\n  GIVES: y: str\n  a(x=x)\n"
+        "EXPOSE FLOW b\n  TAKES: x: str\n  GIVES: y: str\n  a(x=x)\n"
     )
     g = build_ir(parse(src), flow_name="b")
     assert g.flow is not None and g.flow.name == "b"
     names = {f.name for f in g.flows}
     assert names == {"a", "b"}
-    # `a` is called by `b`, so it is NOT exposed at the top level.
+    # `a` is not marked EXPOSE, so it is NOT in exposed_flow_names.
     assert "a" not in g.exposed_flow_names
     assert "b" in g.exposed_flow_names
