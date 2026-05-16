@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **`target: claude-skill` — IF / MATCH narration names sub-steps.** `render_if_section` and `render_match_section` previously rendered branches and cases as a count only (`**True branch**: 2 sub-step(s) (see ordinal sections above/below)`, `Case 'spam': 1 sub-step(s)`), forcing the host LLM to grep back to the flat `## Step NN — <name>` cards without a direct pointer. Both helpers now list each sub-step by name (`**True branch**: \`human_review\``, `Case \`spam\`: \`archive\``), via a new shared `_summarise_branch_items` helper. Direct `CallIR` / `FlowCallIR` children are named verbatim; nested control-flow children (IF / MATCH / FOR EACH / WHILE inside another branch) are flagged as `nested IF` / `nested MATCH` etc. so the host knows to look for an inner section. Tests added: `test_if_section_names_then_and_else_substeps`, `test_match_section_names_substeps_per_case`.
+
+### Fixed
+
+- **`target: claude-skill` — PARALLEL FOR EACH narration ↔ warning coherence.** When the source declares `FOR EACH ... PARALLEL AS <collector>`, the compile-time warning correctly states *"the emitted skill serializes iterations (the LLM host does not execute concurrently)"*, but the narration in SKILL.md previously contradicted that with `(PARALLEL mode)`, misleading the host into expecting concurrent execution. The narration now mirrors the warning: *"the source declares PARALLEL, but the emitted skill serialises iterations — the LLM host does not execute concurrently"*. Test added: `test_for_each_parallel_narration_states_serialisation`.
+
 ## [0.18.1] — 2026-05-16
 
 Patch release rolling up three cross-file IMPORT / EXPOSE correctness fixes (closes **#47**, **#48**, **#49**) surfaced by Gemini review of PR #46 (the v0.18.0 release-admin). Consolidated in PR #50. No language or IR-shape change — the compiler now actually enforces what `LANGUAGE_SPEC.md` already promised about re-exports, import clashes, and TEST alias resolution. Net test count `989 → 993` (+4).

@@ -541,6 +541,91 @@ def test_flat_step_sections_preserved_with_control_flow(tmp_path):
     assert "auto_route" in body
 
 
+def test_for_each_parallel_narration_states_serialisation(tmp_path):
+    """A3 polish: when the source declares `FOR EACH ... PARALLEL`, the
+    SKILL.md narration must explicitly state that the emitted skill
+    SERIALISES iterations (the LLM host does not execute concurrently),
+    matching the existing compile-time warning. Before this fix the
+    narration only said `(PARALLEL mode)` which contradicted the warning
+    and misled the host into expecting concurrent execution."""
+    src = (
+        "STEP load\n  GIVES: items: List<str>\n  MODE: exact\n"
+        "STEP process\n  TAKES: x: str\n  GIVES: r: str\n  MODE: exact\n"
+        "FLOW pipe\n"
+        "  load()\n"
+        "    -> FOR EACH item IN items PARALLEL AS results:\n"
+        "         process(x=item)\n"
+    )
+    graph = build_ir(parse(src))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    foreach_section = body.split("### FOR EACH ")[1].split("\n## ")[0]
+    # The narration must mention PARALLEL was declared
+    assert "PARALLEL" in foreach_section, (
+        f"narration must surface that source declared PARALLEL; got:\n{foreach_section}"
+    )
+    # AND must state the skill serialises (alignment with the compile warning)
+    serialised_marker = (
+        "serialise" in foreach_section.lower()
+        or "serialize" in foreach_section.lower()
+        or "sequential" in foreach_section.lower()
+    )
+    assert serialised_marker, (
+        f"narration must state that iterations are serialised in the skill; got:\n{foreach_section}"
+    )
+
+
+def test_match_section_names_substeps_per_case(tmp_path):
+    """A2 polish: render_match_section must NAME the sub-steps inside each
+    case body, tied to the case pattern. Previously the narration just said
+    `Case 'spam': N sub-step(s)`, forcing the host LLM to guess which flat
+    `## Step NN` card belonged to which case. Now each case lists its
+    sub-step names so the host can route deterministically."""
+    graph = build_ir(parse(_MATCH_DECLS + _MATCH_FLOW))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    match_section = body.split("### MATCH ")[1].split("\n## ")[0]
+    # Each case names its sub-step
+    for pattern, expected_step in [
+        ("spam", "archive"),
+        ("support", "route_support"),
+        ("sales", "route_sales"),
+        ("DEFAULT", "route_general"),
+    ]:
+        # The line for this case must mention both the pattern and the step name
+        case_line = next(
+            (line for line in match_section.splitlines() if pattern in line),
+            None,
+        )
+        assert case_line is not None, (
+            f"MATCH section missing case '{pattern}'; section was:\n{match_section}"
+        )
+        assert expected_step in case_line, (
+            f"Case '{pattern}' must name `{expected_step}`; got line: {case_line!r}"
+        )
+
+
+def test_if_section_names_then_and_else_substeps(tmp_path):
+    """A1 polish: render_if_section must NAME the sub-steps it routes to in
+    each branch, not just count them. The vague `2 sub-step(s) (see ordinal
+    sections above/below)` forced the host LLM to grep back to step cards
+    without a clear pointer. Naming the sub-steps lets the host map directly
+    from the conditional to the `## Step NN — <name>` card."""
+    graph = build_ir(parse(_IF_DECLS + _IF_FLOW))
+    ClaudeSkillEmitter().emit(graph, tmp_path)
+    body = (tmp_path / "SKILL.md").read_text()
+    # Find the IF section block, scoped check (avoid matching the flat step cards above)
+    if_section = body.split("### IF ")[1].split("\n## ")[0]
+    # The True branch references human_review (the then-body step)
+    assert "human_review" in if_section, (
+        f"render_if_section must name then-body sub-steps in the IF block; got:\n{if_section}"
+    )
+    # The False branch references auto_route (the else-body step)
+    assert "auto_route" in if_section, (
+        f"render_if_section must name else-body sub-steps in the IF block; got:\n{if_section}"
+    )
+
+
 # ----- Task 8: WHILE / FOR EACH iteration sub-flows in SKILL.md ---------------
 
 _FOR_EACH_DECLS = (
