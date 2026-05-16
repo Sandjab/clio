@@ -61,6 +61,8 @@ uv pip install ./out
 
 You get a Python MCP server that registers each `FLOW` as a tool. Judgment steps delegate to the MCP client via `sampling/createMessage` — **no API key on the server**, no `anthropic`/`openai` SDK dep.
 
+> **Tool-surface check (v0.18):** the compile-time error [`E_MCP_001`](06-troubleshooting.md#e_mcp_001) (requires at least one `EXPOSE FLOW` in the entry file) **only fires when the source declares `RESOURCES.target: mcp-server` explicitly**. When the target is set only via the CLI `--target mcp-server` flag on a source without `RESOURCES`, the check is bypassed: a **single-FLOW** source auto-exposes its only FLOW as the tool (backward-compat / convenience); a **multi-FLOW** source without any `EXPOSE` produces a server with an **empty tool list**. To benefit from the check, declare `RESOURCES.target` in the source.
+
 **Use when:**
 - You want to expose your flow as a tool inside Claude Desktop / Cursor / any MCP client.
 - You don't want to manage API keys (the client provides the LLM access).
