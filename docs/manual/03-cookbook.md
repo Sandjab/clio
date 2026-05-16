@@ -936,6 +936,11 @@ Key idea: the façade re-exports imported symbols via bare `EXPOSE <name>`. If
 unchanged. This is the same barrel-file pattern familiar from TypeScript
 `index.ts` files, applied to CLIO.
 
+The pattern also works for `target: mcp-server` since v0.18.1: a re-exported
+FLOW appears in `exposed_flow_names` and is registered as a tool in the
+generated server (fixed in #47). Before v0.18.1, re-exports were silently
+dropped from the MCP tool surface.
+
 ## What's not in the cookbook (yet)
 
 - **Multi-field ASSERT** — accept `a > b` between two fields. Specced, planned.
