@@ -220,3 +220,12 @@ What's in the language today:
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Dashboard
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/dashboard-dark.svg">
+  <img src="assets/dashboard-light.svg" alt="CLIO repo dashboard — refreshed every 6 hours by GitHub Actions">
+</picture>
+
+> Drawn by [`cartouche-svg`](https://github.com/Sandjab/cartouche). The SVG above pulls fresh stats from the GitHub API and refreshes every 6 hours via [`.github/workflows/dashboard.yml`](.github/workflows/dashboard.yml).
