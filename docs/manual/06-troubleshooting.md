@@ -643,11 +643,20 @@ A re-export `EXPOSE Article` is ambiguous when both a `CONTRACT Article` and a
 **Fix:** use qualified re-export by fully declaring the name locally under a
 distinct alias, or rename one of the two symbols at the source.
 
+<a id="e_mcp_001"></a>
 ### E_MCP_001 — `ValueError: target=mcp-server requires at least one EXPOSE FLOW in the entry file`
 
 The entry file has no `EXPOSE FLOW` declarations. The `mcp-server` target
 derives its tool list from exposed FLOWs; without one it would emit an empty
 server.
+
+**Scope of the check:** `E_MCP_001` fires only when the source declares
+`RESOURCES.target: mcp-server` explicitly. If the target is set only via the
+CLI `--target mcp-server` flag on a source without `RESOURCES`, the check is
+bypassed — single-FLOW sources then auto-expose their only FLOW, and
+multi-FLOW sources silently emit an empty tool list. Declare the target in
+`RESOURCES` to opt into the check. See [04-targets.md § mcp-server](04-targets.md#mcp-server)
+for the full tool-surface contract.
 
 **Fix:** mark the FLOW(s) you want to expose:
 
