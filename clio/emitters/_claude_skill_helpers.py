@@ -605,29 +605,56 @@ def _render_condition(cond) -> str:
     return f"{cond.step_name}.{cond.field} {cond.op} {lit_repr}"
 
 
-def _summarise_branch_items(items: tuple[object, ...]) -> str:
+_BranchItem = (
+    CallIR | FlowCallIR | IfBlockIR | MatchBlockIR | ForEachIR | WhileBlockIR
+)
+
+
+def _summarise_branch_items(
+    items: tuple[_BranchItem, ...],
+    lang: str = "en",
+) -> str:
     """Summarise a control-flow branch body as a human-readable list of
     sub-step names. Direct CallIR / FlowCallIR children are named verbatim
     (these are the steps the host will execute when this branch is taken).
     Nested control-flow children (IF / MATCH / FOR EACH / WHILE) are listed
-    by kind ("nested IF") so the host knows to look for an inner section."""
+    by kind ("nested IF") in the requested language so the host knows to
+    look for an inner section."""
+    labels = {
+        "en": {
+            "sub-flow": "(sub-flow)",
+            "if": "nested IF",
+            "match": "nested MATCH",
+            "foreach": "nested FOR EACH",
+            "while": "nested WHILE",
+            "empty": "(empty)",
+        },
+        "fr": {
+            "sub-flow": "(sous-flux)",
+            "if": "Si imbriqué",
+            "match": "Cas imbriqué",
+            "foreach": "Pour chaque imbriqué",
+            "while": "Tant que imbriqué",
+            "empty": "(vide)",
+        },
+    }[lang]
     parts: list[str] = []
     for sub in items:
         if isinstance(sub, CallIR):
             parts.append(f"`{sub.step_name}`")
         elif isinstance(sub, FlowCallIR):
-            parts.append(f"`{sub.flow_name}` (sub-flow)")
+            parts.append(f"`{sub.flow_name}` {labels['sub-flow']}")
         elif isinstance(sub, IfBlockIR):
-            parts.append("nested IF")
+            parts.append(labels["if"])
         elif isinstance(sub, MatchBlockIR):
-            parts.append("nested MATCH")
+            parts.append(labels["match"])
         elif isinstance(sub, ForEachIR):
-            parts.append("nested FOR EACH")
+            parts.append(labels["foreach"])
         elif isinstance(sub, WhileBlockIR):
-            parts.append("nested WHILE")
+            parts.append(labels["while"])
         else:
             parts.append(type(sub).__name__)
-    return ", ".join(parts) if parts else "(empty)"
+    return ", ".join(parts) if parts else labels["empty"]
 
 
 def render_if_section(if_node: IfBlockIR, idx_label: str, lang: str = "en") -> str:
@@ -641,7 +668,7 @@ def render_if_section(if_node: IfBlockIR, idx_label: str, lang: str = "en") -> s
     cond = _render_condition(if_node.condition)
     a_label = {"en": "True branch", "fr": "Branche Vrai"}[lang]
     b_label = {"en": "False branch", "fr": "Branche Faux"}[lang]
-    then_names = _summarise_branch_items(if_node.then_body)
+    then_names = _summarise_branch_items(if_node.then_body, lang=lang)
     head = (
         f"### {title} {cond}  (source line {if_node.line})\n\n"
         f"Evaluate the condition. If true, proceed with branch A. "
@@ -649,7 +676,7 @@ def render_if_section(if_node: IfBlockIR, idx_label: str, lang: str = "en") -> s
         f"- **{a_label}**: {then_names}\n"
     )
     if if_node.else_body:
-        else_names = _summarise_branch_items(if_node.else_body)
+        else_names = _summarise_branch_items(if_node.else_body, lang=lang)
         head += f"- **{b_label}**: {else_names}\n"
     head += "\n"
     return head
@@ -667,7 +694,7 @@ def render_match_section(match_node: MatchBlockIR, idx_label: str, lang: str = "
     )
     for case in match_node.cases:
         pattern = case.value if case.value is not None else "DEFAULT"
-        names = _summarise_branch_items(case.body)
+        names = _summarise_branch_items(case.body, lang=lang)
         head += f"- **Case `{pattern}`**: {names}\n"
     head += "\n"
     return head
@@ -688,14 +715,23 @@ def render_for_each_section(node: ForEachIR, idx_label: str, lang: str = "en") -
     if node.parallel and node.collector:
         # Honest about the host's serial execution: the source declares
         # PARALLEL but the emitted skill cannot exploit it (the LLM host
-        # processes iterations sequentially). Aligns with the compile-time
-        # warning emitted in clio/emitters/claude_skill.py.
-        parallel_note = (
-            f" Results are accumulated into `state.{node.collector}`. "
-            f"Note: the source declares PARALLEL, but the emitted skill "
-            f"serialises iterations — the LLM host does not execute "
-            f"concurrently."
-        )
+        # processes iterations sequentially). Wording mirrors the compile-
+        # time warning emitted in clio/emitters/claude_skill.py — same
+        # AE spelling ("serializes"), same parenthetical clause.
+        parallel_note = {
+            "en": (
+                f" Results are accumulated into `state.{node.collector}`. "
+                f"Note: the source declares PARALLEL, but the emitted skill "
+                f"serializes iterations (the LLM host does not execute "
+                f"concurrently)."
+            ),
+            "fr": (
+                f" Les résultats sont accumulés dans `state.{node.collector}`. "
+                f"Note : la source déclare PARALLEL, mais le skill émis "
+                f"sérialise les itérations (l'hôte LLM n'exécute pas en "
+                f"concurrence)."
+            ),
+        }[lang]
     return (
         f"### {title} `{var}` IN `{coll}`  (source line {node.line})\n\n"
         f"For each element of `{coll}`:\n"
