@@ -139,20 +139,22 @@ One-line pitch: **write your LLM workflow as a source file, compile it to the ru
 
 For each weakness, the principle is the same: **do not copy what competitors do — leverage the compiler-not-runtime stance to address it differently.**
 
-Horizons used below:
-- **Short-term**: v0.4 – v0.5 (next 1–2 milestones)
-- **Mid-term**: v0.6 – v0.8
+Horizons used below (intentionally date-free — early version-tagged horizons were overtaken without a sync; we now track shipment status per item):
+- **Short-term**: 1–2 milestones out
+- **Mid-term**: 3–5 milestones out
 - **Long-term**: v1.0 and beyond
+
+Status legend on each row: ✅ shipped, 🟡 partial, ⬜ open.
 
 ### W1. Integration library
 
 **Strategy** — *do not rebuild LangChain or n8n's catalog*. Make the existing ecosystems usable from CLIO via a small set of generic invocation modes, then leverage MCP as the standardization vector. The compiler turns "integration coverage" from a quantity problem into a generic-mechanism problem.
 
-| Horizon | Action |
-|---|---|
-| Short-term | Land `impl.mode: rest`, `shell`, `sql` for EXACT steps (covers ~80 % of naïve integrations). Document the patterns with worked examples (geocoding, DB lookup, PDF extraction). |
-| Mid-term | Land `impl.mode: mcp_tool` — any MCP server (and there are now hundreds) becomes callable as an EXACT step. CLIO inherits the MCP ecosystem for free. |
-| Long-term | Lightweight **step-template registry**: importable `.clio` snippets shared via plain git URLs (no proprietary registry, no runtime). Pattern: `IMPORT step "github.com/clio-templates/stripe-charge@v1"`. Stays declarative, stays inspectable. |
+| Horizon | Status | Action |
+|---|---|---|
+| Short-term | ✅ | Land `impl.mode: rest`, `shell`, `sql` for EXACT steps (covers ~80 % of naïve integrations). Document the patterns with worked examples (geocoding, DB lookup, PDF extraction). |
+| Mid-term | ✅ | Land `impl.mode: mcp_tool` — any MCP server (and there are now hundreds) becomes callable as an EXACT step. CLIO inherits the MCP ecosystem for free. |
+| Long-term | ⬜ | Lightweight **step-template registry**: importable `.clio` snippets shared via plain git URLs (no proprietary registry, no runtime). Pattern: `IMPORT step "github.com/clio-templates/stripe-charge@v1"`. Stays declarative, stays inspectable. |
 
 **Anti-pattern to refuse**: building a proprietary connector store.
 
@@ -160,11 +162,11 @@ Horizons used below:
 
 **Strategy** — *emit instrumented code rather than embed an observability runtime*. Lean on open standards (structured logs, OpenTelemetry) so emitted projects integrate with whatever the team already runs (Datadog, Honeycomb, Tempo, Langfuse, …).
 
-| Horizon | Action |
-|---|---|
-| Short-term | Structured JSON-line logging in every emitter: one event per step (start, end, duration, cache_hit, estimated_cost, model). No agreement needed with any vendor. |
-| Mid-term | OpenTelemetry traces (one span per step, parent span for the flow). Works with any OTel backend. Optional — disabled by default to keep emitted projects lean. |
-| Long-term | Optional vendor-specific decorators via emitter flag (`--observability=langfuse`). Default stays OTel. |
+| Horizon | Status | Action |
+|---|---|---|
+| Short-term | ✅ | Structured JSON-line logging in every emitter that ships its own runtime: one event per `flow_start/end`, `step_start/end`, `parallel_block_start/end`. Activation via `CLIO_LOG=1` + `CLIO_LOG_FILE=path.jsonl`. Shipped on `target: python` and `target: mcp-server`. `target: langgraph` ships a **no-op stub** at `clio_runtime/logging.py` and delegates flow-level observability to **LangSmith** (which the LangGraph runtime instruments natively); the stub keeps the import surface so step bodies reused from the python emitter compile but emit nothing. `target: claude-cli` and `target: claude-skill` are out of scope (bash with no runtime; LLM-host orchestrated). |
+| Mid-term | ⬜ | OpenTelemetry traces (one span per step, parent span for the flow). Works with any OTel backend. Optional — disabled by default to keep emitted projects lean. |
+| Long-term | ⬜ | Optional vendor-specific decorators via emitter flag (`--observability=langfuse`). Default stays OTel. |
 
 **Anti-pattern to refuse**: building a CLIO-specific dashboard or backend.
 
@@ -172,11 +174,11 @@ Horizons used below:
 
 **Strategy** — *no canvas editor*. But a `.clio` is declarative — a static visualization is essentially free, and a read-only HTML viewer is reachable. Editing visually stays out of scope.
 
-| Horizon | Action |
-|---|---|
-| Short-term | `clio graph file.clio` emits Mermaid or DOT — renders inline in GitHub Markdown, in PR descriptions, in docs. Zero hosting. |
-| Mid-term | `clio graph file.clio --html` emits a single self-contained HTML file: the graph, click-to-inspect each step's TAKES/GIVES/CONTRACT/mode. Static, no runtime. |
-| Long-term | Optionally: VS Code extension that renders the graph beside the source. **No editor**. |
+| Horizon | Status | Action |
+|---|---|---|
+| Short-term | ✅ | `clio graph file.clio` emits Mermaid or DOT — renders inline in GitHub Markdown, in PR descriptions, in docs. Zero hosting. |
+| Mid-term | ✅ | `clio graph file.clio --format html --output graph.html` emits a single self-contained HTML file: the graph, click-to-inspect each step's TAKES/GIVES/CONTRACT/mode/cache/retry. Static, no runtime. |
+| Long-term | ⬜ | Optionally: VS Code extension that renders the graph beside the source. **No editor**. |
 
 **Anti-pattern to refuse**: building a drag-and-drop canvas. If a user wants to author visually, let them generate `.clio` from a third-party canvas — keep the language as the source of truth.
 
@@ -184,11 +186,11 @@ Horizons used below:
 
 **Strategy** — *no shortcut*. The compounding factors are: working examples, documented patterns, demonstrable reliability. Pulumi vs. Terraform, Bun vs. Node — maturity is earned through demos and reliability, not through marketing surface area.
 
-| Horizon | Action |
-|---|---|
-| Short-term | 2–3 polished examples in `examples/` (entity extraction, ticket classification, RAG-like flow). Each comes with a README explaining the pattern. Already prioritized as step 1 in `next_steps.md`. |
-| Mid-term | Walkthrough tutorials (markdown), one demo video, a written "from prompt to compiled project in 5 minutes" story. |
-| Long-term | Public PyPI package, conference talk or blog post. Plant a flag in the LLM-tooling discussion. |
+| Horizon | Status | Action |
+|---|---|---|
+| Short-term | ✅ | 2–3 polished examples in `examples/` (entity extraction, ticket classification, RAG-like flow, feedback routing, critical pipeline with resume). Each comes with a README or worked-example flow. |
+| Mid-term | 🟡 | Walkthrough tutorials (markdown) ✅ via `docs/manual/` (getting-started, language-tour, cookbook, targets, CLI reference, troubleshooting); demo video ⬜; written "from prompt to compiled project in 5 minutes" story ⬜. |
+| Long-term | ⬜ | Public PyPI package, conference talk or blog post. Plant a flag in the LLM-tooling discussion. |
 
 **Anti-pattern to refuse**: faking maturity (premature optimization announcements, vapor features). Ship small, ship correct.
 
@@ -196,13 +198,13 @@ Horizons used below:
 
 **Strategy** — *the foundation already exists*. State serialization to `state.json` + cache per step (already implemented for both targets) is exactly the substrate replay needs. Replay is not a runtime feature — it's an orchestrator extension.
 
-| Horizon | Action |
-|---|---|
-| Short-term | `clio resume <output_dir> --from-step N`: orchestrator reads existing `state.json`, skips the first N steps, resumes from N+1. Trivial in `python` emitter, slightly more involved in bash. |
-| Mid-term | `clio replay <output_dir> --rerun-step N`: forces cache miss on step N specifically (useful when you want to retest a single judgment with a new prompt). |
-| Long-term | Full event journal (every state transition appended to `events.jsonl`) + minimal CLI to navigate (`clio history`, `clio diff-states`). Could feed a future `--html` viewer. |
+| Horizon | Status | Action |
+|---|---|---|
+| Short-term | ✅ | Resume from step N. Implemented as a flag on the **emitted python project** (`python -m <pkg> --from-step N`, reading `state.json` or `$CLIO_STATE_FILE`), not as a top-level `clio resume` subcommand of the compiler — the orchestrator lives inside the emitted project, which is where state already does. Same effect, different surface. |
+| Mid-term | ⬜ | `clio replay <output_dir> --rerun-step N`: forces cache miss on step N specifically (useful when you want to retest a single judgment with a new prompt). |
+| Long-term | ⬜ | Full event journal (every state transition appended to `events.jsonl`) + minimal CLI to navigate (`clio history`, `clio diff-states`). Could feed a future `--html` viewer. |
 
-**CLIO advantage**: because we are *just an orchestrator pattern*, this extends naturally. LangGraph had to retrofit it as a runtime feature; we get it as a CLI command.
+**CLIO advantage**: because we are *just an orchestrator pattern*, this extends naturally. LangGraph had to retrofit it as a runtime feature; we get it as a flag on the emitted project.
 
 ### W6. Re-execution from a checkpoint
 
@@ -229,11 +231,13 @@ These weaknesses are real, but they are weaknesses *only against the wrong yards
 
 A **bridge target** is an emitter whose primary value is not production deployment but *adoption by an audience already invested in another stack*. LangGraph is the archetypal candidate. The pattern is delicate: legitimate when scoped right, corrosive when not.
 
-### LangGraph — conditional, not now
+### LangGraph — shipped (bridge target, delegated observability)
+
+**Status:** `target: langgraph` is shipped. The three pre-ship conditions originally listed (below) are now satisfied. The case-for / case-against framing is kept as a record of the reasoning — and as a guard rail for any *future* bridge target candidate.
 
 **Case for.**
 - Adoption path for teams already invested in LangChain / LangGraph / LangSmith — they can try CLIO without abandoning their tooling.
-- Closes W5/W6 (replay, time-travel) and part of W2 (observability via LangSmith) **for free** on this specific target — LangGraph already provides those capabilities.
+- Closes W5/W6 (replay, time-travel) and part of W2 (observability via LangSmith) **for free** on this specific target — LangGraph already provides those capabilities natively. Concretely, the langgraph emitter ships a **no-op stub** at `clio_runtime/logging.py` (the reused python step bodies still call `_log.emit()` / `_log.set_flow()`, the stub keeps the import surface so they don't crash but emit nothing) and delegates flow-level tracing to LangSmith.
 
 **Case against.**
 - Breaks the *compiler-not-runtime* promise on this target specifically: emitted code requires LangGraph + LangChain at runtime, in contrast to the standalone `python` target.
@@ -241,10 +245,10 @@ A **bridge target** is an emitter whose primary value is not production deployme
 - **Suction effect.** If the LangGraph emitter ships before `python` has matured on W2 and W5, users perceive it as strictly more capable and migrate to it by default — turning CLIO into a LangGraph wrapper and ceding roadmap control to an upstream we don't own.
 - LangGraph's API evolves; the emitter carries ongoing maintenance cost against an upstream we do not control.
 
-**Conditions to satisfy before building it.**
-1. `python` has shipped W2 short-term (structured JSON-line logging) and W5 short-term (`clio resume --from-step N`). Otherwise LangGraph looks strictly superior and pulls users away from the canonical target.
-2. The README and CLI document the target explicitly as a **bridge, not production**: `python` remains the recommended emitter for new projects.
-3. Tests cover round-trip behavior at parity with `python` on at least one non-trivial example, so the bridge cannot quietly become the more-feature-rich path.
+**Pre-ship conditions — all satisfied.**
+1. ✅ `python` shipped W2 short-term (structured JSON-line logging via `CLIO_LOG=1`) and W5 short-term (`--from-step N` flag on emitted projects) **before** langgraph instrumentation diverged. The canonical `python` target retains the full runtime; langgraph delegates explicitly.
+2. ✅ `docs/manual/04-targets.md` documents langgraph as one of five targets with its scope and trade-offs; `README.md` "current" line lists it without elevating it above `python`. CLI surface treats all targets symmetrically.
+3. ✅ `tests/test_emitters/test_langgraph.py` covers the linear-flow round-trip plus boundary rejections (FOR EACH, openai/bedrock/vertex, escalate/fallback). Bridge stays narrower than `python`, not wider.
 
 ### General principle for bridge targets
 

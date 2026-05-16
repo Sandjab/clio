@@ -47,6 +47,31 @@ from clio.ir.graph import (
     WhileBlockIR,
 )
 
+_LANGGRAPH_LOGGING_STUB = '''"""No-op stub of clio_runtime.logging for the langgraph target.
+
+The langgraph emitter reuses step bodies from the python emitter, which call
+_log.emit() / _log.set_flow() for structured JSON-Line observability. On
+target: langgraph, observability is delegated to LangSmith (see
+docs/POSITIONING.md, "LangGraph — shipped (bridge target, delegated
+observability)" section), so these calls are intentionally no-ops here.
+
+If you need step-level JSON-Line events, compile to --target python or
+--target mcp-server, where the full clio_runtime.logging module ships and
+CLIO_LOG=1 activates emission.
+"""
+from __future__ import annotations
+
+
+def set_flow(name: str | None) -> None:
+    """No-op: see module docstring."""
+    return None
+
+
+def emit(event: str, **fields) -> None:
+    """No-op: see module docstring."""
+    return None
+'''
+
 
 class LangGraphEmitter(BaseEmitter):
     def emit(self, graph: FlowGraph, output_dir: Path) -> None:
@@ -87,15 +112,22 @@ class LangGraphEmitter(BaseEmitter):
         (pkg_dir / "flow.py").write_text(emit_flow_module(graph, contracts_by_name))
         (pkg_dir / "__main__.py").write_text(emit_main_module(pkg_name, graph))
 
-        # Reuse runtime modules verbatim from the python target
-        from clio import runtime as src_pkg
-        src_dir = Path(src_pkg.__file__).parent
-        (runtime_dir / "logging.py").write_text((src_dir / "logging.py").read_text())
+        # Logging: ship a no-op stub. The langgraph target delegates
+        # observability to LangSmith (see docs/POSITIONING.md, "LangGraph —
+        # shipped (bridge target, delegated observability)" section). Step
+        # bodies reused from the python emitter still call _log.emit() and
+        # _log.set_flow(); the stub keeps the import surface so they don't
+        # crash. To get JSON-Line events, compile to python or mcp-server.
+        (runtime_dir / "logging.py").write_text(_LANGGRAPH_LOGGING_STUB)
+
+        # Cache: reused verbatim from the python target when caching is active.
         cache_active = any(
             s.cache is not None and s.cache.mode in ("on", "ttl")
             for s in graph.steps
         )
         if cache_active:
+            from clio import runtime as src_pkg
+            src_dir = Path(src_pkg.__file__).parent
             (runtime_dir / "cache.py").write_text((src_dir / "cache.py").read_text())
 
         # Reuse step bodies from the python target — same signature

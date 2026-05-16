@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **`target: langgraph` — observability delegated to LangSmith via a no-op `clio_runtime/logging.py` stub.** Previously the langgraph emitter copied `clio/runtime/logging.py` verbatim into the emitted project, but the langgraph emitter never instruments `flow_start/end` itself — it only inherits `step_start/end` from the python step bodies it reuses, and `POSITIONING.md` (section "LangGraph — shipped (bridge target, delegated observability)") is explicit that flow-level observability on this target is owned by LangSmith. The verbatim copy was therefore half-active (step-level emit, no flow-level emit, ambiguous semantics vs. LangSmith). The emitter now writes a small inline stub exposing `emit(event, **fields) -> None` and `set_flow(name) -> None` as no-ops; the reused python step bodies (`from ..clio_runtime import logging as _log; _log.emit(...)`) still compile and run but emit nothing. To get JSON-line events, compile to `--target python` or `--target mcp-server`, which continue to ship the full runtime and honour `CLIO_LOG=1` / `CLIO_LOG_FILE=path.jsonl` unchanged. New regression test `test_clio_runtime_logging_is_no_op_stub` asserts the stub marker and the no-op return value.
+
+### Docs
+
+- **`docs/POSITIONING.md` — Action plan synced with shipment status.** The version-tagged horizons (`v0.4 – v0.5`, `v0.6 – v0.8`) were obsolete (project is at v0.18.2) and silently misled readers. Replaced with date-free labels (`1–2 milestones out`, `3–5 milestones out`, `v1.0 and beyond`) plus an explicit per-row status column (✅ shipped / 🟡 partial / ⬜ open). Marked: W1 short+mid ✅, W2 short ✅ (with langgraph delegation note), W3 short+mid ✅, W4 short ✅ + mid 🟡, W5 short ✅ (implemented as `--from-step N` on emitted python projects, not as a `clio resume` compiler subcommand). The "LangGraph — conditional, not now" section is renamed to "LangGraph — shipped (bridge target, delegated observability)" and its three pre-ship conditions are now marked ✅ rather than "to satisfy". No semantic shift in the principles themselves.
+
 ## [0.18.2] — 2026-05-16
 
 Patch release rolling up **PR #54** (community contribution from Sandjab) — narration polish for `target: claude-skill` so the emitted SKILL.md no longer hides sub-step pointers or contradicts the compile-time `PARALLEL` warning. No language, IR-shape, or other-target change. Net test count `993 → 996` (+3). Doc-only PR #53 (LANGUAGE_SPEC TOC reorder + cookbook mcp-server façade recipe) also landed in this window but is not listed below (docs-only changes do not get CHANGELOG entries on this project).
