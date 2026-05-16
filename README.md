@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="assets/Clio-banner.png" alt="CLIO — Compiled Language for Intent Orchestration" width="800">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/Clio-banner-dark.png">
+    <img src="assets/Clio-banner.png" alt="CLIO — Compiled Language for Intent Orchestration" width="800">
+  </picture>
 </p>
 
 # CLIO
