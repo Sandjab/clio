@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Re-exported FLOWs now appear in `exposed_flow_names`** (closes #47) — an entry file using `EXPOSE <imported_name>` to re-publish an imported FLOW was previously silently dropped from the merged program's public surface. Root cause: `_flatten_to_program` forced `exposed=False` on every non-entry-file FlowDecl (correct in isolation, since imported FLOWs are not "declared" in the entry), and the entry's `ReexportDecl` did not re-flip the flag. Fix: collect the resolved re-export targets (mapping local name through `imported_scope`) during Pass 2, then stamp `exposed=True` on matching `FlowDecl`/`ContractDecl` in a final post-pass. This corrects the downstream symptom on `target: mcp-server`, where re-exported flows are once again registered as tools. Both bare and `AS`-aliased re-exports are covered.
+- **E_RES_006 import clash check now considers `StepDecl`** (closes #48) — `validate_imports` only built `local_decl_names` from `FlowDecl` and `ContractDecl`, so a local `STEP foo` colliding with `FROM lib IMPORT foo` was not raised. The shadow was silent and load-bearing: `_rename_decl.resolve_name` checks `imported_scope` before `local_renames`, so references to `foo` in subsequent declarations resolved to the imported flow instead of the local STEP. Fix: add `StepDecl` to both the name-collection and the diagnostic-message lookup so the existing E_RES_006 message fires uniformly across all three declaration kinds.
+- **`TEST ... FLOW: <alias>` resolves through `imported_scope`** (closes #49) — a TEST block referencing an imported FLOW by its `AS` alias raised `IRBuildError: unknown flow '<alias>'` at `_build_tests` because `_rename_test_decl` only consulted `local_renames`. Fix: thread `imported_scope` into `_rename_test_decl` and apply the same precedence as `_rename_decl.resolve_name` (imported_scope first, then local_renames), so the alias is rewritten to its target name before test-suite construction.
+
 ## [0.18.0] — 2026-05-16
 
 ### Added

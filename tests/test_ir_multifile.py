@@ -249,3 +249,110 @@ def test_e_mcp_001_mcp_target_without_expose(tmp_path: Path) -> None:
     parsed = resolve_imports(entry)
     with pytest.raises(CompileError, match=r"requires at least one EXPOSE FLOW"):
         build_ir(parsed, entry=entry.resolve())
+
+
+def test_reexported_flow_appears_in_exposed_flow_names(tmp_path: Path) -> None:
+    """Regression for #47: an entry file that re-exports an imported FLOW
+    via `EXPOSE <imported_name>` must include that FLOW in
+    `exposed_flow_names`, so target: mcp-server can register it as a tool.
+
+    Previously, `_flatten_to_program` forced `exposed=False` on every
+    non-entry-file FlowDecl (because imported FLOWs keep their original
+    name and are not in the entry-file rename table). The ReexportDecl
+    in the entry file did not re-flip that flag, so the re-exported
+    FLOW was silently absent from the public surface.
+    """
+    lib = tmp_path / "lib.clio"
+    lib.write_text(
+        "STEP process\n"
+        "  MODE: judgment\n"
+        "  TAKES: text: str\n"
+        "  GIVES: result: str\n"
+        "\n"
+        "EXPOSE FLOW analyze\n"
+        "  TAKES: text: str\n"
+        "  GIVES: result: str\n"
+        "  process(text=text)\n"
+    )
+    entry = tmp_path / "entry.clio"
+    entry.write_text(
+        "RESOURCES\n"
+        "  target: mcp-server\n"
+        "\n"
+        'FROM "./lib.clio" IMPORT analyze\n'
+        "\n"
+        "EXPOSE analyze\n"
+    )
+    parsed = resolve_imports(entry)
+    # Must NOT raise E_MCP_001 — the re-exported FLOW is the public surface.
+    graph = build_ir(parsed, entry=entry.resolve())
+    assert graph.exposed_flow_names == frozenset({"analyze"})
+
+
+def test_test_block_resolves_imported_flow_alias(tmp_path: Path) -> None:
+    """Regression for #49: a TEST block referencing an imported FLOW by its
+    AS alias must resolve through imported_scope. Previously,
+    _rename_test_decl only consulted local_renames, so the alias survived
+    into _build_tests as an unknown flow name."""
+    lib = tmp_path / "lib.clio"
+    lib.write_text(
+        "STEP process\n"
+        "  MODE: judgment\n"
+        "  TAKES: text: str\n"
+        "  GIVES: result: str\n"
+        "\n"
+        "EXPOSE FLOW analyze\n"
+        "  TAKES: text: str\n"
+        "  GIVES: result: str\n"
+        "  process(text=text)\n"
+    )
+    entry = tmp_path / "entry.clio"
+    entry.write_text(
+        'FROM "./lib.clio" IMPORT analyze AS myanalyze\n'
+        "\n"
+        "TEST smoke:\n"
+        "  FLOW: myanalyze\n"
+        "  WITH:\n"
+        '    text: "hello"\n'
+        "  EXPECTS:\n"
+        "    result: not_empty\n"
+    )
+    parsed = resolve_imports(entry)
+    # Must not raise IRBuildError 'unknown flow myanalyze' — the alias
+    # has to be resolved through imported_scope to its target 'analyze'.
+    graph = build_ir(parsed, entry=entry.resolve())
+    assert len(graph.tests) == 1
+    assert graph.tests[0].flow_name == "analyze"
+
+
+def test_reexported_flow_with_alias_appears_in_exposed_flow_names(
+    tmp_path: Path,
+) -> None:
+    """Regression for #47 (alias variant): `EXPOSE <alias>` must mark the
+    underlying imported FLOW as exposed under its post-rename target name
+    (the original exposed name, since exposed symbols keep their form)."""
+    lib = tmp_path / "lib.clio"
+    lib.write_text(
+        "STEP process\n"
+        "  MODE: judgment\n"
+        "  TAKES: text: str\n"
+        "  GIVES: result: str\n"
+        "\n"
+        "EXPOSE FLOW analyze\n"
+        "  TAKES: text: str\n"
+        "  GIVES: result: str\n"
+        "  process(text=text)\n"
+    )
+    entry = tmp_path / "entry.clio"
+    entry.write_text(
+        "RESOURCES\n"
+        "  target: mcp-server\n"
+        "\n"
+        'FROM "./lib.clio" IMPORT analyze AS myanalyze\n'
+        "\n"
+        "EXPOSE myanalyze\n"
+    )
+    parsed = resolve_imports(entry)
+    graph = build_ir(parsed, entry=entry.resolve())
+    # The re-export targets the FLOW by its original exposed name.
+    assert graph.exposed_flow_names == frozenset({"analyze"})

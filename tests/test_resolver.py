@@ -332,3 +332,31 @@ def test_e_res_006_local_clashes_with_import(tmp_path: Path) -> None:
     sets = compute_exposed_sets(parsed)
     with pytest.raises(CompileError, match=r"clashes with import"):
         validate_imports(parsed, sets)
+
+
+def test_e_res_006_local_step_clashes_with_import(tmp_path: Path) -> None:
+    """Regression for #48: a local STEP with the same name as an import
+    must also trigger E_RES_006. Previously only FlowDecl + ContractDecl
+    were checked, so a STEP could be silently shadowed by the import in
+    `resolve_name` (which checks `imported_scope` before `local_renames`)."""
+    (tmp_path / "lib.clio").write_text(
+        "STEP inner\n"
+        "  MODE: judgment\n"
+        "  TAKES: text: str\n"
+        "  GIVES: out: str\n"
+        "EXPOSE FLOW foo\n"
+        "  TAKES: text: str\n"
+        "  GIVES: out: str\n"
+        "  inner(text=text)\n"
+    )
+    (tmp_path / "main.clio").write_text(
+        'FROM "./lib.clio" IMPORT foo\n'
+        "STEP foo\n"
+        "  MODE: judgment\n"
+        "  TAKES: text: str\n"
+        "  GIVES: out: str\n"
+    )
+    parsed = resolve_imports(tmp_path / "main.clio")
+    sets = compute_exposed_sets(parsed)
+    with pytest.raises(CompileError, match=r"clashes with import"):
+        validate_imports(parsed, sets)

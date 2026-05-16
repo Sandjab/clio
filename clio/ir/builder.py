@@ -385,6 +385,13 @@ def _flatten_to_program(
                     local_renames[decl.name] = f"{stem}__{decl.name}"
         rename_tables[path] = local_renames
 
+    # Re-export targets resolved from entry-file `EXPOSE <imported_name>`
+    # statements. After Pass 2 runs, FlowDecls / ContractDecls whose name
+    # is in this set get their `exposed` flag flipped back to True — without
+    # this step, `_was_exposed_in_source` never finds re-exported symbols
+    # and the public surface of the merged program silently drops them.
+    reexport_targets: set[str] = set()
+
     # Pass 2: emit decls with renames applied to internal references,
     # imports collapsed to a flat per-file scope, and RESOURCES/TEST
     # restricted to the entry file.
@@ -418,6 +425,13 @@ def _flatten_to_program(
         is_entry = path == entry
         for decl in program.decls:
             if isinstance(decl, ReexportDecl):
+                if is_entry:
+                    # Map the re-export local name through imported_scope to
+                    # the merged-program target name (compute_exposed_sets +
+                    # validate_imports have already proven the import resolves).
+                    reexport_targets.add(
+                        imported_scope.get(decl.name, decl.name),
+                    )
                 continue  # re-exports do not produce new decls
             if isinstance(decl, ResourcesDecl):
                 if is_entry:
@@ -426,7 +440,9 @@ def _flatten_to_program(
             if isinstance(decl, TestDecl):
                 if is_entry:
                     all_decls.append(
-                        _rename_test_decl(decl, rename_tables[path]),
+                        _rename_test_decl(
+                            decl, rename_tables[path], imported_scope,
+                        ),
                     )
                 continue
             renamed_decl = _rename_decl(
@@ -446,6 +462,19 @@ def _flatten_to_program(
             if not is_entry and isinstance(renamed_decl, (FlowDecl, ContractDecl)):
                 renamed_decl = replace(renamed_decl, exposed=False)
             all_decls.append(renamed_decl)
+
+    # Re-stamp exposed=True on FlowDecls / ContractDecls re-exposed by the
+    # entry file. Without this, _was_exposed_in_source would miss them and
+    # `exposed_flow_names` would silently drop re-exports (issue #47).
+    if reexport_targets:
+        all_decls = [
+            replace(d, exposed=True)
+            if isinstance(d, (FlowDecl, ContractDecl))
+            and d.name in reexport_targets
+            and not d.exposed
+            else d
+            for d in all_decls
+        ]
 
     return Program(decls=tuple(all_decls), source_path=entry)
 
@@ -659,14 +688,22 @@ def _rename_decl(
 def _rename_test_decl(
     decl: TestDecl,
     local_renames: dict[str, str],
+    imported_scope: dict[str, str],
 ) -> TestDecl:
     """Apply alpha-renames to a TEST decl. Only `flow_name` may need
     rewriting — WITH kwargs, EXPECTS, and EXPECTS_NOT all reference
-    FLOW state field names which are not affected by alpha-renaming."""
-    return replace(
-        decl,
-        flow_name=local_renames.get(decl.flow_name, decl.flow_name),
-    )
+    FLOW state field names which are not affected by alpha-renaming.
+
+    Resolution follows the same precedence as `_rename_decl.resolve_name`:
+    `imported_scope` first (so `TEST ... FLOW: <alias>` reaches the
+    underlying imported flow), then `local_renames` for entry-file
+    declarations that were alpha-renamed."""
+    flow_name = decl.flow_name
+    if flow_name in imported_scope:
+        flow_name = imported_scope[flow_name]
+    else:
+        flow_name = local_renames.get(flow_name, flow_name)
+    return replace(decl, flow_name=flow_name)
 
 
 def _build_tests(
