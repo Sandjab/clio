@@ -2,6 +2,27 @@
 
 This is the reference grammar for the CLIO language. The compiler parses `.clio` files written in this syntax.
 
+## Orientation
+
+If you're discovering CLIO, read [§Semantic note: EXACT vs JUDGMENT](#semantic-note-exact-vs-judgment) first, then [§Declarations](#declarations) for the core language, then [§Control flow](#control-flow). The `## v0.X changes` sections (v0.15, v0.2) and version-tagged subsections (e.g. `### IMPORT and EXPOSE (v0.18)`) are historical notes describing what each release added; they are kept for migration context but are not a beginner-friendly read.
+
+For the current per-target feature matrix (what `python` / `mcp-server` / `langgraph` / `claude-skill` / `claude-cli` each support), see [`docs/manual/04-targets.md`](manual/04-targets.md#cross-target-feature-support). The table in [§v0.2 changes](#v02-changes) below is a snapshot of v0.2 implementation status and is not maintained as the authoritative cross-target matrix.
+
+## Contents
+
+- [§Semantic note: EXACT vs JUDGMENT](#semantic-note-exact-vs-judgment)
+- [§File extension](#file-extension)
+- [§Comments](#comments)
+- [§Declarations](#declarations) — `STEP`, `CONTRACT`, `FLOW`, `IMPORT` / `EXPOSE` (v0.18), `TEST`, `RESOURCES`
+- [§Control flow](#control-flow) — `FOR EACH`, `IF`, `MATCH`, `WHILE`
+- [§Failure strategies (`ON_FAIL`)](#failure-strategies-on_fail)
+- [§RESCUE handler (v0.8+)](#rescue-handler-v08)
+- [§Observability (v0.4+)](#observability-v04)
+- [§Types](#types)
+- [§Example](#example)
+
+Version diffs (historical): [§v0.15 changes](#v015-changes), [§v0.2 changes](#v02-changes).
+
 ## v0.15 changes
 
 Adds OpenProse-inspired surface features without touching execution semantics:
