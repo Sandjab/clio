@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/Clio-banner.png" alt="CLIO — Compiled Language for Intent Orchestration" width="800">
+</p>
+
 # CLIO
 
 **Compiled Language for Intent Orchestration**
