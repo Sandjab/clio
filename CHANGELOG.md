@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.18.2] — 2026-05-16
+
+Patch release rolling up **PR #54** (community contribution from Sandjab) — narration polish for `target: claude-skill` so the emitted SKILL.md no longer hides sub-step pointers or contradicts the compile-time `PARALLEL` warning. No language, IR-shape, or other-target change. Net test count `993 → 996` (+3). Doc-only PR #53 (LANGUAGE_SPEC TOC reorder + cookbook mcp-server façade recipe) also landed in this window but is not listed below (docs-only changes do not get CHANGELOG entries on this project).
+
 ### Changed
 
 - **`target: claude-skill` — IF / MATCH narration names sub-steps.** `render_if_section` and `render_match_section` previously rendered branches and cases as a count only (`**True branch**: 2 sub-step(s) (see ordinal sections above/below)`, `Case 'spam': 1 sub-step(s)`), forcing the host LLM to grep back to the flat `## Step NN — <name>` cards without a direct pointer. Both helpers now list each sub-step by name (`**True branch**: \`human_review\``, `Case \`spam\`: \`archive\``), via a new shared `_summarise_branch_items` helper. Direct `CallIR` / `FlowCallIR` children are named verbatim; nested control-flow children (IF / MATCH / FOR EACH / WHILE inside another branch) are flagged as `nested IF` / `nested MATCH` etc. so the host knows to look for an inner section. Tests added: `test_if_section_names_then_and_else_substeps`, `test_match_section_names_substeps_per_case`.
