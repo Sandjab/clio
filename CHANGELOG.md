@@ -1,6 +1,8 @@
 # Changelog
 
-## [Unreleased]
+## [0.18.1] — 2026-05-16
+
+Patch release rolling up three cross-file IMPORT / EXPOSE correctness fixes surfaced by Gemini review of PR #46 (the v0.18.0 release-admin). Single feature PR (#50). No language or IR-shape change — the compiler now actually enforces what `LANGUAGE_SPEC.md` already promised about re-exports, import clashes, and TEST alias resolution. Net test count `989 → 993` (+4).
 
 ### Fixed
 
