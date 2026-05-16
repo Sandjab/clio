@@ -643,6 +643,7 @@ A re-export `EXPOSE Article` is ambiguous when both a `CONTRACT Article` and a
 **Fix:** use qualified re-export by fully declaring the name locally under a
 distinct alias, or rename one of the two symbols at the source.
 
+<a id="e_mcp_001"></a>
 ### E_MCP_001 — `ValueError: target=mcp-server requires at least one EXPOSE FLOW in the entry file`
 
 The entry file has no `EXPOSE FLOW` declarations. The `mcp-server` target
