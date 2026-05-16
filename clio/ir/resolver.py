@@ -18,6 +18,7 @@ from clio.parser.ast_nodes import (
     Program,
     ReexportDecl,
     ResourcesDecl,
+    StepDecl,
     TestDecl,
 )
 from clio.parser.parser import parse
@@ -233,17 +234,19 @@ def validate_imports(
                     f"{item.name!r} not found in {imp.path!r}"
                 )
 
-        # E_RES_006: imported name clashes with a local FLOW/CONTRACT declaration
+        # E_RES_006: imported name clashes with a local FLOW/CONTRACT/STEP declaration.
+        # StepDecl matters because resolve_name (builder.py) checks imported_scope
+        # before local_renames, so an import would silently shadow a local STEP.
         local_decl_names: set[str] = set()
         for d in program.decls:
-            if isinstance(d, (FlowDecl, ContractDecl)):
+            if isinstance(d, (FlowDecl, ContractDecl, StepDecl)):
                 local_decl_names.add(d.name)
 
         for local_name, source_path_str in seen_imports.items():
             if local_name in local_decl_names:
                 for d in program.decls:
                     if (
-                        isinstance(d, (FlowDecl, ContractDecl))
+                        isinstance(d, (FlowDecl, ContractDecl, StepDecl))
                         and d.name == local_name
                     ):
                         raise CompileError(
