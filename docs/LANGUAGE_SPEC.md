@@ -13,7 +13,7 @@ For the current per-target feature matrix (what `python` / `mcp-server` / `langg
 - [§Semantic note: EXACT vs JUDGMENT](#semantic-note-exact-vs-judgment)
 - [§File extension](#file-extension)
 - [§Comments](#comments)
-- [§Declarations](#declarations) — `CONTRACT`, `STEP`, `FLOW`, `RESOURCES`, `TEST`, plus `IMPORT` / `EXPOSE` (v0.18)
+- [§Declarations](#declarations) — `STEP`, `CONTRACT`, `FLOW`, `IMPORT` / `EXPOSE` (v0.18), `TEST`, `RESOURCES`
 - [§Control flow](#control-flow) — `FOR EACH`, `IF`, `MATCH`, `WHILE`
 - [§Failure strategies (`ON_FAIL`)](#failure-strategies-on_fail)
 - [§RESCUE handler (v0.8+)](#rescue-handler-v08)
