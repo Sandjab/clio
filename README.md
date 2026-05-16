@@ -6,7 +6,7 @@
 [![Last commit](https://img.shields.io/github/last-commit/Sandjab/clio)](https://github.com/Sandjab/clio/commits/main)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-%E2%89%A53.12-blue.svg)](https://www.python.org)
-[![Version](https://img.shields.io/badge/Version-v0.17.3-green.svg)](https://github.com/Sandjab/clio/releases/tag/v0.17.3)
+[![Version](https://img.shields.io/badge/Version-v0.18.0-green.svg)](https://github.com/Sandjab/clio/releases/tag/v0.18.0)
 [![Visitors](https://komarev.com/ghpvc/?username=sandjab-clio&label=Visitors&color=0e75b6&style=flat)](https://github.com/Sandjab/clio)
 
 CLIO is a declarative language that compiles hybrid LLM/code programs into executable projects. You describe *what* you want — the compiler decides *what runs as code and what runs as an LLM*, then emits a project you can run directly.
@@ -197,7 +197,7 @@ docs/
 
 ## Current status
 
-**v0.17.3 (current)**: **5 compilation targets** (`claude-cli`, `python`, `mcp-server`, `langgraph`, `claude-skill`). **924 unit tests + 1 xfail + gated e2e.**
+**v0.18.0 (current)**: **5 compilation targets** (`claude-cli`, `python`, `mcp-server`, `langgraph`, `claude-skill`). **989 unit tests + 1 xfail + gated e2e.**
 
 What's in the language today:
 - **Control flow**: sequential chains, `FOR EACH`, `FOR EACH ... PARALLEL AS <name>`, `IF/ELSE` (with `and` / `or` composition since v0.12), `MATCH/CASE/DEFAULT`, `WHILE ... MAX N` (composed conditions in v0.12 too).
@@ -210,6 +210,7 @@ What's in the language today:
 - **JUDGMENT invocation** (`invoke:` block): `cli` (Claude Code), `api` (Anthropic, OpenAI-compat covering LiteLLM / OpenRouter / Ollama / vLLM), `mcp_sampling` (mcp-server target). Optional per-STEP `DESCRIPTION:` / `STRATEGIES:` free-text fields (v0.15) are injected as a "Step intent: …" / "Heuristics: …" suffix to the judgment system prompt without changing the JSON-only output contract.
 - **Multiple FLOWs per file** (v0.15): a source may declare more than one `FLOW`; `clio compile`/`graph` pick one via `--flow <name>`. Single-FLOW files behave unchanged.
 - **FLOW composition** (v0.17): a signed `FLOW` (with `TAKES:` / `GIVES:`) can be called as a step inside another `FLOW`. Sub-flow calls compile to typed function calls (`python`/`mcp-server`/`langgraph`/`claude-skill`); `claude-cli` rejects with a clear error.
+- **Cross-file IMPORT + EXPOSE/INTERNAL** (v0.18): `FROM "<path>" IMPORT <name> [AS <alias>], ...` shares `FLOW`s and `CONTRACT`s across `.clio` files. Visibility controlled by explicit `EXPOSE` / `INTERNAL` prefixes; `EXPOSE <name>` re-exports an imported symbol. The compiler flattens reachable files into a single `FlowGraph` with internal symbols alpha-renamed `{file_stem}__{name}`. `target: mcp-server` requires explicit `EXPOSE FLOW` (E_MCP_001) — migrate v0.17 sources via `clio doctor --migrate-v018 [--write]`. `target: claude-cli` rejects multi-file (E_CLI_001).
 - **Declarative tests** (v0.15): top-level `TEST <name>: FLOW: <name>  WITH: …  EXPECTS: …` blocks compile to pytest under `<output>/tests/` on the `python` target. Predicates: `not_empty`, `empty`, `==`, `!=`, `>`, `>=`, `<`, `<=`, `contains`. Other targets ignore TEST blocks silently.
 - **Diagnostics** (v0.15): `clio doctor [SOURCE]` checks Python version, `ANTHROPIC_API_KEY`, anthropic SDK importability, and (with a source) MCP server commands on PATH + declared database URLs. `clio status` reads a python target's `state.json` and tails a `CLIO_LOG_FILE` JSONL log.
 - **Observability**: structured JSONL events (`CLIO_LOG=1`, six event types, OTel-mappable). Replay an `events.jsonl` inside the HTML viewer (`clio graph --format html` then drag-drop the trace).
