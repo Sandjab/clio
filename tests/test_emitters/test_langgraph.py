@@ -457,3 +457,32 @@ def test_node_wrappers_use_loose_state_type_when_sub_flow_present(tmp_path):
     assert "state: State" not in flow_py, (
         "no wrapper should still use the lie `state: State`"
     )
+
+
+def test_clio_runtime_logging_is_no_op_stub(tmp_path):
+    """target: langgraph delegates observability to LangSmith, so the
+    emitted clio_runtime/logging.py must be a no-op stub — NOT the full
+    clio.runtime.logging copied verbatim.
+
+    Step bodies are reused from the python emitter, which call
+    _log.emit() / _log.set_flow(); the stub keeps the import surface so
+    those reused bodies don't crash. POSITIONING.md, section
+    'LangGraph — conditional, not now', documents the delegation.
+    """
+    import importlib.util
+
+    _emit(_LINEAR_SRC, tmp_path)
+    logging_py = tmp_path / "classify" / "clio_runtime" / "logging.py"
+    body = logging_py.read_text()
+    assert "No-op stub of clio_runtime.logging for the langgraph target" in body, (
+        "langgraph emitter must ship a no-op stub, not the full runtime — "
+        "did a regression re-add a verbatim copy from clio/runtime/logging.py?"
+    )
+    # The stub must expose the call surface reused step bodies depend on
+    # (emit, set_flow), and both must be no-ops.
+    spec = importlib.util.spec_from_file_location("_stub_logging", logging_py)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.emit("flow_start", foo=1, bar="baz") is None
+    assert module.set_flow("classify") is None
