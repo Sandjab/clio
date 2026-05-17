@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-05-17
+
+Minor release introducing the **`clio import` sub-command** — a round-trip recovery of `.clio` sources from emitted skills (verbatim via the new `.clio/` sidecar when hashes match) and an LLM-assisted import path for arbitrary hand-written Claude Code skills (Anthropic SDK, one-shot validation-retry loop). Net test count `997 → 1067` (+70); 5 new opt-in `e2e_llm` tests skipped by default. PR #66 (squash-merged on `main` at `0834077`), 22 commits + 17 TDD tasks executed via subagent-driven development. Gemini cycle closed with 3 MEDIUM applied + 2 pushback (datetime.UTC Py3.11+/project Py3.12; multi-file IMPORT sidecar deferred to v0.20, see #67).
+
 ### Added
 
 - **`clio import <skill-dir>` — recover a `.clio` source from a Claude Code skill directory.** Two dispatched paths: (Path A) when the skill carries a CLIO-emitted `.clio/` sidecar (new in v0.19) and recorded SHA-256 hashes match the current file state, returns the verbatim `source.clio` (no LLM call); (Path B, default fallback) calls the Anthropic SDK with the skill's text content and a one-shot validation-retry loop. Modes: `--mode auto` (default, dispatches based on sidecar presence + hash match), `--mode strict` (requires sidecar + matching hashes, else exit 2), `--mode infer` (always LLM, ignores sidecar). New module `clio/skill_to_clio.py` mirrors the existing `nl_to_clio` architecture; new helper `clio/emitters/_sidecar.py` implements hashing (LF-normalized for text, raw for binary) and drift detection. The system prompt instructs the LLM to preserve the source skill's user-facing language in `DESCRIPTION` / `STRATEGIES` / prompt bodies, and to flag inferred elements with `# CLIO-import: ...` annotations.
