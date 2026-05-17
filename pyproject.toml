@@ -31,6 +31,9 @@ clio = "clio.cli:main"
 [tool.setuptools.packages.find]
 include = ["clio*"]
 
+[tool.setuptools.package-data]
+clio = ["prompts/*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
