@@ -168,3 +168,41 @@ def test_import_generation_error_exits_1_with_diagnostic(tmp_path, monkeypatch, 
     err = capsys.readouterr().err
     assert "line 1: oops" in err
     assert "STEP bad" in err
+
+
+def test_import_strict_with_partial_sidecar_exits_2(tmp_path, capsys):
+    """source.clio present, manifest.json missing → exit 2 with clear message."""
+    from clio.cli import main
+
+    skill = tmp_path / "skill"
+    (skill / ".clio").mkdir(parents=True)
+    (skill / ".clio" / "source.clio").write_text("STEP foo\n  MODE: exact\n")
+    # NO manifest.json
+    (skill / "SKILL.md").write_text("# skill\n")
+    rc = main(["import", str(skill), "--mode", "strict"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "manifest missing" in err or "partial sidecar" in err
+
+
+def test_import_auto_with_partial_sidecar_falls_back_to_llm(tmp_path, monkeypatch, capsys):
+    """source.clio present, manifest.json missing → warn + LLM fallback."""
+    from clio import skill_to_clio
+    from clio.cli import main
+
+    skill = tmp_path / "skill"
+    (skill / ".clio").mkdir(parents=True)
+    (skill / ".clio" / "source.clio").write_text("STEP cheat\n  MODE: exact\n")
+    # NO manifest.json
+    (skill / "SKILL.md").write_text("# skill\n")
+
+    expected = "STEP recovered\n  MODE: exact\n  LANG: python\nFLOW f\n  recovered()\n"
+    monkeypatch.setattr(
+        skill_to_clio, "generate",
+        lambda skill_dir, *, model, client=None: expected,
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+    rc = main(["import", str(skill)])
+    assert rc == 0
+    assert capsys.readouterr().out == expected

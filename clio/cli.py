@@ -297,7 +297,15 @@ def _cmd_import(*, skill_dir: str, output: str | None, model: str, mode: str) ->
                 file=sys.stderr,
             )
             return 2
-        drift = check_drift(sk_path, manifest_file)
+        try:
+            drift = check_drift(sk_path, manifest_file)
+        except FileNotFoundError:
+            print(
+                f"clio import: --mode strict and manifest missing at {manifest_file} "
+                f"(partial sidecar). Cannot verify hashes.",
+                file=sys.stderr,
+            )
+            return 2
         if drift:
             print(
                 f"clio import: --mode strict and skill drifted "
@@ -316,22 +324,31 @@ def _cmd_import(*, skill_dir: str, output: str | None, model: str, mode: str) ->
 
     # mode == "auto"
     if source_file.exists():
-        drift = check_drift(sk_path, manifest_file)
-        if drift is None:
-            return _emit_imported_source(source_file.read_text(), output)
-        # Drift detected → warn and fall through to LLM
-        emitted_at = _read_emitted_at(manifest_file)
-        print(
-            "clio import: skill has been modified since CLIO emitted it"
-            + (f" on {emitted_at}." if emitted_at else "."),
-            file=sys.stderr,
-        )
-        print(f"{len(drift)} file(s) changed:", file=sys.stderr)
-        for p in drift[:5]:
-            print(f"  - {p}", file=sys.stderr)
-        if len(drift) > 5:
-            print(f"  ... and {len(drift) - 5} more", file=sys.stderr)
-        print("Falling back to LLM-assisted import.", file=sys.stderr)
+        try:
+            drift = check_drift(sk_path, manifest_file)
+        except FileNotFoundError:
+            print(
+                f"clio import: source.clio present but manifest missing at {manifest_file} "
+                f"(partial sidecar). Falling back to LLM-assisted import.",
+                file=sys.stderr,
+            )
+            # treat as drift — fall through to LLM
+        else:
+            if drift is None:
+                return _emit_imported_source(source_file.read_text(), output)
+            # Drift detected → warn and fall through to LLM
+            emitted_at = _read_emitted_at(manifest_file)
+            print(
+                "clio import: skill has been modified since CLIO emitted it"
+                + (f" on {emitted_at}." if emitted_at else "."),
+                file=sys.stderr,
+            )
+            print(f"{len(drift)} file(s) changed:", file=sys.stderr)
+            for p in drift[:5]:
+                print(f"  - {p}", file=sys.stderr)
+            if len(drift) > 5:
+                print(f"  ... and {len(drift) - 5} more", file=sys.stderr)
+            print("Falling back to LLM-assisted import.", file=sys.stderr)
 
     return _import_via_llm(sk_path, model=model, output=output)
 
