@@ -34,6 +34,9 @@ include = ["clio*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+markers = [
+    "e2e_llm: opt-in tests that hit a real Anthropic endpoint (requires ANTHROPIC_API_KEY)",
+]
 
 [tool.ruff]
 line-length = 120
