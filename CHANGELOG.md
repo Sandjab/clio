@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.18.3] — 2026-05-17
+
+Patch release rolling up **PR #56** — `target: langgraph` delegates flow-level observability to LangSmith via an inline no-op `clio_runtime/logging.py` stub, removing the half-active verbatim copy of `clio/runtime/logging.py` that the emitter never instrumented at the flow level. `docs/POSITIONING.md` is synced with shipment status at the same time (date-free horizon labels + per-row Status column; the former "LangGraph — conditional, not now" section is renamed "LangGraph — shipped" with its three pre-ship conditions now marked ✅). No language, IR-shape, parser, or other-target change. Net test count `996 → 997` (+1).
+
 ### Changed
 
 - **`target: langgraph` — observability delegated to LangSmith via a no-op `clio_runtime/logging.py` stub.** Previously the langgraph emitter copied `clio/runtime/logging.py` verbatim into the emitted project, but the langgraph emitter never instruments `flow_start/end` itself — it only inherits `step_start/end` from the python step bodies it reuses, and `POSITIONING.md` (section "LangGraph — shipped (bridge target, delegated observability)") is explicit that flow-level observability on this target is owned by LangSmith. The verbatim copy was therefore half-active (step-level emit, no flow-level emit, ambiguous semantics vs. LangSmith). The emitter now writes a small inline stub exposing `emit(event, **fields) -> None` and `set_flow(name) -> None` as no-ops; the reused python step bodies (`from ..clio_runtime import logging as _log; _log.emit(...)`) still compile and run but emit nothing. To get JSON-line events, compile to `--target python` or `--target mcp-server`, which continue to ship the full runtime and honour `CLIO_LOG=1` / `CLIO_LOG_FILE=path.jsonl` unchanged. New regression test `test_clio_runtime_logging_is_no_op_stub` asserts the stub marker and the no-op return value.
