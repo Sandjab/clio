@@ -22,6 +22,7 @@ from clio.emitters._go_helpers import (
     _go_module_name,
     render_cmd_main_go,
     render_contracts_go,
+    render_exact_step_go,
     render_go_mod,
 )
 from clio.emitters._go_runtime_templates import (
@@ -29,7 +30,7 @@ from clio.emitters._go_runtime_templates import (
     render_clio_runtime_validate,
 )
 from clio.emitters.base import BaseEmitter
-from clio.ir.graph import FlowGraph
+from clio.ir.graph import CallIR, FlowGraph, StepIR
 
 
 class GoEmitter(BaseEmitter):
@@ -62,3 +63,23 @@ class GoEmitter(BaseEmitter):
             runtime_cache_dir = output_dir / "clio_runtime" / "cache"
             runtime_cache_dir.mkdir(parents=True, exist_ok=True)
             (runtime_cache_dir / "cache.go").write_text(render_clio_runtime_cache())
+
+        # Emit exact step stubs under steps/NN_<name>.go.
+        if graph.flow is not None:
+            steps_by_name = {
+                s.name: s for s in graph.steps if isinstance(s, StepIR)
+            }
+            contracts_by_name = {c.name: c for c in graph.contracts}
+            steps_dir: Path | None = None
+            for idx, elem in enumerate(graph.flow.chain, start=1):
+                if not isinstance(elem, CallIR):
+                    continue
+                step = steps_by_name.get(elem.step_name)
+                if step is None or step.mode != "exact":
+                    continue
+                if steps_dir is None:
+                    steps_dir = output_dir / "steps"
+                    steps_dir.mkdir(parents=True, exist_ok=True)
+                filename = f"{idx:02d}_{step.name}.go"
+                src = render_exact_step_go(step, contracts_by_name)
+                (steps_dir / filename).write_text(src)

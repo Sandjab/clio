@@ -1,0 +1,19 @@
+STEP load
+  TAKES: file: str
+  GIVES: rows: List<{name: str, revenue: float}>
+  MODE:  exact
+  LANG:  go
+
+STEP summarise
+  TAKES: rows: List<{name: str, revenue: float}>
+  GIVES: total: float
+  MODE:  exact
+  LANG:  go
+
+FLOW pipeline
+  load(file="customers.csv")
+    -> summarise(rows)
+
+RESOURCES
+  target: go
+  models: [haiku]

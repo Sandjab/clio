@@ -368,3 +368,52 @@ def test_cache_omitted_when_no_cache_directive(tmp_path: Path) -> None:
     out = tmp_path / "out"
     _compile(src, out)
     assert not (out / "clio_runtime" / "cache" / "cache.go").exists()
+
+
+# ---------------------------------------------------------------------------
+# Task 9 — exact step stubs + golden snapshot
+
+FIXTURES = Path(__file__).parent.parent / "fixtures"
+EXPECTED_GO = FIXTURES / "expected_go"
+
+
+def test_each_step_emits_its_own_go_file(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _compile(FIXTURES / "go_minimal.clio", out)
+    files = sorted((out / "steps").iterdir())
+    assert [f.name for f in files] == ["01_load.go", "02_summarise.go"]
+
+
+def test_step_function_has_typed_input_and_output(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _compile(FIXTURES / "go_minimal.clio", out)
+    body = (out / "steps" / "01_load.go").read_text()
+    assert "package steps" in body
+    assert "func Load(ctx context.Context, in LoadIn) (LoadOut, error)" in body
+    assert 'panic("fill me in: load")' in body
+    assert "type LoadIn struct {" in body
+    assert "type LoadOut struct {" in body
+    assert 'File string `json:"file"`' in body
+    assert "Rows []struct" in body
+
+
+def _read_tree(root: Path) -> dict[str, str]:
+    """Return {relative_path: content} for all files under root."""
+    result: dict[str, str] = {}
+    for p in sorted(root.rglob("*")):
+        if p.is_file():
+            result[str(p.relative_to(root))] = p.read_text()
+    return result
+
+
+def test_golden_go_minimal(tmp_path: Path) -> None:
+    """Full-tree comparison against the committed golden snapshot."""
+    golden_dir = EXPECTED_GO / "go_minimal"
+    if not golden_dir.exists():
+        import pytest
+        pytest.skip("golden snapshot not yet generated")
+    out = tmp_path / "out"
+    _compile(FIXTURES / "go_minimal.clio", out)
+    emitted = _read_tree(out)
+    golden = _read_tree(golden_dir)
+    assert emitted == golden, "Emitted tree differs from golden snapshot"
