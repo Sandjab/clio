@@ -1,0 +1,71 @@
+name: Release on tag
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Extract CHANGELOG section
+        id: extract
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          TAG="${REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          NOTES_FILE="${RUNNER_TEMP}/release_notes.md"
+
+          python3 - "$VERSION" > "$NOTES_FILE" <<'PYEOF'
+          import re
+          import sys
+          from pathlib import Path
+
+          version = sys.argv[1]
+          changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          for chunk in re.split(r"\n## ", changelog)[1:]:
+              first_line, _, body = chunk.partition("\n")
+              m = re.match(r"\[?v?(\d+\.\d+\.\d+)\]?", first_line)
+              if m and m.group(1) == version:
+                  sys.stdout.write(body.rstrip() + "\n")
+                  sys.exit(0)
+          sys.stdout.write(
+              f"Release v{version} — no matching CHANGELOG section found. "
+              f"See [CHANGELOG.md](../blob/main/CHANGELOG.md) for the full history.\n"
+          )
+          PYEOF
+
+          {
+            echo "notes_file=${NOTES_FILE}"
+            echo "tag=${TAG}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "----- Notes preview -----"
+          head -30 "$NOTES_FILE"
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.extract.outputs.tag }}
+          NOTES_FILE: ${{ steps.extract.outputs.notes_file }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — skipping."
+            exit 0
+          fi
+
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --notes-file "$NOTES_FILE" \
+            --verify-tag
