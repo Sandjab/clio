@@ -9,6 +9,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from clio.ir.builder import IRBuildError, build_ir
+from clio.parser.parser import ParseError, parse
+from clio.prompts import load_prompt
+
 
 class GenerationError(Exception):
     """Raised when the LLM produced invalid .clio after the retry budget,
@@ -76,3 +80,112 @@ def _gather_skill_files(skill_dir: Path) -> str:
         rel = path.relative_to(skill_dir).as_posix()
         parts.append(f"=== {rel} ===\n{content}\n")
     return "\n".join(parts)
+
+
+def _validate(source: str) -> str | None:
+    """Parse + build_ir. Returns None on success, an error string with
+    line/col on failure."""
+    try:
+        program = parse(source)
+    except ParseError as e:
+        return str(e)
+    try:
+        build_ir(program)
+    except IRBuildError as e:
+        return str(e)
+    return None
+
+
+def _strip_markdown_fences(raw: str) -> str:
+    """Remove leading ```clio/``` and trailing ``` fences if present."""
+    text = raw.strip()
+    if not text.startswith("```"):
+        return raw
+    first_newline = text.find("\n")
+    if first_newline == -1:
+        return raw
+    body = text[first_newline + 1:]
+    if body.rstrip().endswith("```"):
+        body = body.rstrip()[:-3]
+    return body.lstrip("\n").rstrip() + "\n"
+
+
+def _build_user_message_initial(payload: str) -> str:
+    return (
+        "The following files compose a Claude Code skill. Produce the .clio "
+        "source that would emit this skill. Follow the language policy and "
+        "annotation rules from the system prompt.\n\n"
+        + payload
+    )
+
+
+def generate(
+    skill_dir: Path,
+    *,
+    model: str = _DEFAULT_MODEL,
+    max_retries: int = 1,
+    client=None,
+) -> str:
+    """Import a Claude Code skill back to .clio via an LLM-assisted pass.
+
+    Pass `client=` to inject a fake; otherwise a default Anthropic client is
+    constructed (requires the `anthropic` package and ANTHROPIC_API_KEY)."""
+    payload = _gather_skill_files(skill_dir)
+    _check_size(payload)  # may raise GenerationError before any SDK call
+
+    if client is None:
+        try:
+            import anthropic
+        except ImportError as e:
+            raise ImportError(
+                "clio import requires the `anthropic` package. "
+                "Install with: pip install 'clio[gen]'"
+            ) from e
+        client = anthropic.Anthropic()
+
+    system_prompt = load_prompt("skill_to_clio_system")
+    system = [
+        {
+            "type": "text",
+            "text": system_prompt,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+    messages: list[dict] = [
+        {"role": "user", "content": _build_user_message_initial(payload)}
+    ]
+    last_attempt = ""
+    last_error = ""
+
+    for attempt_idx in range(max_retries + 1):
+        msg = client.messages.create(
+            model=model,
+            max_tokens=_MAX_TOKENS,
+            system=system,
+            messages=messages,
+        )
+        raw = msg.content[0].text if msg.content else ""
+        candidate = _strip_markdown_fences(raw)
+        err = _validate(candidate)
+        if err is None:
+            return candidate
+
+        last_attempt = candidate
+        last_error = err
+
+        if attempt_idx == max_retries:
+            break
+
+        messages = [
+            *messages,
+            {"role": "assistant", "content": candidate},
+            {
+                "role": "user",
+                "content": load_prompt("skill_to_clio_retry").format(
+                    previous_attempt=candidate, error=err,
+                ),
+            },
+        ]
+
+    raise GenerationError(last_attempt=last_attempt, last_error=last_error)
