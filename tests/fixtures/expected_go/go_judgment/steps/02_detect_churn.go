@@ -6,10 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
 	"pipeline/clio_runtime/cache"
 )
 
@@ -41,12 +39,12 @@ func DetectChurn(ctx context.Context, in DetectChurnIn) (DetectChurnOut, error) 
 		}
 	}
 
-	client := anthropic.NewClient(option.WithAPIKey(os.Getenv("ANTHROPIC_API_KEY")))
+	client := anthropic.NewClient()
 	resp, err := client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:     anthropic.F("claude-haiku-4-5-20251001"),
-		MaxTokens: anthropic.F(int64(8192)),
-		System:    anthropic.F("You are a precise function. Return only valid JSON matching the requested output schema. No prose."),
-		Messages:  anthropic.F([]anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(prompt))}),
+		Model:     "claude-haiku-4-5-20251001",
+		MaxTokens: int64(8192),
+		System: []anthropic.TextBlockParam{{Text: "You are a precise function. Return only valid JSON matching the requested output schema. No prose."}},
+		Messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(prompt))},
 	})
 	if err != nil {
 		return DetectChurnOut{}, fmt.Errorf("detect_churn: anthropic: %w", err)

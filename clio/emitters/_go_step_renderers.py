@@ -11,6 +11,7 @@ with cross-cutting graph walkers.
 """
 from __future__ import annotations
 
+from clio.emitters._go_helpers import _go_module_name
 from clio.emitters._shared_utils import (
     _model_id,
     _to_class_name,
@@ -130,7 +131,7 @@ def render_judgment_step_go(step: StepIR, graph: FlowGraph) -> str:
       7. cache.Store if cache configured.
     """
     cls = _to_class_name(step.name)
-    pkg = graph.flow.name.lower() if graph.flow is not None else "flow"
+    pkg = _go_module_name(graph)
     contracts_by_name = {c.name: c for c in graph.contracts}
     in_body, out_body = _step_in_out_struct(step, contracts_by_name)
 
@@ -188,10 +189,8 @@ def render_judgment_step_go(step: StepIR, graph: FlowGraph) -> str:
         '\t"context"',
         '\t"encoding/json"',
         '\t"fmt"',
-        '\t"os"',
         "",
         '\t"github.com/anthropics/anthropic-sdk-go"',
-        '\t"github.com/anthropics/anthropic-sdk-go/option"',
     ]
     if has_cache:
         imports.append(f'\t"{pkg}/clio_runtime/cache"')
@@ -234,19 +233,18 @@ def render_judgment_step_go(step: StepIR, graph: FlowGraph) -> str:
     if cache_block_pre:
         lines.append(cache_block_pre.rstrip("\n"))
         lines.append("")
-    lines.append(
-        "\tclient := anthropic.NewClient(option.WithAPIKey(os.Getenv(\"ANTHROPIC_API_KEY\")))"
-    )
+    lines.append("\tclient := anthropic.NewClient()")
     lines.append("\tresp, err := client.Messages.New(ctx, anthropic.MessageNewParams{")
-    lines.append(f'\t\tModel:     anthropic.F("{model}"),')
-    lines.append("\t\tMaxTokens: anthropic.F(int64(8192)),")
+    lines.append(f'\t\tModel:     "{model}",')
+    lines.append("\t\tMaxTokens: int64(8192),")
     lines.append(
-        '\t\tSystem:    anthropic.F('
-        '"You are a precise function. Return only valid JSON matching the requested output schema. No prose."),'
+        "\t\tSystem: []anthropic.TextBlockParam{"
+        '{Text: "You are a precise function. Return only valid JSON matching the requested output schema. No prose."}'
+        "},"
     )
     lines.append(
-        "\t\tMessages:  anthropic.F([]anthropic.MessageParam{"
-        "anthropic.NewUserMessage(anthropic.NewTextBlock(prompt))}),"
+        "\t\tMessages: []anthropic.MessageParam{"
+        "anthropic.NewUserMessage(anthropic.NewTextBlock(prompt))},"
     )
     lines.append("\t})")
     lines.append("\tif err != nil {")

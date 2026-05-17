@@ -28,7 +28,7 @@ from clio.ir.graph import FlowGraph, StepIR
 _GO_VERSION = "1.22"
 
 _DEP_JSONSCHEMA = "github.com/santhosh-tekuri/jsonschema/v6 v6.0.1"
-_DEP_ANTHROPIC = "github.com/anthropics/anthropic-sdk-go v0.5.0"
+_DEP_ANTHROPIC = "github.com/anthropics/anthropic-sdk-go v1.43.0"
 _DEP_ERRGROUP = "golang.org/x/sync v0.7.0"
 
 
