@@ -78,7 +78,7 @@ class ClaudeSkillEmitter(BaseEmitter):
                         f"structure to the main FLOW, or split the sub-flow."
                     )
 
-    def emit(self, graph: FlowGraph, output_dir: Path) -> None:
+    def emit(self, graph: FlowGraph, output_dir: Path, *, source_path: Path | None = None) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "scripts").mkdir(exist_ok=True)
         (output_dir / "scripts" / "_validate.py").write_text(render_bundled_validate_script())

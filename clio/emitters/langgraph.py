@@ -74,7 +74,7 @@ def emit(event: str, **fields) -> None:
 
 
 class LangGraphEmitter(BaseEmitter):
-    def emit(self, graph: FlowGraph, output_dir: Path) -> None:
+    def emit(self, graph: FlowGraph, output_dir: Path, *, source_path: Path | None = None) -> None:
         self._validate_for_langgraph(graph)
         output_dir.mkdir(parents=True, exist_ok=True)
 

@@ -4,6 +4,12 @@ These guard the public surface; behavioural coverage stays in
 test_python.py and test_mcp_server.py via the existing emitter suites.
 """
 
+import importlib
+import inspect
+from pathlib import Path
+
+import pytest
+
 from clio.emitters._shared_utils import (
     _field_from_schema,
     _json_type_to_python,
@@ -97,7 +103,6 @@ def test_type_to_python_primitive():
 
 def test_uses_contract_refs_false_when_no_takes():
     """A step with no TAKES/GIVES doesn't use contract refs."""
-    from pathlib import Path
 
     from clio.ir.builder import build_ir
     from clio.parser.parser import parse
@@ -105,3 +110,38 @@ def test_uses_contract_refs_false_when_no_takes():
     graph = build_ir(parse((FIXTURES / "mvp_phase1.clio").read_text()))
     step = graph.steps[0]
     assert isinstance(_uses_contract_refs(step), bool)
+
+
+
+@pytest.mark.parametrize(
+    "emitter_module,emitter_class",
+    [
+        ("clio.emitters.claude_cli", "ClaudeCLIEmitter"),
+        ("clio.emitters.python", "PythonEmitter"),
+        ("clio.emitters.mcp_server", "MCPServerEmitter"),
+        ("clio.emitters.langgraph", "LangGraphEmitter"),
+        ("clio.emitters.claude_skill", "ClaudeSkillEmitter"),
+    ],
+)
+def test_all_emitters_accept_source_path_kwarg(tmp_path, emitter_module, emitter_class):
+    """Every emitter must accept a keyword-only `source_path: Path | None = None`
+    so callers (notably `_cmd_compile`) can plumb the source path uniformly
+    without per-emitter branching."""
+    from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
+
+    mod = importlib.import_module(emitter_module)
+    cls = getattr(mod, emitter_class)
+    sig = inspect.signature(cls.emit)
+    assert "source_path" in sig.parameters, f"{emitter_class}.emit missing source_path"
+    param = sig.parameters["source_path"]
+    assert param.kind == inspect.Parameter.KEYWORD_ONLY
+    assert param.default is None
+
+    # Smoke: emitter must run with source_path=None without error
+    src = "STEP foo\n  MODE: exact\n  LANG: python\nFLOW f\n  foo()\n"
+    program = parse(src)
+    graph = build_ir(program)
+    out = tmp_path / emitter_class
+    cls().emit(graph, out, source_path=None)
+    assert out.exists()
