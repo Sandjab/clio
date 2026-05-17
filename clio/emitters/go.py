@@ -22,13 +22,13 @@ from clio.emitters._go_helpers import (
     _go_module_name,
     render_cmd_main_go,
     render_contracts_go,
-    render_exact_step_go,
     render_go_mod,
 )
 from clio.emitters._go_runtime_templates import (
     render_clio_runtime_cache,
     render_clio_runtime_validate,
 )
+from clio.emitters._go_step_renderers import render_exact_step_go
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import CallIR, FlowGraph, StepIR
 
