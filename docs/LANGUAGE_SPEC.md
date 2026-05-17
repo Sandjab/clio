@@ -1397,4 +1397,11 @@ under `--mode strict`).
 
 `.clio/` is excluded from `_gather_skill_files` so importing a CLIO-emitted
 skill in `--mode infer` does not cheat by reading the stored source.
+
+**Single-file limitation (v0.19).** The v0.19 sidecar stores only the **entry**
+`.clio` file. Projects using cross-file imports (`FROM "lib.clio" IMPORT ...`)
+recover an `source.clio` that references files not present in the sidecar; the
+recovered source compiles only when the imported `.clio` files are also
+present on disk next to it. Multi-file sidecar recovery is tracked as issue
+[#67](https://github.com/Sandjab/clio/issues/67) for v0.20.
 ```
