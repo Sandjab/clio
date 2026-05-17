@@ -971,11 +971,11 @@ The LLM-assisted path annotates inferred elements with `# CLIO-import: ...`
 comments above each declaration. These annotations are intentionally noisy
 — delete them after manual review.
 
-The full mode-dispatch table and exit codes live in
-[`05-cli-reference.md`](05-cli-reference.md#import--recover-a-clio-from-a-claude-code-skill-v019);
+The full mode-dispatch table and exit codes live in the
+[CLI reference](05-cli-reference.md#import--recover-a-clio-from-a-claude-code-skill-v019);
 common error messages (drift warnings, payload-too-large, retry exhaustion,
 corrupted manifest, cross-file recovery caveat) are documented in
-[`06-troubleshooting.md`](06-troubleshooting.md#clio-import-errors-v019).
+[troubleshooting](06-troubleshooting.md#clio-import-errors-v019).
 
 ## What's not in the cookbook (yet)
 
