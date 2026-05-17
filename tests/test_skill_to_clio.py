@@ -258,3 +258,25 @@ def test_generate_system_prompt_loaded_from_file(tmp_path):
     system_block_text = client.messages.calls[0]["system"][0]["text"]
     # The first words of clio/prompts/skill_to_clio_system.md
     assert "CLIO's skill importer" in system_block_text
+
+
+# ---------------------------------------------------------------------------
+# Fixture smoke tests (Task 13)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "lang_dir,expected_word",
+    [
+        ("handwritten_en_pipeline", "summariser"),
+        ("handwritten_fr_pipeline", "résumé"),
+        ("handwritten_es_pipeline", "resumen"),
+    ],
+)
+def test_fixture_skills_gather_into_payload(lang_dir, expected_word):
+    from clio.skill_to_clio import _gather_skill_files
+
+    skill = Path(__file__).parent / "fixtures" / "skills_for_import" / lang_dir
+    payload = _gather_skill_files(skill)
+    assert "=== SKILL.md ===" in payload
+    assert expected_word in payload.lower()
