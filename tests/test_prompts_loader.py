@@ -63,3 +63,36 @@ def test_nl_to_clio_retry_prompt_loads_from_disk():
     assert "did not parse" in body
     assert "{previous_attempt}" in body
     assert "{error}" in body
+
+
+def test_skill_to_clio_system_prompt_has_all_required_sections():
+    from clio.prompts import load_prompt
+    load_prompt.cache_clear()
+    body = load_prompt("skill_to_clio_system")
+    # Section markers — keep these stable so future edits don't accidentally
+    # drop a required section.
+    for marker in [
+        "Role and output format",
+        "CLIO grammar reference",
+        "Mapping rules",
+        "Annotation rules",
+        "Output language policy",
+    ]:
+        assert marker in body, f"missing required section: {marker}"
+
+
+def test_skill_to_clio_system_prompt_mentions_clio_import_annotation():
+    from clio.prompts import load_prompt
+    load_prompt.cache_clear()
+    body = load_prompt("skill_to_clio_system")
+    assert "# CLIO-import:" in body
+    # Authoritative-source guidance for process_flow.dot
+    assert "process_flow.dot" in body
+
+
+def test_skill_to_clio_retry_prompt_has_placeholders():
+    from clio.prompts import load_prompt
+    load_prompt.cache_clear()
+    body = load_prompt("skill_to_clio_retry")
+    assert "{previous_attempt}" in body
+    assert "{error}" in body
