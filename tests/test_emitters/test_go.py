@@ -210,3 +210,51 @@ def test_contracts_file_omitted_when_no_contract_used(tmp_path: Path) -> None:
     out = tmp_path / "out"
     _compile(src, out)
     assert not (out / "contracts" / "contracts.go").exists()
+
+
+def test_contracts_have_validate_method(tmp_path: Path) -> None:
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "CONTRACT customer_risk\n"
+        "  SHAPE: {client: str, risk: enum(low|mid|high), reason: str(max=300)}\n"
+        "  ASSERT: len(reason) > 0\n"
+        "STEP detect\n"
+        "  TAKES: x: str\n"
+        "  GIVES: risk: customer_risk\n"
+        "  MODE:  judgment\n"
+        "FLOW pipeline\n"
+        "  detect(x=\"hi\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile(src, out)
+    body = (out / "contracts" / "contracts.go").read_text()
+    assert "func (c *CustomerRisk) Validate(ctx context.Context) error {" in body
+    # Calls clio_runtime/validate
+    assert '"clio_runtime/validate"' in body or "validate.Schema" in body
+
+
+def test_contracts_validate_includes_assert(tmp_path: Path) -> None:
+    """ASSERT clause is encoded so the x-clio-assert walker can replay it."""
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "CONTRACT customer_risk\n"
+        "  SHAPE: {client: str, reason: str(max=300)}\n"
+        "  ASSERT: len(reason) > 0\n"
+        "STEP detect\n"
+        "  TAKES: x: str\n"
+        "  GIVES: risk: customer_risk\n"
+        "  MODE:  judgment\n"
+        "FLOW pipeline\n"
+        "  detect(x=\"hi\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile(src, out)
+    body = (out / "contracts" / "contracts.go").read_text()
+    # x-clio-assert is included in the schema JSON
+    assert "x-clio-assert" in body or '"assert"' in body

@@ -124,9 +124,8 @@ def render_contracts_go(graph: FlowGraph) -> str | None:
     """Render contracts/contracts.go. Returns None when no contract is used.
 
     Emits one Go struct per CONTRACT referenced in the entry flow's steps,
-    plus a backtick-quoted JSON Schema const so Validate() can call
-    jsonschema/v6 without filesystem reads. The `import` block is omitted
-    in T5; T6 will add it when Validate(ctx context.Context) is introduced.
+    plus a backtick-quoted JSON Schema const and a Validate(ctx) method
+    so callers can validate at runtime without filesystem reads.
     """
     # Collect contract names referenced by any step in the graph.
     contracts_used: set[str] = set()
@@ -142,7 +141,17 @@ def render_contracts_go(graph: FlowGraph) -> str | None:
     # Build a fast lookup from the tuple (FlowGraph.contracts is a tuple, not a dict).
     contracts_by_name = {c.name: c for c in graph.contracts}
 
-    parts = ["package contracts", ""]
+    pkg = _go_module_name(graph)
+    parts = [
+        "package contracts",
+        "",
+        "import (",
+        '\t"context"',
+        "",
+        f'\t"{pkg}/clio_runtime/validate"',
+        ")",
+        "",
+    ]
     for name in sorted(contracts_used):
         contract = contracts_by_name[name]
         struct_name = _to_class_name(name)
@@ -161,9 +170,15 @@ def render_contracts_go(graph: FlowGraph) -> str | None:
         # description/title fields are emitted. If a future feature adds a
         # user-supplied string into the schema (e.g. CONTRACT.DESCRIPTION),
         # escape backticks here before render — Go has no raw-string escape.
+        # contract.json_schema already contains x-clio-assert when an ASSERT
+        # clause is present (embedded by ir/builder.py at ContractIR build time).
         schema_json = json.dumps(contract.json_schema, indent=2)
         parts.append(f"const {schema_const} = `")
         parts.append(schema_json)
         parts.append("`")
+        parts.append("")
+        parts.append(f"func (c *{struct_name}) Validate(ctx context.Context) error {{")
+        parts.append(f"\treturn validate.Schema(ctx, {schema_const}, c)")
+        parts.append("}")
         parts.append("")
     return "\n".join(parts)
