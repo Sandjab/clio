@@ -303,3 +303,67 @@ def test_validate_template_omitted_when_no_contract(tmp_path: Path) -> None:
     _compile(src, out)
     # No contract → no validate runtime needed
     assert not (out / "clio_runtime" / "validate" / "validate.go").exists()
+
+
+def test_clio_runtime_cache_written_when_judgment_present(tmp_path: Path) -> None:
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP detect\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  judgment\n"
+        "  CACHE: ttl(24h)\n"
+        "FLOW pipeline\n"
+        "  detect(x=\"hi\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile(src, out)
+    body = (out / "clio_runtime" / "cache" / "cache.go").read_text()
+    assert "package cache" in body
+    assert "func Key(" in body
+    assert "func Lookup(" in body
+    assert "func Store(" in body
+    assert "sha256" in body
+
+
+def test_cache_layout_same_as_python_target(tmp_path: Path) -> None:
+    """Cache key derivation: SHA256 of step + model + prompt + schema_json.
+    Identical to clio/runtime/cache.py."""
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP detect\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  judgment\n"
+        "  CACHE: on\n"
+        "FLOW pipeline\n"
+        "  detect(x=\"hi\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile(src, out)
+    body = (out / "clio_runtime" / "cache" / "cache.go").read_text()
+    assert 'strings.Join([]string{step, model, prompt, schemaJSON}, "\\n")' in body
+
+
+def test_cache_omitted_when_no_cache_directive(tmp_path: Path) -> None:
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP detect\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  judgment\n"
+        "FLOW pipeline\n"
+        "  detect(x=\"hi\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile(src, out)
+    assert not (out / "clio_runtime" / "cache" / "cache.go").exists()

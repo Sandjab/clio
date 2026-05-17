@@ -18,12 +18,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from clio.emitters._go_helpers import (
+    _flow_uses_cache,
     _go_module_name,
     render_cmd_main_go,
     render_contracts_go,
     render_go_mod,
 )
-from clio.emitters._go_runtime_templates import render_clio_runtime_validate
+from clio.emitters._go_runtime_templates import (
+    render_clio_runtime_cache,
+    render_clio_runtime_validate,
+)
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import FlowGraph
 
@@ -54,3 +58,7 @@ class GoEmitter(BaseEmitter):
             runtime_validate_dir = output_dir / "clio_runtime" / "validate"
             runtime_validate_dir.mkdir(parents=True, exist_ok=True)
             (runtime_validate_dir / "validate.go").write_text(render_clio_runtime_validate())
+        if _flow_uses_cache(graph):
+            runtime_cache_dir = output_dir / "clio_runtime" / "cache"
+            runtime_cache_dir.mkdir(parents=True, exist_ok=True)
+            (runtime_cache_dir / "cache.go").write_text(render_clio_runtime_cache())

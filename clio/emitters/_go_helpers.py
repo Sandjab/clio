@@ -59,6 +59,18 @@ def _flow_uses_parallel(graph: FlowGraph) -> bool:
     return _has_parallel(graph.flow.chain)
 
 
+def _flow_uses_cache(graph: FlowGraph) -> bool:
+    """True if any step in the entry flow declares a CACHE directive.
+
+    Mirrors the gating logic of _flow_uses_judgment / _flow_uses_parallel.
+    v0.20 refuses FLOW composition, so graph.steps contains exactly the
+    steps used by the single entry flow."""
+    for step in graph.steps:
+        if isinstance(step, StepIR) and step.cache is not None and step.cache.mode != "off":
+            return True
+    return False
+
+
 def render_cmd_main_go(graph: FlowGraph) -> str:
     """Render `cmd/<pkg>/main.go` — the CLI entry point for the emitted module.
 
