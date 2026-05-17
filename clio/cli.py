@@ -111,19 +111,20 @@ def _cmd_compile(source: str, target: str, output: str, flow: str | None = None)
         return 1
 
     out_path = Path(output)
+    src_resolved = src_path.resolve()
     if target == "claude-cli":
-        ClaudeCLIEmitter().emit(graph, out_path)
+        ClaudeCLIEmitter().emit(graph, out_path, source_path=src_resolved)
     elif target == "python":
-        PythonEmitter().emit(graph, out_path)
+        PythonEmitter().emit(graph, out_path, source_path=src_resolved)
     elif target == "mcp-server":
         from clio.emitters.mcp_server import MCPServerEmitter
-        MCPServerEmitter().emit(graph, out_path)
+        MCPServerEmitter().emit(graph, out_path, source_path=src_resolved)
     elif target == "langgraph":
         from clio.emitters.langgraph import LangGraphEmitter
-        LangGraphEmitter().emit(graph, out_path)
+        LangGraphEmitter().emit(graph, out_path, source_path=src_resolved)
     elif target == "claude-skill":
         from clio.emitters.claude_skill import ClaudeSkillEmitter
-        ClaudeSkillEmitter().emit(graph, out_path)
+        ClaudeSkillEmitter().emit(graph, out_path, source_path=src_resolved)
     else:
         return 2
     return 0
