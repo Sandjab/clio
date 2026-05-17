@@ -277,6 +277,124 @@ def test_collect_contract_refs_takes_field():
     assert "customer" in _collect_contract_refs(step)
 
 
+# ---------------------------------------------------------------------------
+# _go_condition_expr — T12
+
+
+def test_go_condition_eq_ident_str() -> None:
+    """Enum-ident RHS produces a quoted Go string literal; state access uses
+    a type assertion to the step's Out struct."""
+    from clio.emitters._shared_utils import _go_condition_expr
+    from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
+
+    src = (
+        "CONTRACT risk_assessment\n"
+        "  SHAPE: {level: enum(low|high), score: float}\n"
+        "STEP detect\n"
+        "  TAKES: x: str\n"
+        "  GIVES: assessment: risk_assessment\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        'FLOW pipeline\n'
+        '  detect(x="hi")\n'
+        '  -> IF assessment.level == high:\n'
+        '       detect(x="hi")\n'
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    graph = build_ir(parse(src))
+    if_block = graph.flow.chain[1]
+    cond = if_block.condition
+    state_field_to_step = {
+        s.gives.name: s for s in graph.steps if s.gives is not None
+    }
+    result = _go_condition_expr(cond, set(), state_field_to_step)
+    assert result == 'state["assessment"].(steps.DetectOut).Level == "high"'
+
+
+def test_go_condition_lt_float() -> None:
+    """Float RHS wraps in float64(); less-than operator passes through."""
+    from clio.emitters._shared_utils import _go_condition_expr
+    from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
+
+    src = (
+        "CONTRACT report\n"
+        "  SHAPE: {confidence: float}\n"
+        "STEP classify\n"
+        "  TAKES: x: str\n"
+        "  GIVES: result: report\n"
+        "  MODE:  judgment\n"
+        'FLOW pipeline\n'
+        '  classify(x="hi")\n'
+        '  -> IF result.confidence < 0.7:\n'
+        '       classify(x="hi")\n'
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    graph = build_ir(parse(src))
+    if_block = graph.flow.chain[1]
+    cond = if_block.condition
+    state_field_to_step = {
+        s.gives.name: s for s in graph.steps if s.gives is not None
+    }
+    result = _go_condition_expr(cond, set(), state_field_to_step)
+    assert result == 'state["result"].(steps.ClassifyOut).Confidence < float64(0.7)'
+
+
+def test_go_condition_and_composition() -> None:
+    """BoolOpIR (and) produces `(<left>) && (<right>)` with unconditional parens."""
+    from clio.emitters._shared_utils import _go_condition_expr
+    from clio.ir.graph import BoolOpIR, ConditionIR, FieldIR, StepIR
+    from clio.parser.ast_nodes import ContractRef
+
+    # Build a minimal StepIR directly so the test has no parser dependency.
+    fake_step_a = StepIR(
+        name="step_a",
+        mode="exact",
+        takes=(),
+        gives=FieldIR(name="out_a", type=ContractRef(name="c", line=0, col=0)),
+        cache=None,
+        on_fail=None,
+        lang="go",
+        impl=None,
+        invoke=None,
+        line=0,
+    )
+    fake_step_b = StepIR(
+        name="step_b",
+        mode="exact",
+        takes=(),
+        gives=FieldIR(name="out_b", type=ContractRef(name="c", line=0, col=0)),
+        cache=None,
+        on_fail=None,
+        lang="go",
+        impl=None,
+        invoke=None,
+        line=0,
+    )
+    state_field_to_step = {"out_a": fake_step_a, "out_b": fake_step_b}
+    cond = BoolOpIR(
+        op="and",
+        left=ConditionIR(
+            step_name="out_a", field="score", op="==",
+            literal_value=1, literal_kind="int",
+        ),
+        right=ConditionIR(
+            step_name="out_b", field="score", op="==",
+            literal_value=2, literal_kind="int",
+        ),
+    )
+    result = _go_condition_expr(cond, set(), state_field_to_step)
+    assert result == (
+        '(state["out_a"].(steps.StepAOut).Score == int64(1)) && '
+        '(state["out_b"].(steps.StepBOut).Score == int64(2))'
+    )
+
+
 @pytest.mark.parametrize(
     "emitter_module,emitter_class",
     [

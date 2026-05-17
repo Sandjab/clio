@@ -1,0 +1,31 @@
+CONTRACT risk_assessment
+  SHAPE: {level: enum(low|high), score: float}
+
+STEP detect
+  TAKES: x: str
+  GIVES: assessment: risk_assessment
+  MODE:  exact
+  LANG:  go
+
+STEP notify_team
+  TAKES: x: str
+  GIVES: ticket_id: str
+  MODE:  exact
+  LANG:  go
+
+STEP store_record
+  TAKES: x: str
+  GIVES: stored: bool
+  MODE:  exact
+  LANG:  go
+
+FLOW pipeline
+  detect(x="incoming")
+  -> IF assessment.level == high:
+       notify_team(x="incoming")
+  ELSE:
+       store_record(x="incoming")
+
+RESOURCES
+  target: go
+  models: [haiku]

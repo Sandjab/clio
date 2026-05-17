@@ -470,6 +470,25 @@ def test_judgment_step_with_ttl_cache(tmp_path: Path) -> None:
     assert "86400" in body  # 24h = 86400s
 
 
+# ---------------------------------------------------------------------------
+# Task 12 — IF/ELSE emission in flow.go
+
+
+def test_if_else_emits_go_branches(tmp_path: Path) -> None:
+    """IF/ELSE block renders as `if <cond> { ... } else { ... }` in flow.go.
+
+    The condition accesses a contract field on the typed step output via a
+    Go type assertion:  state["assessment"].(steps.DetectOut).Level == "high".
+    """
+    out = tmp_path / "out"
+    _compile(FIXTURES / "go_control_flow.clio", out)
+    body = (out / "flow" / "flow.go").read_text()
+    assert 'if state["assessment"].(steps.DetectOut).Level == "high" {' in body
+    assert "} else {" in body
+    assert "steps.NotifyTeam(ctx," in body
+    assert "steps.StoreRecord(ctx," in body
+
+
 def test_golden_go_judgment(tmp_path: Path) -> None:
     """Full-tree comparison against the committed golden snapshot."""
     golden_dir = EXPECTED_GO / "go_judgment"

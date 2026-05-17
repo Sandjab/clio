@@ -14,6 +14,8 @@ from __future__ import annotations
 import keyword
 
 from clio.ir.graph import (
+    BoolOpIR,
+    ConditionIR,
     ContractIR,
     FlowGraph,
     StepIR,
@@ -341,8 +343,6 @@ def _python_condition_expr(condition, scope_local: set[str]) -> str:
     `state[<name>]`. `BoolOpIR` nodes render as `(<left>) and/or (<right>)`
     — the parentheses are unconditional so the emitted Python preserves
     the IR's precedence regardless of nesting."""
-    from clio.ir.graph import BoolOpIR  # avoid top-level circular import
-
     if isinstance(condition, BoolOpIR):
         left = _python_condition_expr(condition.left, scope_local)
         right = _python_condition_expr(condition.right, scope_local)
@@ -367,6 +367,76 @@ def _python_condition_expr(condition, scope_local: set[str]) -> str:
     else:
         # str | ident — both rendered as Python string literals
         lit = repr(condition.literal_value)
+    return f"{access} {condition.op} {lit}"
+
+
+def _go_condition_expr(
+    condition: ConditionIR | BoolOpIR,
+    scope_local: set[str],
+    state_field_to_step: dict[str, StepIR],
+) -> str:
+    """Render a CLIO IF/WHILE condition as a Go boolean expression.
+
+    Mirrors `_python_condition_expr` but produces Go syntax.  The key
+    difference: state values are `any` (= `interface{}`), so reading a
+    contract field requires a type assertion.
+
+    `ConditionIR.step_name` is the *state field name* (the GIVES name of
+    whatever step produced it — not the step's own name).  The type
+    assertion form is:
+
+        state["<state_field>"].(steps.<StepClassName>Out).<GoField>
+
+    where `<StepClassName>` is the UpperCamelCase rendering of the *step*
+    that GIVES into `<state_field>`.  `state_field_to_step` supplies this
+    mapping (built by the caller).
+
+    When `state_field` is in `scope_local` (loop variable inside FOR EACH
+    body) the local identifier is used directly without `state[...]`:
+
+        <state_field>.(steps.<StepClassName>Out).<GoField>
+
+    `BoolOpIR` nodes render as `(<left>) &&/|| (<right>)` — unconditional
+    parens preserve IR precedence regardless of nesting depth."""
+    if isinstance(condition, BoolOpIR):
+        left = _go_condition_expr(condition.left, scope_local, state_field_to_step)
+        right = _go_condition_expr(condition.right, scope_local, state_field_to_step)
+        go_op = "&&" if condition.op == "and" else "||"
+        return f"({left}) {go_op} ({right})"
+
+    # Leaf: ConditionIR
+    # condition.step_name is the state-dict key (GIVES field name of the
+    # step that produced it), not the step's own name.
+    state_field = condition.step_name
+    step = state_field_to_step.get(state_field)
+    if step is not None:
+        cls = _to_class_name(step.name)
+        type_assert = f"(steps.{cls}Out)"
+    else:
+        # Fallback: unknown state field — use `any`.  Should not happen after
+        # IR validation, but guards against future call-site bugs.
+        type_assert = "(any)"
+    if state_field in scope_local:
+        base = f"{state_field}.{type_assert}"
+    else:
+        base = f'state["{state_field}"].{type_assert}'
+    access = f"{base}.{_to_go_field_name(condition.field)}"
+
+    # Render the RHS literal in Go syntax.
+    if condition.literal_kind == "int":
+        lit = f"int64({condition.literal_value})"
+    elif condition.literal_kind == "float":
+        lit = f"float64({condition.literal_value})"
+    elif condition.literal_kind == "bool":
+        lit = "true" if condition.literal_value else "false"
+    elif condition.literal_kind == "ident":
+        # Enum ident rendered as a Go string constant (unquoted idents are
+        # enum values in CLIO; at runtime they compare against string fields).
+        lit = f'"{condition.literal_value}"'
+    else:
+        # str — Go interpreted string literal: double-quote with backslash escapes.
+        escaped = str(condition.literal_value).replace("\\", "\\\\").replace('"', '\\"')
+        lit = f'"{escaped}"'
     return f"{access} {condition.op} {lit}"
 
 
