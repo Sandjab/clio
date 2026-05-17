@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 
 def test_compute_text_hash_normalizes_crlf_to_lf(tmp_path):
     from clio.emitters._sidecar import compute_file_hash
@@ -115,3 +117,80 @@ def test_build_manifest_reproducible_modulo_timestamp(tmp_path):
     m1_no_ts = {k: v for k, v in m1.items() if k != "emitted_at"}
     m2_no_ts = {k: v for k, v in m2.items() if k != "emitted_at"}
     assert m1_no_ts == m2_no_ts
+
+
+# ---------------------------------------------------------------------------
+# check_drift tests (Task 7)
+# ---------------------------------------------------------------------------
+
+
+def _setup_clio_emitted_skill(tmp_path):
+    from clio.emitters._sidecar import write_sidecar
+
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP foo\n  MODE: exact\n  LANG: python\n"
+        "FLOW pipe\n  foo()\n"
+    )
+    skill_dir = tmp_path / "skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("# skill\n")
+    (skill_dir / "scripts").mkdir()
+    (skill_dir / "scripts" / "01_foo.py").write_text("# foo\n")
+    write_sidecar(src, skill_dir, clio_version="0.19.0")
+    return skill_dir, src
+
+
+def test_check_drift_returns_none_when_no_changes(tmp_path):
+    from clio.emitters._sidecar import check_drift
+
+    skill_dir, _ = _setup_clio_emitted_skill(tmp_path)
+    assert check_drift(skill_dir, skill_dir / ".clio" / "manifest.json") is None
+
+
+def test_check_drift_detects_modified_file(tmp_path):
+    from clio.emitters._sidecar import check_drift
+
+    skill_dir, _ = _setup_clio_emitted_skill(tmp_path)
+    (skill_dir / "SKILL.md").write_text("# skill modified\n")
+    drift = check_drift(skill_dir, skill_dir / ".clio" / "manifest.json")
+    assert drift == ["SKILL.md"]
+
+
+def test_check_drift_detects_added_file(tmp_path):
+    from clio.emitters._sidecar import check_drift
+
+    skill_dir, _ = _setup_clio_emitted_skill(tmp_path)
+    (skill_dir / "extra.md").write_text("extra\n")
+    drift = check_drift(skill_dir, skill_dir / ".clio" / "manifest.json")
+    assert drift == ["extra.md"]
+
+
+def test_check_drift_detects_removed_file(tmp_path):
+    from clio.emitters._sidecar import check_drift
+
+    skill_dir, _ = _setup_clio_emitted_skill(tmp_path)
+    (skill_dir / "scripts" / "01_foo.py").unlink()
+    drift = check_drift(skill_dir, skill_dir / ".clio" / "manifest.json")
+    assert drift == ["scripts/01_foo.py"]
+
+
+def test_check_drift_sorted_when_multiple_paths_change(tmp_path):
+    from clio.emitters._sidecar import check_drift
+
+    skill_dir, _ = _setup_clio_emitted_skill(tmp_path)
+    (skill_dir / "SKILL.md").write_text("# changed\n")
+    (skill_dir / "scripts" / "01_foo.py").write_text("# changed\n")
+    (skill_dir / "zzz_added.md").write_text("added\n")
+    drift = check_drift(skill_dir, skill_dir / ".clio" / "manifest.json")
+    assert drift == sorted(drift)
+    assert set(drift) == {"SKILL.md", "scripts/01_foo.py", "zzz_added.md"}
+
+
+def test_check_drift_raises_when_manifest_missing(tmp_path):
+    from clio.emitters._sidecar import check_drift
+
+    skill_dir = tmp_path / "skill"
+    skill_dir.mkdir()
+    with pytest.raises(FileNotFoundError):
+        check_drift(skill_dir, skill_dir / ".clio" / "manifest.json")

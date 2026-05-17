@@ -97,3 +97,33 @@ def write_sidecar(source_path: Path, skill_dir: Path, *, clio_version: str) -> N
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def check_drift(skill_dir: Path, manifest_path: Path) -> list[str] | None:
+    """Compare recorded `file_hashes` to current state of `skill_dir`.
+
+    Returns None when every file matches its recorded hash and no files have
+    been added or removed. Returns a sorted list of relative paths otherwise.
+
+    Raises FileNotFoundError if the manifest is missing — the caller is
+    expected to check `.clio/source.clio` presence before invoking this."""
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"manifest not found: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    recorded: dict[str, str] = manifest.get("file_hashes", {})
+
+    actual: dict[str, str] = {}
+    for f in _iter_skill_files(skill_dir):
+        rel = f.relative_to(skill_dir).as_posix()
+        actual[rel] = compute_file_hash(f)
+
+    drifted: set[str] = set()
+    for rel, h in actual.items():
+        if recorded.get(rel) != h:
+            drifted.add(rel)
+    for rel in recorded:
+        if rel not in actual:
+            drifted.add(rel)
+    if not drifted:
+        return None
+    return sorted(drifted)
