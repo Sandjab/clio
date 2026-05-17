@@ -1,0 +1,17 @@
+CONTRACT classification
+  SHAPE: {label: enum(spam|ham), confidence: float}
+
+STEP load_message
+  TAKES: path:    str
+  GIVES: message: str
+  MODE:  exact
+  LANG:  python
+
+STEP classify
+  TAKES: message:        str
+  GIVES: classification: classification
+  MODE:  judgment
+
+FLOW spam_filter
+  load_message(path="msg.txt")
+    -> classify(message)

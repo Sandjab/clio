@@ -1275,3 +1275,77 @@ def test_claude_skill_rejects_control_structures_in_subflow(tmp_path):
     assert "linear" in msg
     # A ForEachIR triggers the rejection; the error must surface the kind.
     assert "ForEach" in msg
+
+
+# ---------------------------------------------------------------------------
+# T5 — .clio/ sidecar tests
+# ---------------------------------------------------------------------------
+
+_SIDECAR_SOURCE = (
+    "STEP foo\n"
+    "  MODE: exact\n"
+    "  LANG: python\n"
+    "FLOW pipe\n"
+    "  foo()\n"
+)
+
+
+def test_sidecar_source_clio_is_byte_identical(tmp_path):
+    src = tmp_path / "src.clio"
+    src.write_text(_SIDECAR_SOURCE)
+    graph = build_ir(parse(_SIDECAR_SOURCE))
+    out = tmp_path / "skill"
+    ClaudeSkillEmitter().emit(graph, out, source_path=src)
+
+    assert (out / ".clio" / "source.clio").read_bytes() == src.read_bytes()
+
+
+def test_sidecar_manifest_has_required_keys(tmp_path):
+    src = tmp_path / "src.clio"
+    src.write_text(_SIDECAR_SOURCE)
+    graph = build_ir(parse(_SIDECAR_SOURCE))
+    out = tmp_path / "skill"
+    ClaudeSkillEmitter().emit(graph, out, source_path=src)
+
+    manifest = json.loads((out / ".clio" / "manifest.json").read_text())
+    assert set(manifest.keys()) >= {"clio_version", "emitted_at", "source_hash", "file_hashes"}
+    assert manifest["clio_version"]  # non-empty
+    assert manifest["source_hash"].startswith("sha256:")
+
+
+def test_sidecar_file_hashes_match_emitted_files(tmp_path):
+    from clio.emitters._sidecar import compute_file_hash
+
+    src = tmp_path / "src.clio"
+    src.write_text(_SIDECAR_SOURCE)
+    graph = build_ir(parse(_SIDECAR_SOURCE))
+    out = tmp_path / "skill"
+    ClaudeSkillEmitter().emit(graph, out, source_path=src)
+
+    manifest = json.loads((out / ".clio" / "manifest.json").read_text())
+    for rel, stored_hash in manifest["file_hashes"].items():
+        actual = compute_file_hash(out / rel)
+        assert actual == stored_hash, f"hash mismatch for {rel}"
+
+
+def test_sidecar_reproducible_across_emissions(tmp_path):
+    src = tmp_path / "src.clio"
+    src.write_text(_SIDECAR_SOURCE)
+    graph = build_ir(parse(_SIDECAR_SOURCE))
+
+    out1 = tmp_path / "skill1"
+    ClaudeSkillEmitter().emit(graph, out1, source_path=src)
+    out2 = tmp_path / "skill2"
+    ClaudeSkillEmitter().emit(graph, out2, source_path=src)
+
+    m1 = json.loads((out1 / ".clio" / "manifest.json").read_text())
+    m2 = json.loads((out2 / ".clio" / "manifest.json").read_text())
+    assert m1["source_hash"] == m2["source_hash"]
+    assert m1["file_hashes"] == m2["file_hashes"]
+
+
+def test_no_sidecar_when_source_path_omitted(tmp_path):
+    graph = build_ir(parse(_SIDECAR_SOURCE))
+    out = tmp_path / "skill"
+    ClaudeSkillEmitter().emit(graph, out)  # no source_path
+    assert not (out / ".clio").exists()

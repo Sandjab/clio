@@ -941,6 +941,25 @@ FLOW appears in `exposed_flow_names` and is registered as a tool in the
 generated server (fixed in #47). Before v0.18.1, re-exports were silently
 dropped from the MCP tool surface.
 
+## Recover the `.clio` source from a skill
+
+You lost the `.clio` source of a skill you compiled last week, or you
+inherited a hand-written skill and want to iterate on it through the
+CLIO toolchain. Use `clio import`:
+
+```bash
+# CLIO-emitted skill (no LLM call, byte-identical recovery)
+clio import skill/ --output recovered.clio
+
+# Hand-written skill (LLM-assisted, requires ANTHROPIC_API_KEY)
+export ANTHROPIC_API_KEY=sk-...
+clio import ~/.claude/skills/my-skill --output my-skill.clio
+```
+
+The output `.clio` is annotated with `# CLIO-import: ...` comments above
+inferred elements. These annotations are intentionally noisy — delete them
+after manual review.
+
 ## What's not in the cookbook (yet)
 
 - **Multi-field ASSERT** — accept `a > b` between two fields. Specced, planned.

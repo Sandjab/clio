@@ -679,6 +679,53 @@ resolution is deferred for this target.
 `--target claude-skill`, or `--target langgraph` instead. If you must use
 `claude-cli`, inline all imported declarations directly in the entry file.
 
+## `clio import` errors (v0.19+)
+
+### `clio import` warns "skill has been modified since CLIO emitted it"
+
+The skill carries a CLIO `.clio/` sidecar but at least one file's hash no
+longer matches the recorded value. The CLI falls back to LLM-assisted import
+by default. Use `--mode strict` to fail loud instead. To see exactly which
+files drifted, re-run without `--output` — the stderr list shows the first
+five drifted paths.
+
+### `clio import` aborts with "skill payload too large"
+
+The text content of the skill exceeds the ~180k-token abort threshold (with
+~20k tokens of headroom for the response in Sonnet 4.6's 200k context). If
+the skill was CLIO-emitted with sidecar, use `--mode strict` to skip the LLM
+path entirely. Otherwise, split the skill manually or remove large auxiliary
+files (README appendices, embedded fixtures) that are not part of its core
+behavior.
+
+### `clio import` exits 1 with "failed to import skill"
+
+The LLM produced `.clio` that did not parse or build, twice in a row (one
+initial call + one retry with the error fed back). The stderr shows the last
+attempt commented with `#`. Inspect for hallucinated keywords or malformed
+control structures, then either retry (occasionally non-deterministic) or
+file an issue with the offending payload.
+
+### `clio import` reports "manifest at ... is corrupted"
+
+The sidecar's `manifest.json` is present but unparseable (truncated, empty,
+or malformed JSON) or missing required keys. Under `--mode strict` this
+exits 2. Under default `auto` mode, `clio import` warns to stderr and falls
+back to LLM-assisted import. Usually caused by a hand-edited `.clio/`
+directory or an interrupted prior emission. The cleanest fix is to re-run
+`clio compile --target claude-skill` to regenerate the sidecar; alternatively
+delete the `.clio/` directory to force a clean LLM import.
+
+### `clio import` recovers a `.clio` that doesn't compile (cross-file imports)
+
+The v0.19 sidecar stores only the **entry** `.clio` file. If the original
+source used `FROM "lib.clio" IMPORT ...`, the recovered `source.clio`
+references files not present in the sidecar. Two workarounds: (1) keep the
+imported `.clio` files next to the recovered entry file before running
+`clio check`; (2) use `--mode infer` so the LLM produces a single inlined
+`.clio` with all flows merged. Multi-file sidecar recovery is tracked as
+[#67](https://github.com/Sandjab/clio/issues/67) for v0.20.
+
 ## When the docs and code diverge
 
 The CHANGELOG, language spec, and this manual are kept in sync **per release tag**. If you're on `main` between tags, expect occasional drift.

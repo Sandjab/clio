@@ -417,3 +417,34 @@ def test_cli_check_reports_missing_import(tmp_path):
     src.write_text('FROM "./missing.clio" IMPORT X\n')
     rc = _cmd_check(str(src))
     assert rc != 0
+
+
+def test_cli_compile_claude_skill_writes_sidecar(tmp_path):
+    from clio.cli import _cmd_compile
+
+    src = tmp_path / "pipe.clio"
+    src.write_text(
+        "STEP foo\n  MODE: exact\n  LANG: python\n"
+        "FLOW pipe\n  foo()\n"
+    )
+    out = tmp_path / "skill"
+    rc = _cmd_compile(str(src), "claude-skill", str(out), None)
+    assert rc == 0
+    assert (out / ".clio" / "source.clio").exists()
+    assert (out / ".clio" / "manifest.json").exists()
+
+
+def test_cli_compile_python_does_not_write_sidecar(tmp_path):
+    from clio.cli import _cmd_compile
+
+    src = tmp_path / "pipe.clio"
+    src.write_text(
+        "STEP foo\n  MODE: exact\n  LANG: python\n"
+        "FLOW pipe\n  foo()\n"
+    )
+    out = tmp_path / "project"
+    rc = _cmd_compile(str(src), "python", str(out), None)
+    assert rc == 0
+    # Sidecar is a claude-skill specific convention; other emitters MUST NOT
+    # create a `.clio/` directory.
+    assert not (out / ".clio").exists()

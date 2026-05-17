@@ -23,6 +23,7 @@ from clio.emitters._claude_skill_helpers import (
     render_state_example,
     render_sub_flow_script,
 )
+from clio.emitters._sidecar import write_sidecar
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import (
     FlowGraph,
@@ -78,7 +79,7 @@ class ClaudeSkillEmitter(BaseEmitter):
                         f"structure to the main FLOW, or split the sub-flow."
                     )
 
-    def emit(self, graph: FlowGraph, output_dir: Path) -> None:
+    def emit(self, graph: FlowGraph, output_dir: Path, *, source_path: Path | None = None) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "scripts").mkdir(exist_ok=True)
         (output_dir / "scripts" / "_validate.py").write_text(render_bundled_validate_script())
@@ -122,3 +123,15 @@ class ClaudeSkillEmitter(BaseEmitter):
         (output_dir / "process_flow.dot").write_text(render_process_flow_dot(graph))
         (output_dir / "state.example.json").write_text(render_state_example(graph))
         (output_dir / "README.md").write_text(render_readme(graph))
+
+        if source_path is not None:
+            from clio import __version__ as _clio_version
+            try:
+                write_sidecar(source_path, output_dir, clio_version=_clio_version)
+            except (OSError, FileNotFoundError) as e:
+                print(
+                    f"claude-skill warning: failed to write .clio/ sidecar ({e}); "
+                    f"main skill emission unaffected. Future `clio import` calls "
+                    f"will fall back to the LLM path.",
+                    file=sys.stderr,
+                )
