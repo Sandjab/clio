@@ -1,13 +1,13 @@
 """Type-utility helpers shared by emitter modules.
 
 Originally lived in `_python_helpers.py`; extracted in v0.14 because
-3 emitters now consume the same shape-rendering and naming logic
-(python, mcp-server, claude-skill).
+now 4 emitters consume the same shape-rendering and naming logic
+(python, mcp-server, claude-skill, go).
 
 The CLAUDE.md rule "emitters never import from each other" continues
 to hold: `_shared_utils.py` is a utility module, not an emitter. Both
 emitter helper modules (`_python_helpers.py`, `_mcp_helpers.py`,
-`_claude_skill_helpers.py`) import from here.
+`_claude_skill_helpers.py`, `_go_helpers.py`) import from here.
 """
 from __future__ import annotations
 
@@ -29,6 +29,14 @@ from clio.parser.ast_nodes import (
 )
 
 _PYTHON_PRIMITIVES = {"int": "int", "float": "float", "str": "str", "bool": "bool"}
+
+_GO_PRIMITIVES = {
+    "str": "string",
+    "int": "int64",
+    "float": "float64",
+    "bool": "bool",
+    "any": "any",
+}
 
 _MODEL_ID_MAP = {
     "haiku": "claude-haiku-4-5-20251001",
@@ -328,13 +336,7 @@ def _type_to_go(t: TypeExpr, contracts: dict[str, ContractIR]) -> str:
     if isinstance(t, ConstrainedType):
         return _type_to_go(t.base, contracts)
     if isinstance(t, PrimitiveType):
-        return {
-            "str": "string",
-            "int": "int64",
-            "float": "float64",
-            "bool": "bool",
-            "any": "any",
-        }[t.name]
+        return _GO_PRIMITIVES[t.name]
     if isinstance(t, EnumType):
         # v0.20.0: enums render as plain `string`; the schema-level enum
         # constraint enforces the value set at Validate() time. Typed Go
@@ -343,7 +345,7 @@ def _type_to_go(t: TypeExpr, contracts: dict[str, ContractIR]) -> str:
     if isinstance(t, ListType):
         return f"[]{_type_to_go(t.inner, contracts)}"
     if isinstance(t, RecordType):
-        fields = ", ".join(
+        fields = "; ".join(
             f'{_to_go_field_name(fname)} {_type_to_go(ftype, contracts)} '
             f'`json:"{fname}"`'
             for fname, ftype in t.fields

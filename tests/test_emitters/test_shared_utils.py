@@ -18,6 +18,7 @@ from clio.emitters._shared_utils import (
     _shape_from_schema,
     _to_class_name,
     _to_field_name,
+    _to_go_field_name,
     _type_to_go,
     _type_to_python,
     _uses_contract_refs,
@@ -45,6 +46,19 @@ def test_to_field_name_basic():
     # Python keywords get a trailing underscore.
     assert _to_field_name("class") == "class_"
     assert _to_field_name("return") == "return_"
+
+
+def test_to_go_field_name_basic():
+    # Snake_case → UpperCamelCase
+    assert _to_go_field_name("customer_id") == "CustomerId"
+    assert _to_go_field_name("a_b_c") == "ABC"
+    # Hyphens are normalised to underscores before splitting.
+    assert _to_go_field_name("x-y") == "XY"
+    assert _to_go_field_name("a_b-c") == "ABC"
+    # Single character stays correctly cased.
+    assert _to_go_field_name("a") == "A"
+    # Already-camel input keeps trailing casing intact (.capitalize would lowercase it).
+    assert _to_go_field_name("fooBar") == "FooBar"
 
 
 def test_model_id_smoke():
@@ -142,6 +156,10 @@ def test_type_to_go_list_of_records():
     assert out.startswith("[]struct ")
     assert 'Name string `json:"name"`' in out
     assert 'Revenue float64 `json:"revenue"`' in out
+    # Go struct fields are separated by `;`, never `,` — guard against
+    # regression to the comma-separator bug.
+    assert "; " in out
+    assert ", Revenue" not in out
 
 
 def test_type_to_go_contract_ref():
