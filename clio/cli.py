@@ -353,10 +353,22 @@ def _read_emitted_at(manifest_file: Path) -> str | None:
 
 
 def _import_via_llm(skill_dir: Path, *, model: str, output: str | None) -> int:
-    """Placeholder for Task 12 — until then, returns 1 with a helpful error."""
-    print(
-        "clio import: LLM-assisted import not yet wired (Task 12). "
-        "Use --mode strict if the skill was CLIO-emitted with hashes matching.",
-        file=sys.stderr,
-    )
-    return 1
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        print(
+            "clio import: ANTHROPIC_API_KEY env var is not set "
+            "(required for LLM-assisted import). "
+            "Set the env var or use --mode strict on a CLIO-emitted skill.",
+            file=sys.stderr,
+        )
+        return 1
+
+    from clio import skill_to_clio
+    try:
+        source = skill_to_clio.generate(skill_dir, model=model)
+    except skill_to_clio.GenerationError as e:
+        print(f"clio import: {e.last_error}", file=sys.stderr)
+        for line in e.last_attempt.splitlines():
+            print(f"# {line}", file=sys.stderr)
+        return 1
+
+    return _emit_imported_source(source, output)

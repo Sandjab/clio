@@ -69,3 +69,102 @@ def test_import_missing_directory_exits_2(tmp_path: Path, capsys: pytest.Capture
     rc = main(["import", str(tmp_path / "does_not_exist")])
     assert rc == 2
     assert "not a directory" in capsys.readouterr().err
+
+
+def test_import_calls_llm_when_sidecar_absent(tmp_path, monkeypatch, capsys):
+    from clio import skill_to_clio
+    from clio.cli import main
+
+    skill = tmp_path / "handwritten"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("# hand-written\n")
+    expected = "STEP infer\n  MODE: exact\n  LANG: python\nFLOW f\n  infer()\n"
+
+    captured = {}
+
+    def fake_generate(skill_dir, *, model, client=None):
+        captured["skill_dir"] = skill_dir
+        captured["model"] = model
+        return expected
+
+    monkeypatch.setattr(skill_to_clio, "generate", fake_generate)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    rc = main(["import", str(skill)])
+    assert rc == 0
+    assert capsys.readouterr().out == expected
+    assert captured["skill_dir"] == skill
+    assert captured["model"] == "claude-sonnet-4-6"
+
+
+def test_import_falls_back_to_llm_on_drift_in_auto_mode(tmp_path, monkeypatch, capsys):
+    from clio import skill_to_clio
+    from clio.cli import main
+
+    _, skill = _emit_skill(tmp_path)
+    (skill / "SKILL.md").write_text("# tampered\n")
+
+    fallback_source = "STEP recovered\n  MODE: exact\n  LANG: python\nFLOW f\n  recovered()\n"
+    monkeypatch.setattr(
+        skill_to_clio, "generate",
+        lambda skill_dir, *, model, client=None: fallback_source,
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+    rc = main(["import", str(skill)])
+    assert rc == 0
+    assert capsys.readouterr().out == fallback_source
+
+
+def test_import_mode_infer_ignores_sidecar_and_calls_llm(tmp_path, monkeypatch, capsys):
+    from clio import skill_to_clio
+    from clio.cli import main
+
+    _, skill = _emit_skill(tmp_path)
+    called = {"count": 0}
+
+    def fake_generate(skill_dir, *, model, client=None):
+        called["count"] += 1
+        return "STEP forced\n  MODE: exact\n  LANG: python\nFLOW f\n  forced()\n"
+
+    monkeypatch.setattr(skill_to_clio, "generate", fake_generate)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+    rc = main(["import", str(skill), "--mode", "infer"])
+    assert rc == 0
+    assert called["count"] == 1  # LLM was called even though sidecar exists
+
+
+def test_import_missing_api_key_exits_1(tmp_path, monkeypatch, capsys):
+    from clio.cli import main
+
+    skill = tmp_path / "handwritten"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("# hand-written\n")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    rc = main(["import", str(skill)])
+    assert rc == 1
+    assert "ANTHROPIC_API_KEY" in capsys.readouterr().err
+
+
+def test_import_generation_error_exits_1_with_diagnostic(tmp_path, monkeypatch, capsys):
+    from clio import skill_to_clio
+    from clio.cli import main
+
+    skill = tmp_path / "handwritten"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("# hand-written\n")
+
+    def boom(skill_dir, *, model, client=None):
+        raise skill_to_clio.GenerationError(
+            last_attempt="STEP bad\n", last_error="line 1: oops",
+        )
+
+    monkeypatch.setattr(skill_to_clio, "generate", boom)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+    rc = main(["import", str(skill)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "line 1: oops" in err
+    assert "STEP bad" in err
