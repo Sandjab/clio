@@ -193,6 +193,63 @@ def _type_to_python(t: TypeExpr, contracts: dict[str, ContractIR]) -> str:
     raise ValueError(f"unhandled type for Python emit: {type(t).__name__}")
 
 
+def _json_type_to_go(schema: dict) -> str:
+    """Render a JSON Schema subschema dict as a Go type expression.
+
+    Mirror of `_json_type_to_python` for the Go target. Used by
+    `render_contracts_go` to convert CONTRACT property schemas — which are
+    plain dicts, not TypeExpr nodes — into Go field types.
+
+    $ref resolves to an UpperCamelCase struct name (mirrors ContractRef
+    handling in `_type_to_go`). enum → string (same as TypeExpr EnumType).
+    Unrecognised shapes → any."""
+    if "$ref" in schema:
+        name = schema["$ref"].rsplit("/", 1)[-1]
+        return _to_class_name(name)
+    if "enum" in schema:
+        return "string"
+    t = schema.get("type")
+    if t == "string":
+        return "string"
+    if t == "integer":
+        return "int64"
+    if t == "number":
+        return "float64"
+    if t == "boolean":
+        return "bool"
+    if t == "array":
+        return f"[]{_json_type_to_go(schema.get('items', {}))}"
+    if t == "object":
+        return "map[string]any"
+    return "any"
+
+
+def _collect_contract_refs(step: StepIR) -> set[str]:
+    """Return the set of CONTRACT names referenced in step's TAKES or GIVES.
+
+    Mirrors the walker in `_uses_contract_refs` but collects names instead
+    of returning a bool. Used by `render_contracts_go` to decide which
+    contracts to emit struct definitions for."""
+    refs: set[str] = set()
+
+    def walk(t: TypeExpr) -> None:
+        if isinstance(t, ContractRef):
+            refs.add(t.name)
+        elif isinstance(t, ListType):
+            walk(t.inner)
+        elif isinstance(t, RecordType):
+            for _, ty in t.fields:
+                walk(ty)
+        elif isinstance(t, ConstrainedType):
+            walk(t.base)
+
+    if step.gives is not None:
+        walk(step.gives.type)
+    for field in step.takes:
+        walk(field.type)
+    return refs
+
+
 def _json_type_to_python(schema: dict) -> str:
     if "$ref" in schema:
         ref = schema["$ref"]

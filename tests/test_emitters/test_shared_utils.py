@@ -11,7 +11,9 @@ from pathlib import Path
 import pytest
 
 from clio.emitters._shared_utils import (
+    _collect_contract_refs,
     _field_from_schema,
+    _json_type_to_go,
     _json_type_to_python,
     _model_id,
     _render_type_short,
@@ -178,6 +180,77 @@ def test_type_to_go_enum():
 def test_type_to_go_constrained_unwraps():
     t = ConstrainedType(base=PrimitiveType(name="str"), constraints=(("max", 300),))
     assert _type_to_go(t, {}) == "string"
+
+
+def test_json_type_to_go_primitives():
+    assert _json_type_to_go({"type": "string"}) == "string"
+    assert _json_type_to_go({"type": "integer"}) == "int64"
+    assert _json_type_to_go({"type": "number"}) == "float64"
+    assert _json_type_to_go({"type": "boolean"}) == "bool"
+
+
+def test_json_type_to_go_enum():
+    assert _json_type_to_go({"enum": ["low", "mid", "high"]}) == "string"
+
+
+def test_json_type_to_go_ref():
+    assert _json_type_to_go({"$ref": "#/$defs/customer_risk"}) == "CustomerRisk"
+
+
+def test_json_type_to_go_array():
+    assert _json_type_to_go({"type": "array", "items": {"type": "string"}}) == "[]string"
+
+
+def test_json_type_to_go_object():
+    assert _json_type_to_go({"type": "object"}) == "map[string]any"
+
+
+def test_json_type_to_go_unknown():
+    assert _json_type_to_go({}) == "any"
+
+
+def test_collect_contract_refs_gives():
+    """Step with ContractRef in GIVES yields that contract name."""
+    from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
+
+    src = (
+        "CONTRACT customer_risk\n"
+        "  SHAPE: {score: int}\n"
+        "STEP detect\n"
+        "  TAKES: x: str\n"
+        "  GIVES: risk: customer_risk\n"
+        "  MODE:  judgment\n"
+        "FLOW f\n"
+        "  detect(x=\"hi\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    graph = build_ir(parse(src))
+    step = next(s for s in graph.steps if s.name == "detect")
+    assert _collect_contract_refs(step) == {"customer_risk"}
+
+
+def test_collect_contract_refs_no_contracts():
+    """Step with primitive types only yields an empty set."""
+    from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
+
+    src = (
+        "STEP noop\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "FLOW f\n"
+        "  noop(x=\"hi\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    graph = build_ir(parse(src))
+    step = next(s for s in graph.steps if s.name == "noop")
+    assert _collect_contract_refs(step) == set()
 
 
 @pytest.mark.parametrize(

@@ -17,7 +17,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from clio.emitters._go_helpers import _go_module_name, render_cmd_main_go, render_go_mod
+from clio.emitters._go_helpers import (
+    _go_module_name,
+    render_cmd_main_go,
+    render_contracts_go,
+    render_go_mod,
+)
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import FlowGraph
 
@@ -40,3 +45,8 @@ class GoEmitter(BaseEmitter):
         cmd_dir = output_dir / "cmd" / pkg
         cmd_dir.mkdir(parents=True, exist_ok=True)
         (cmd_dir / "main.go").write_text(render_cmd_main_go(graph))
+        contracts_src = render_contracts_go(graph)
+        if contracts_src is not None:
+            contracts_dir = output_dir / "contracts"
+            contracts_dir.mkdir(parents=True, exist_ok=True)
+            (contracts_dir / "contracts.go").write_text(contracts_src)

@@ -8,9 +8,17 @@ this module is a helper for `go.py` only; cross-emitter sharing happens via
 """
 from __future__ import annotations
 
+import json
 import re
 
-from clio.emitters._shared_utils import _has_parallel
+from clio.emitters._shared_utils import (
+    _collect_contract_refs,
+    _has_parallel,
+    _json_type_to_go,
+    _shape_from_schema,
+    _to_class_name,
+    _to_go_field_name,
+)
 from clio.ir.graph import FlowGraph, StepIR
 
 _GO_VERSION = "1.22"
@@ -110,3 +118,43 @@ def render_go_mod(graph: FlowGraph) -> str:
         lines.append(f"\t{_DEP_ERRGROUP}")
     lines.append(")")
     return "\n".join(lines) + "\n"
+
+
+def render_contracts_go(graph: FlowGraph) -> str | None:
+    """Render contracts/contracts.go. Returns None when no contract is used.
+
+    Emits one Go struct per CONTRACT referenced in the entry flow's steps,
+    plus a backtick-quoted JSON Schema const so Validate() can call
+    jsonschema/v6 without filesystem reads. The `import` block is omitted
+    in T5; T6 will add it when Validate(ctx context.Context) is introduced.
+    """
+    # Collect contract names referenced by any step in the graph.
+    contracts_used: set[str] = set()
+    for step in graph.steps:
+        contracts_used |= _collect_contract_refs(step)
+    if not contracts_used:
+        return None
+
+    # Build a fast lookup from the tuple (FlowGraph.contracts is a tuple, not a dict).
+    contracts_by_name = {c.name: c for c in graph.contracts}
+
+    parts = ["package contracts", ""]
+    for name in sorted(contracts_used):
+        contract = contracts_by_name[name]
+        struct_name = _to_class_name(name)
+        # lowerCamelCase for Go unexported const: e.g. customer_risk → customerRiskSchema
+        camel = _to_class_name(name)
+        schema_const = camel[0].lower() + camel[1:] + "Schema"
+        parts.append(f"type {struct_name} struct {{")
+        for fname, fschema in _shape_from_schema(contract.json_schema):
+            go_field = _to_go_field_name(fname)
+            go_type = _json_type_to_go(fschema)
+            parts.append(f'\t{go_field} {go_type} `json:"{fname}"`')
+        parts.append("}")
+        parts.append("")
+        schema_json = json.dumps(contract.json_schema, indent=2)
+        parts.append(f"const {schema_const} = `")
+        parts.append(schema_json)
+        parts.append("`")
+        parts.append("")
+    return "\n".join(parts)
