@@ -99,6 +99,12 @@ python -m clio compile examples/sql_demo.clio --target python --output ./sql-out
 python -m clio compile examples/skill_minimal.clio --target claude-skill --output ./skill-out
 cp -r ./skill-out ~/.claude/skills/my-skill
 
+# Recover the .clio source from a Claude Code skill (v0.19)
+# Auto-mode: byte-identical recovery via the .clio/ sidecar when CLIO emitted the skill,
+# LLM-assisted fallback for hand-written skills (requires ANTHROPIC_API_KEY).
+python -m clio import ./skill-out --output recovered.clio
+python -m clio import ./skill-out --mode strict --output recovered.clio   # fail loud if no sidecar
+
 # Diagnose the host environment before compiling / running a flow
 python -m clio doctor                                  # generic checks
 python -m clio doctor examples/critical_pipeline.clio  # flow-aware checks (MCP commands on PATH, db URLs)
@@ -192,8 +198,8 @@ docs/
 
 ## Documentation
 
-- **[User manual](docs/manual/README.md)** — start here. Tutorial, language tour, cookbook, CLI reference, troubleshooting.
-- [Language specification](docs/LANGUAGE_SPEC.md) — full grammar, types, and keywords (authoritative reference).
+- **[User manual](docs/manual/README.md)** — start here. Tutorial, language tour, cookbook, targets, CLI reference (including `clio import` for skill ↔ `.clio` round-trip), v0.17→v0.18 migration guide, troubleshooting.
+- [Language specification](docs/LANGUAGE_SPEC.md) — full grammar, types, and keywords (authoritative reference; includes the `.clio/` sidecar convention since v0.19).
 - [Architecture](docs/ARCHITECTURE.md) — compiler pipeline, design decisions.
 - [Compilation targets](docs/COMPILATION_TARGETS.md) — what each target emits.
 - [Positioning](docs/POSITIONING.md) — strategy, comparisons (DSPy, LangGraph, Outlines).

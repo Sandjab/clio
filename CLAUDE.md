@@ -78,22 +78,19 @@ The system has 3 layers:
 
 Each compilation target is a separate emitter module. Emitters are independent. Adding a new target = adding a new emitter. The parser and IR don't change.
 
-## Current milestone: `target: claude-cli`
+## Compilation targets shipped
 
-The first emitter. It takes an IR and emits a Claude Code project folder:
+Five emitters live in `clio/emitters/`. Each takes an IR and writes a runnable project for a different deployment shape:
 
-```
-output/
-  CLAUDE.md
-  .claude/hooks.json
-  steps/
-    01_step_name.sh          # exact steps
-    02_step_name.prompt       # judgment steps
-    02_step_name.schema.json  # contract schemas
-  run.sh                      # orchestrator
-```
+| Target | Output | Typical use |
+|---|---|---|
+| `claude-cli` | Bash orchestrator + `.prompt` / `.sh` step files calling `claude -p` | Sketches, demos inside Claude Code |
+| `python` | Python package (Anthropic / OpenAI SDKs + Pydantic v2) | Production deployment, OpenAI-compat models |
+| `mcp-server` | Python MCP server (one tool per `EXPOSE FLOW`, judgment via `sampling/createMessage`) | Expose the flow to Claude Desktop / IDE / any MCP client |
+| `langgraph` | Python package whose `flow.py` builds a `langgraph.graph.StateGraph` | Bridge to LangChain stacks; observability delegated to LangSmith |
+| `claude-skill` | Claude Code skill directory (`SKILL.md` + `scripts/` + `prompts/` + `schemas/`) — emits a `.clio/` sidecar (v0.19) so `clio import` can recover the source verbatim | Ship a flow as a host-orchestrated skill, no runtime needed after install |
 
-Read `docs/COMPILATION_TARGETS.md` for target-specific details.
+Read `docs/COMPILATION_TARGETS.md` for the per-target contracts and `docs/manual/04-targets.md` for the cross-target feature matrix.
 
 ## Tech stack
 
@@ -107,28 +104,42 @@ Read `docs/COMPILATION_TARGETS.md` for target-specific details.
 
 ```
 clio/
-  parser/          # .clio source → IR
+  parser/             # .clio source → AST
     lexer.py
     parser.py
     ast_nodes.py
-  ir/              # intermediate representation
-    graph.py       # the flow graph
-    contracts.py   # contract validation
-    optimizer.py   # batching, context budget, model routing
-  emitters/        # IR → target project
-    base.py        # abstract emitter interface
-    claude_cli.py  # target: claude-cli
-  cli.py           # command-line entry point
+  ir/                 # AST → IR graph (validated, target-independent)
+    builder.py        # build the FlowGraph (4 passes)
+    graph.py          # FlowGraph + FlowIR / StepIR / FlowCallIR
+    resolver.py       # cross-file FROM…IMPORT resolution (v0.18)
+    contracts.py      # contract validation
+  emitters/           # IR → target project (5 emitters)
+    base.py           # abstract emitter interface
+    claude_cli.py     # target: claude-cli
+    python.py         # target: python
+    mcp_server.py     # target: mcp-server
+    langgraph.py      # target: langgraph
+    claude_skill.py   # target: claude-skill
+    _sidecar.py       # .clio/ sidecar writer + hash drift detection (v0.19)
+    _python_helpers.py, _mcp_helpers.py, _langgraph_helpers.py,
+    _claude_skill_helpers.py, _claude_cli_helpers.py, _shared_utils.py
+  runtime/            # snippets copied verbatim into emitted Python projects
+    cache.py, logging.py, rest.py, sql.py, mcp_client.py
+  prompts/            # LLM system prompts loaded by gen/import (v0.19)
+  nl_to_clio.py       # NL → .clio   (clio gen)
+  skill_to_clio.py    # skill → .clio (clio import, v0.19)
+  cli.py              # command-line entry point
 tests/
-  fixtures/        # sample .clio files
+  fixtures/           # sample .clio files
   test_parser.py
   test_ir.py
-  test_emitters/
-    test_claude_cli.py
+  test_emitters/      # one test_<target>.py per emitter
 docs/
   LANGUAGE_SPEC.md
   ARCHITECTURE.md
   COMPILATION_TARGETS.md
+  POSITIONING.md
+  manual/             # user-facing docs (getting-started, tour, cookbook, …)
 ```
 
 ## Conventions
@@ -141,37 +152,49 @@ docs/
 
 ## What NOT to build (yet)
 
-- Natural language → FLOW parser (the LLM-powered "gradual" compiler). That's Phase 2.
 - Runtime execution. The compiler emits files; it doesn't run them.
-- Multi-LLM routing logic. The emitter writes the scaffolding; the runtime decides.
+- Multi-LLM routing logic in the compiler. The emitter writes the scaffolding; the runtime decides.
 - A package registry or plugin system.
 - A VS Code extension or LSP server.
-- Dependencies on Guidance, Outlines, or Instructor. Contract validation for API-based targets is trivial (JSON Schema + Pydantic). These libs become relevant only for `target: local` with open-source models — not day 1. Keep a `ContractValidator` interface in the emitter for future pluggability.
+- Dependencies on Guidance, Outlines, or Instructor. Contract validation for API-based targets is trivial (JSON Schema + Pydantic). These libs become relevant only for `target: local` with open-source models. Keep a `ContractValidator` interface in the emitter for future pluggability.
+
+(`clio gen` — natural language → `.clio` — and `clio import` — skill → `.clio` — are both shipped. Their LLM-assisted paths live in `clio/nl_to_clio.py` and `clio/skill_to_clio.py`; they are CLI helpers, not part of the compiler core.)
 
 ## How to run
 
 ```bash
-# Parse and compile a .clio file to claude-cli target
-python -m clio compile examples/analyse.clio --target claude-cli --output ./output
-
-# Compile to MCP server target
-python -m clio compile examples/mvp.clio --target mcp-server --output ./mcp-out
-
-# Run tests
-pytest tests/ -v
+# Compile a .clio file to any of the five targets
+python -m clio compile examples/mvp.clio --target claude-cli   --output ./output
+python -m clio compile examples/mvp.clio --target python       --output ./py-out
+python -m clio compile examples/mvp.clio --target mcp-server   --output ./mcp-out
+python -m clio compile examples/mvp.clio --target langgraph    --output ./lg-out
+python -m clio compile examples/skill_minimal.clio --target claude-skill --output ./skill-out
 
 # Validate a .clio file without emitting
-python -m clio check examples/analyse.clio
+python -m clio check examples/mvp.clio
 
 # Render the FLOW as a Mermaid (default), DOT, or self-contained HTML viewer
-# (stdout, or --output FILE). The HTML viewer is a single file: the Mermaid
-# graph + a click-to-inspect side panel showing each step's contracts,
-# cache, retry policy, and exec details.
-python -m clio graph examples/analyse.clio
-python -m clio graph examples/analyse.clio --format dot
-python -m clio graph examples/analyse.clio --format html --output graph.html
+# (the HTML form is a single file: Mermaid + a click-to-inspect side panel
+# showing each step's contracts, cache, retry policy, and exec details).
+python -m clio graph examples/mvp.clio
+python -m clio graph examples/mvp.clio --format dot
+python -m clio graph examples/mvp.clio --format html --output graph.html
 
 # Generate a .clio source from natural language (requires `pip install -e .[gen]` and ANTHROPIC_API_KEY)
 python -m clio gen "describe a pipeline that ..."
 python -m clio gen --from-file desc.txt --output flow.clio --model claude-sonnet-4-6
+
+# Recover a .clio source from an emitted (or hand-written) Claude Code skill (v0.19)
+python -m clio import ./skill-out --output recovered.clio          # auto: sidecar if present, else LLM
+python -m clio import ./skill-out --mode strict --output recovered.clio  # require sidecar + matching hashes
+
+# Diagnose the host before compiling / running a flow (v0.15)
+python -m clio doctor                                 # generic checks
+python -m clio doctor examples/critical_pipeline.clio # flow-aware checks (MCP commands on PATH, db URLs)
+
+# Inspect the last python-target run (state.json + tail of CLIO_LOG_FILE) (v0.15)
+python -m clio status --state-file ./out/state.json --log-file ./out/events.jsonl --limit 20
+
+# Run tests
+pytest tests/ -v
 ```

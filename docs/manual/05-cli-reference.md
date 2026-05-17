@@ -93,7 +93,7 @@ clio gen --from-file desc.txt [--output flow.clio] [--model claude-sonnet-4-6]
 
 The generated source is **always** validated by `check` before being written. If validation fails, the LLM is asked to fix it (up to 3 retries) before falling back to printing the raw output to stderr.
 
-## `clio import`
+## `import` — recover a `.clio` from a Claude Code skill (v0.19)
 
 Recover a `.clio` source from a Claude Code skill directory.
 
