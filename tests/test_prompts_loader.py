@@ -1,20 +1,20 @@
+import uuid
 from pathlib import Path
 
 import pytest
 
 
-def test_load_prompt_reads_named_file(tmp_path, monkeypatch):
+def test_load_prompt_reads_named_file():
     from clio import prompts
 
-    # Place a temp prompt file inside the real prompts dir
+    name = f"_test_loader_smoke_{uuid.uuid4().hex[:8]}"
     real_dir = Path(prompts.__file__).parent
-    (real_dir / "_test_loader_smoke.md").write_text("hello prompt\n")
+    (real_dir / f"{name}.md").write_text("hello prompt\n")
     try:
-        # Bust the @cache between runs by clearing
         prompts.load_prompt.cache_clear()
-        assert prompts.load_prompt("_test_loader_smoke") == "hello prompt\n"
+        assert prompts.load_prompt(name) == "hello prompt\n"
     finally:
-        (real_dir / "_test_loader_smoke.md").unlink()
+        (real_dir / f"{name}.md").unlink()
         prompts.load_prompt.cache_clear()
 
 
@@ -30,14 +30,14 @@ def test_load_prompt_is_cached():
     from clio import prompts
 
     prompts.load_prompt.cache_clear()
-    # Build a temp file we control
+    name = f"_test_cache_smoke_{uuid.uuid4().hex[:8]}"
     real_dir = Path(prompts.__file__).parent
-    target = real_dir / "_test_cache_smoke.md"
+    target = real_dir / f"{name}.md"
     target.write_text("v1\n")
     try:
-        assert prompts.load_prompt("_test_cache_smoke") == "v1\n"
-        target.write_text("v2\n")  # second read should still return v1
-        assert prompts.load_prompt("_test_cache_smoke") == "v1\n"
+        assert prompts.load_prompt(name) == "v1\n"
+        target.write_text("v2\n")
+        assert prompts.load_prompt(name) == "v1\n"
     finally:
         target.unlink()
         prompts.load_prompt.cache_clear()
