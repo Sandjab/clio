@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from clio.emitters._go_helpers import render_go_mod
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import FlowGraph
 
@@ -34,8 +35,4 @@ class GoEmitter(BaseEmitter):
         `source_path` is accepted and ignored (consistent with python,
         mcp-server, langgraph emitters)."""
         output_dir.mkdir(parents=True, exist_ok=True)
-        # Phase 1 — Task 2 will fill go.mod here.
-        flow_name = graph.flow.name if graph.flow else "main"
-        (output_dir / "go.mod").write_text(
-            f"module {flow_name}\n\ngo 1.22\n"
-        )
+        (output_dir / "go.mod").write_text(render_go_mod(graph))
