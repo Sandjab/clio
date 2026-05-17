@@ -157,8 +157,8 @@ skill_dir/.clio/
 ```
 
 Rules:
-- `source_hash` is SHA-256 of the source `.clio` bytes. Enables audit "did this source produce this skill?" without the source file at hand.
-- `file_hashes` is SHA-256 per emitted file. The `.clio/` directory is excluded from hashing (otherwise the manifest would need to hash itself).
+- `source_hash` is SHA-256 of the source `.clio` bytes (after LF normalization, see below). Enables audit "did this source produce this skill?" without the source file at hand.
+- `file_hashes` is SHA-256 per emitted file. The `.clio/` directory is excluded from hashing (otherwise the manifest would need to hash itself). Hashes use **LF-normalized bytes for text files** (CRLF / CR → LF), and raw bytes for binary files. This keeps drift detection cross-platform-stable (a skill edited on Windows then verified on Unix does not show false drift from line-ending conversion).
 - `emitted_at` is informational, used in import warnings (`"skill was emitted on 2026-05-17 ..."`). Excluded from any hash so the manifest is reproducible across emissions of the same source.
 - `clio_version` enables forward-compatibility in v0.20+ if the manifest format changes.
 
@@ -244,14 +244,18 @@ Mirror of `nl_to_clio.py`. Same `GenerationError` shape, same `_validate` (parse
 ```python
 def _gather_skill_files(skill_dir: Path) -> str:
     """Walk skill_dir, concatenate readable text files with === <relpath> ===
-    delimiters. Excludes .clio/ (anti-cheating), _validate.py, _cache_key.py
-    (CLIO boilerplate), and binary files."""
+    delimiters. Excludes:
+      - All hidden files/directories (any path component starting with '.'):
+        covers `.clio/` (anti-cheating), `.git/`, `.DS_Store`, `.idea/`, etc.
+      - `_validate.py` and `_cache_key.py` (CLIO boilerplate).
+      - Binary files (decoded via UnicodeDecodeError catch)."""
     parts = []
     excluded_basenames = {"_validate.py", "_cache_key.py"}
     for path in sorted(skill_dir.rglob("*")):
         if not path.is_file():
             continue
-        if ".clio" in path.parts:
+        rel_parts = path.relative_to(skill_dir).parts
+        if any(part.startswith(".") for part in rel_parts):
             continue
         if path.name in excluded_basenames:
             continue
@@ -457,7 +461,7 @@ Sections (final text written during implementation):
 
 - **LLM context exhaustion on large skills.** Mitigated by size warning + abort, and by the multi-stage architecture deferred to v0.20+ as an explicit follow-up.
 - **Output language detection drift.** The LLM might pick the wrong language on a mixed-language skill. Mitigated by the explicit "prioritize prompts/ language" instruction in the system prompt. Documented limitation.
-- **Hash sensitivity to line endings.** Hashes are computed on raw bytes (no normalization). A user editing the skill on Windows then re-importing on Unix could see drift from line-ending conversion. Documented; fix is out of scope.
+- **Hash sensitivity to line endings.** Hashes are computed on bytes **after normalizing line endings to LF** (CRLF / CR → LF) for text files. Binary files are hashed on raw bytes (no normalization). This prevents false-positive drift when a skill is edited across platforms (Windows ↔ Unix). The normalization happens in both directions (emit-time hash and import-time verification) so the comparison stays symmetric.
 - **Annotation pollution.** A `.clio` covered in `# CLIO-import: ...` comments is ugly. The user is expected to delete the annotations after manual review. The annotations are a feature for first-pass auditing, not for long-term retention.
 
 ## Definition of done
