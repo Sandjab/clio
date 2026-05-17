@@ -16,7 +16,7 @@ Verify:
 uv run python -m clio --help
 ```
 
-You should see `compile`, `check`, `graph`, `gen`, `doctor`, `status`.
+You should see `compile`, `check`, `graph`, `gen`, `doctor`, `status`, `import`.
 
 ## Hello, CLIO
 
@@ -100,7 +100,8 @@ Install and run it:
 
 ```bash
 uv pip install ./out
-ANTHROPIC_API_KEY=sk-... cd out && hello
+export ANTHROPIC_API_KEY=sk-...
+cd out && hello
 cat state.json   # the result of the flow
 ```
 

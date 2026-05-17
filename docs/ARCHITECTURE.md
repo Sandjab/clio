@@ -4,15 +4,16 @@
 
 ```mermaid
 flowchart LR
-    src[".clio source"] --> lex["Lexer<br/><sub>parser/lexer.py</sub>"]
+    src[".clio source(s)"] --> lex["Lexer<br/><sub>parser/lexer.py</sub>"]
     lex --> tok["Token stream"]
     tok --> psr["Parser<br/><sub>parser/parser.py</sub>"]
     psr --> ast["AST<br/><sub>parser/ast_nodes.py</sub>"]
-    ast --> bld["IR Builder<br/><sub>ir/builder.py</sub>"]
+    ast --> rsv["Resolver (v0.18)<br/><sub>ir/resolver.py — FROM…IMPORT,<br/>EXPOSE/INTERNAL, alpha-rename</sub>"]
+    rsv --> bld["IR Builder<br/><sub>ir/builder.py</sub>"]
     bld --> ir["IR Graph<br/><sub>ir/graph.py</sub>"]
     ir --> opt["Optimizer<br/><sub>ir/optimizer.py (future)</sub>"]
-    opt --> emt["Emitter<br/><sub>emitters/claude_cli.py</sub>"]
-    emt --> out["Target project<br/><sub>run.sh + steps/ + clio_runtime/</sub>"]
+    opt --> emt["Emitter<br/><sub>emitters/{claude_cli,python,<br/>mcp_server,langgraph,claude_skill}.py</sub>"]
+    emt --> out["Target project<br/><sub>per target: run.sh / Python pkg /<br/>MCP server / StateGraph / SKILL.md +<br/>.clio/ sidecar on claude-skill (v0.19)</sub>"]
 ```
 
 ### Layer 1: Parser (source → AST)
@@ -81,8 +82,8 @@ a `List<Article>` reference in `main.clio` that resolves to `schemas.clio::Artic
 becomes `List<schemas__Article>` in the merged namespace, with an identical `SHAPE`
 declaration carried over.
 
-**Module:** `clio/resolver/` (four files: `discovery.py`, `validation.py`,
-`exposed.py`, `import_validation.py`, plus `resolver.py` orchestrator).
+**Module:** `clio/ir/resolver.py` — single module orchestrating the four passes
+above. It is invoked by `clio/ir/builder.py` before the IR build proper.
 
 ### Layer 3: Emitters (IR → target project)
 

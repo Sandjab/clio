@@ -262,6 +262,43 @@ Then:
 
 **Runtime dependency.** Python (for the bundled helpers in `scripts/`). The host that reads `SKILL.md` drives all judgment steps directly — no `anthropic` SDK, no `pydantic` install required.
 
+### `.clio/` sidecar (v0.19)
+
+Every `clio compile --target claude-skill` also writes a `<skill>/.clio/`
+directory alongside the user-facing manifest:
+
+```
+<skill>/
+  SKILL.md
+  scripts/
+  prompts/
+  schemas/
+  .clio/                # ← sidecar (v0.19)
+    source.clio         # verbatim copy of the source .clio (entry file)
+    manifest.json       # CLIO version, emission timestamp,
+                        #   source_hash + per-file hashes (LF-normalised for text, raw for binary)
+```
+
+The sidecar enables byte-identical recovery of the source via
+[`clio import <skill-dir>`](manual/05-cli-reference.md#import--recover-a-clio-from-a-claude-code-skill-v019):
+when every recorded hash still matches the current file state on disk,
+`clio import` returns `source.clio` directly — no LLM call, no API key.
+A hash mismatch (`--mode auto`) triggers the LLM-assisted fallback;
+under `--mode strict` it exits 2 instead.
+
+The sidecar is excluded from `_gather_skill_files`, so `clio import --mode
+infer` cannot accidentally read its own previous emission. Sidecar
+emission is best-effort — a write failure is logged to stderr but never
+blocks the main skill output.
+
+**Known limitation (v0.19):** the sidecar stores only the entry `.clio`
+file. Multi-file projects (those using `FROM "<path>" IMPORT ...`) recover
+a `source.clio` that references files not present in the sidecar — track
+[#67](https://github.com/Sandjab/clio/issues/67) for the multi-file
+extension. Workarounds: keep the imported `.clio` files next to the
+recovered entry, or use `clio import --mode infer` to inline everything
+through the LLM.
+
 ---
 
 ## `target: local` (Future)

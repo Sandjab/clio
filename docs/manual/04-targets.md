@@ -122,6 +122,15 @@ The emitted skill is **LLM-host-orchestrated**: Claude Code reads `SKILL.md` and
 - You need a language other than Python or Bash for `exact` steps — only `python` and `bash` are supported in v1 (a `LANG: ruby` step is a compile-time error).
 - You need a runtime entrypoint outside Claude Code (Python entry point, CLI command, MCP tool). Pick `python` / `mcp-server` instead.
 
+> **`.clio/` sidecar (v0.19):** every `claude-skill` emission also writes
+> `<skill>/.clio/source.clio` (verbatim copy of the source) and
+> `<skill>/.clio/manifest.json` (CLIO version, emission timestamp, per-file
+> SHA-256 hashes). The sidecar is what makes [`clio import`](05-cli-reference.md#import--recover-a-clio-from-a-claude-code-skill-v019)
+> a byte-identical round-trip when nothing in the skill has drifted; if a
+> hash no longer matches, `clio import` falls back to LLM-assisted recovery
+> (or exits 2 under `--mode strict`). Sidecar emission is best-effort — a
+> write failure is logged to stderr but never blocks the main skill output.
+
 ## Cross-target feature support
 
 | Feature | claude-cli | python | mcp-server | langgraph | claude-skill |

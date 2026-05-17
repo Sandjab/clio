@@ -941,24 +941,41 @@ FLOW appears in `exposed_flow_names` and is registered as a tool in the
 generated server (fixed in #47). Before v0.18.1, re-exports were silently
 dropped from the MCP tool surface.
 
-## Recover the `.clio` source from a skill
+## 23. Recover the `.clio` source from a skill (v0.19)
 
-You lost the `.clio` source of a skill you compiled last week, or you
-inherited a hand-written skill and want to iterate on it through the
+**Pattern:** you lost the `.clio` source of a skill you compiled last week,
+or you inherited a hand-written skill and want to iterate on it through the
 CLIO toolchain. Use `clio import`:
 
 ```bash
-# CLIO-emitted skill (no LLM call, byte-identical recovery)
+# CLIO-emitted skill (no LLM call, byte-identical recovery via the .clio/ sidecar)
 clio import skill/ --output recovered.clio
 
 # Hand-written skill (LLM-assisted, requires ANTHROPIC_API_KEY)
 export ANTHROPIC_API_KEY=sk-...
 clio import ~/.claude/skills/my-skill --output my-skill.clio
+
+# Refuse to fall back to the LLM — only succeed when the sidecar matches
+clio import skill/ --mode strict --output recovered.clio
 ```
 
-The output `.clio` is annotated with `# CLIO-import: ...` comments above
-inferred elements. These annotations are intentionally noisy — delete them
-after manual review.
+Key idea: every `clio compile --target claude-skill` (v0.19+) drops a
+`<skill>/.clio/` sidecar — the verbatim `source.clio` plus a
+`manifest.json` carrying per-file SHA-256 hashes. When `clio import` finds
+the sidecar and every hash still matches the current file state, it
+returns the recorded source exactly (no API call, no key required).
+Hash drift or a missing sidecar triggers the LLM fallback under default
+`--mode auto`; under `--mode strict` it exits 2 instead.
+
+The LLM-assisted path annotates inferred elements with `# CLIO-import: ...`
+comments above each declaration. These annotations are intentionally noisy
+— delete them after manual review.
+
+The full mode-dispatch table and exit codes live in the
+[CLI reference](05-cli-reference.md#import--recover-a-clio-from-a-claude-code-skill-v019);
+common error messages (drift warnings, payload-too-large, retry exhaustion,
+corrupted manifest, cross-file recovery caveat) are documented in
+[troubleshooting](06-troubleshooting.md#clio-import-errors-v019).
 
 ## What's not in the cookbook (yet)
 
