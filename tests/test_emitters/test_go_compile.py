@@ -1,12 +1,14 @@
-"""Compile-check tests: emit a fixture to Go, then run `go build ./...`.
+"""Compile-check tests: emit a fixture to Go, run `go mod tidy`, then `go build ./...`.
 
-Skipped entirely if the `go` toolchain is not on PATH. The smoke does NOT
-download Go, does NOT run `go mod tidy` against the network (the emitted
-go.sum is committed or absent), and does NOT execute the emitted binary —
-this exercises syntactic correctness of the emitter's output only.
+Skipped entirely if the `go` toolchain is not on PATH. The test does require
+network access on first run for `go mod tidy` to fetch the pinned deps; once
+GOPATH/GOCACHE under the per-test HOME are warm, subsequent runs are offline.
+The test exercises syntactic correctness of the emitter's output; it does
+NOT execute the emitted binary.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -23,16 +25,17 @@ pytestmark = pytest.mark.skipif(
 
 def _go_build(out_dir: Path) -> subprocess.CompletedProcess:  # type: ignore[type-arg]
     """Run `go build ./...` inside out_dir. Returns the completed process."""
+    env = {
+        "GOFLAGS": "-mod=mod",
+        "HOME": str(out_dir / ".gohome"),
+        "PATH": os.environ.get("PATH", "/usr/bin:/usr/local/bin:/bin"),
+    }
     return subprocess.run(
         ["go", "build", "./..."],
         cwd=out_dir,
         capture_output=True,
         text=True,
-        env={
-            "GOFLAGS": "-mod=mod",
-            "HOME": str(out_dir / ".gohome"),
-            "PATH": "/usr/bin:/usr/local/bin:/bin",
-        },
+        env=env,
     )
 
 
@@ -54,7 +57,12 @@ def test_go_build_passes_on_minimal_contract_flow(tmp_path: Path) -> None:
     out = tmp_path / "out"
     _compile(src, out)
 
-    subprocess.run(["go", "mod", "tidy"], cwd=out, check=True, capture_output=True)
+    tidy_env = {
+        "GOFLAGS": "-mod=mod",
+        "HOME": str(out / ".gohome"),
+        "PATH": os.environ.get("PATH", "/usr/bin:/usr/local/bin:/bin"),
+    }
+    subprocess.run(["go", "mod", "tidy"], cwd=out, check=True, capture_output=True, env=tidy_env)
     result = _go_build(out)
     assert result.returncode == 0, (
         f"go build failed:\n--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"

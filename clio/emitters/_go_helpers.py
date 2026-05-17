@@ -244,7 +244,7 @@ func evalAssert(node any, ctx any) bool {
 \tcase "int", "float", "str":
 \t\treturn true
 \tcase "call":
-\t\tfn, _ := m["fn"].(string)
+\t\tfn, _ := m["func"].(string)
 \t\tif fn != "len" {
 \t\t\treturn false
 \t\t}
@@ -277,6 +277,10 @@ func resolve(node any, ctx any) any {
 \tcase "str":
 \t\treturn m["value"]
 \tcase "call":
+\t\t// Only len() is supported today; mirror evalAssert's guard.
+\t\tif fn, _ := m["func"].(string); fn != "len" {
+\t\t\treturn nil
+\t\t}
 \t\treturn lenOf(m["args"].([]any)[0], ctx)
 \t}
 \treturn nil

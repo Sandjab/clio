@@ -283,7 +283,7 @@ def test_clio_runtime_validate_written(tmp_path: Path) -> None:
     assert "func Schema(" in body
     assert "jsonschema" in body
     # x-clio-assert walker
-    assert "func evalAssert(" in body or "Assert(" in body
+    assert "func evalAssert(" in body
 
 
 def test_validate_template_omitted_when_no_contract(tmp_path: Path) -> None:
