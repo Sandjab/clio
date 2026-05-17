@@ -258,3 +258,48 @@ def test_contracts_validate_includes_assert(tmp_path: Path) -> None:
     body = (out / "contracts" / "contracts.go").read_text()
     # x-clio-assert is included in the schema JSON
     assert "x-clio-assert" in body or '"assert"' in body
+
+
+def test_clio_runtime_validate_written(tmp_path: Path) -> None:
+    """validate.go is emitted alongside contracts.go when contracts are used."""
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "CONTRACT customer_risk\n"
+        "  SHAPE: {client: str}\n"
+        "STEP detect\n"
+        "  TAKES: x: str\n"
+        "  GIVES: risk: customer_risk\n"
+        "  MODE:  judgment\n"
+        "FLOW pipeline\n"
+        "  detect(x=\"hi\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile(src, out)
+    body = (out / "clio_runtime" / "validate" / "validate.go").read_text()
+    assert "package validate" in body
+    assert "func Schema(" in body
+    assert "jsonschema" in body
+    # x-clio-assert walker
+    assert "func evalAssert(" in body or "Assert(" in body
+
+
+def test_validate_template_omitted_when_no_contract(tmp_path: Path) -> None:
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP noop\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "FLOW pipeline\n"
+        "  noop(x=\"hi\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile(src, out)
+    # No contract → no validate runtime needed
+    assert not (out / "clio_runtime" / "validate" / "validate.go").exists()

@@ -19,6 +19,7 @@ from pathlib import Path
 
 from clio.emitters._go_helpers import (
     _go_module_name,
+    render_clio_runtime_validate,
     render_cmd_main_go,
     render_contracts_go,
     render_go_mod,
@@ -50,3 +51,6 @@ class GoEmitter(BaseEmitter):
             contracts_dir = output_dir / "contracts"
             contracts_dir.mkdir(parents=True, exist_ok=True)
             (contracts_dir / "contracts.go").write_text(contracts_src)
+            runtime_validate_dir = output_dir / "clio_runtime" / "validate"
+            runtime_validate_dir.mkdir(parents=True, exist_ok=True)
+            (runtime_validate_dir / "validate.go").write_text(render_clio_runtime_validate())
