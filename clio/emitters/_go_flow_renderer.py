@@ -15,6 +15,8 @@ def _kwargs_to_step_input(
     step: StepIR,
     prev_state_var: str,
     contracts: dict[str, ContractIR],
+    *,
+    is_first_step: bool,
 ) -> str:
     """Render the literal `<Step>In{...}` initialisation pulling fields from
     kwargs (first step) or the previous step's typed output (subsequent steps).
@@ -22,12 +24,16 @@ def _kwargs_to_step_input(
     v0.20.0 assumes 1:1 GIVES/TAKES field name alignment between adjacent
     steps. If a later spec adds explicit field remapping at chain time,
     revisit here.
+
+    TODO(T12): kwargs["x"].(SomeStruct) panics at runtime for ContractRef
+    inputs on the first step. Skip for v0.20.0 (no fixture exercises this
+    path); add type-assertion helper when ContractRef first-step inputs land.
     """
     cls = _to_class_name(step.name)
     parts: list[str] = []
     for field in step.takes:
         gf = _to_go_field_name(field.name)
-        if prev_state_var == "kwargs":
+        if is_first_step:
             parts.append(
                 f'{gf}: {prev_state_var}["{field.name}"].'
                 f'({_type_to_go(field.type, contracts)})'
@@ -75,10 +81,13 @@ def render_flow_go(graph: FlowGraph) -> str:
         if not isinstance(elem, CallIR):
             continue  # control flow handled in T12-T15
         step = steps_by_name.get(elem.step_name)
-        if step is None or step.mode != "exact":
-            continue  # judgment steps in T11
+        if step is None or step.mode not in ("exact", "judgment"):
+            continue
         cls = _to_class_name(step.name)
-        input_init = _kwargs_to_step_input(step, prev_var, contracts_by_name)
+        is_first = prev_var == "kwargs"
+        input_init = _kwargs_to_step_input(
+            step, prev_var, contracts_by_name, is_first_step=is_first
+        )
         out_var = f"{step.name}Out"
         lines.extend([
             f"\t{out_var}, err := steps.{cls}(ctx, {input_init})",

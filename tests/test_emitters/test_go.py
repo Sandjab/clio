@@ -436,3 +436,48 @@ def test_flow_go_chains_exact_steps(tmp_path: Path) -> None:
     assert 'state["load"]' in body
     assert 'state["summarise"]' in body
     assert "return state, nil" in body
+
+
+# ---------------------------------------------------------------------------
+# Task 11 — judgment step with Anthropic SDK + cache integration
+
+
+def test_judgment_step_calls_anthropic_sdk(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _compile(FIXTURES / "go_judgment.clio", out)
+    body = (out / "steps" / "02_detect_churn.go").read_text()
+    assert "github.com/anthropics/anthropic-sdk-go" in body
+    assert "cache.Key(" in body
+    assert "cache.Lookup(" in body
+    assert "anthropic.NewClient(" in body
+    assert ".Messages.New(ctx" in body
+    assert "json.Unmarshal(" in body
+    assert ".Validate(ctx)" in body
+    assert "cache.Store(" in body
+
+
+def test_judgment_step_uses_resolved_model_id(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _compile(FIXTURES / "go_judgment.clio", out)
+    body = (out / "steps" / "02_detect_churn.go").read_text()
+    assert "claude-haiku-4-5-20251001" in body
+
+
+def test_judgment_step_with_ttl_cache(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _compile(FIXTURES / "go_judgment.clio", out)
+    body = (out / "steps" / "02_detect_churn.go").read_text()
+    assert "86400" in body  # 24h = 86400s
+
+
+def test_golden_go_judgment(tmp_path: Path) -> None:
+    """Full-tree comparison against the committed golden snapshot."""
+    golden_dir = EXPECTED_GO / "go_judgment"
+    if not golden_dir.exists():
+        import pytest
+        pytest.skip("golden snapshot not yet generated")
+    out = tmp_path / "out"
+    _compile(FIXTURES / "go_judgment.clio", out)
+    emitted = _read_tree(out)
+    golden = _read_tree(golden_dir)
+    assert emitted == golden, "Emitted tree differs from golden snapshot"
