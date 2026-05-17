@@ -19,11 +19,11 @@ from pathlib import Path
 
 from clio.emitters._go_helpers import (
     _go_module_name,
-    render_clio_runtime_validate,
     render_cmd_main_go,
     render_contracts_go,
     render_go_mod,
 )
+from clio.emitters._go_runtime_templates import render_clio_runtime_validate
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import FlowGraph
 
