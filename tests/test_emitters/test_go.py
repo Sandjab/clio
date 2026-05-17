@@ -305,7 +305,7 @@ def test_validate_template_omitted_when_no_contract(tmp_path: Path) -> None:
     assert not (out / "clio_runtime" / "validate" / "validate.go").exists()
 
 
-def test_clio_runtime_cache_written_when_judgment_present(tmp_path: Path) -> None:
+def test_clio_runtime_cache_written_when_cache_directive_present(tmp_path: Path) -> None:
     src = tmp_path / "src.clio"
     src.write_text(
         "STEP detect\n"
@@ -326,6 +326,7 @@ def test_clio_runtime_cache_written_when_judgment_present(tmp_path: Path) -> Non
     assert "func Key(" in body
     assert "func Lookup(" in body
     assert "func Store(" in body
+    assert "func CacheDirFromEnv(" in body
     assert "sha256" in body
 
 

@@ -191,7 +191,6 @@ import (
 \t"crypto/sha256"
 \t"encoding/hex"
 \t"encoding/json"
-\t"fmt"
 \t"os"
 \t"path/filepath"
 \t"strings"
@@ -256,13 +255,14 @@ func Store(cacheDir, stepName, key, model, response string) error {
 \treturn os.Rename(tmp, final)
 }
 
-// CacheDirFromEnv returns CLIO_CACHE_DIR or "<cwd>/.cache".
+// CacheDirFromEnv returns CLIO_CACHE_DIR or the relative path ".cache".
+// Mirrors the python emitter's clio/emitters/python.py fallback so both
+// targets resolve the cache directory relative to the same CWD.
 func CacheDirFromEnv() string {
 \tif d := os.Getenv("CLIO_CACHE_DIR"); d != "" {
 \t\treturn d
 \t}
-\tcwd, _ := os.Getwd()
-\treturn fmt.Sprintf("%s/.cache", cwd)
+\treturn ".cache"
 }
 '''
 

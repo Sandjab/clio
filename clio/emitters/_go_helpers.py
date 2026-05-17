@@ -64,7 +64,13 @@ def _flow_uses_cache(graph: FlowGraph) -> bool:
 
     Mirrors the gating logic of _flow_uses_judgment / _flow_uses_parallel.
     v0.20 refuses FLOW composition, so graph.steps contains exactly the
-    steps used by the single entry flow."""
+    steps used by the single entry flow.
+
+    NOTE: graph.steps over-collects — it includes steps declared but not
+    reached from graph.flow.chain. In v0.20 the practical impact is zero
+    (extra cache runtime emission is harmless); revisit if step-function
+    scoping needs to match the actual chain in a future iteration.
+    """
     for step in graph.steps:
         if isinstance(step, StepIR) and step.cache is not None and step.cache.mode != "off":
             return True
