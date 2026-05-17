@@ -66,9 +66,11 @@ def _iter_skill_files(skill_dir: Path) -> Iterator[Path]:
         yield path
 
 
-def build_manifest(source_path: Path, skill_dir: Path, *, clio_version: str) -> dict[str, Any]:
-    """Build the manifest dict. Caller is responsible for serializing to JSON."""
-    source_bytes = source_path.read_bytes()
+def build_manifest(source_bytes: bytes, skill_dir: Path, *, clio_version: str) -> dict[str, Any]:
+    """Build the manifest dict from already-read source bytes. Caller is
+    responsible for serializing to JSON. Accepting bytes (not Path) lets
+    write_sidecar guarantee the stored source.clio and the recorded
+    source_hash agree by reading the file only once."""
     file_hashes: dict[str, str] = {}
     for f in _iter_skill_files(skill_dir):
         rel = f.relative_to(skill_dir).as_posix()
@@ -84,12 +86,13 @@ def build_manifest(source_path: Path, skill_dir: Path, *, clio_version: str) -> 
 def write_sidecar(source_path: Path, skill_dir: Path, *, clio_version: str) -> None:
     """Write `.clio/source.clio` (verbatim copy) and `.clio/manifest.json`.
 
-    Called at the very end of `ClaudeSkillEmitter.emit()` so the manifest
-    reflects every file the emitter has just written."""
+    Reads source_path exactly once so the stored copy and the manifest's
+    source_hash are guaranteed to refer to the same bytes."""
+    source_bytes = source_path.read_bytes()
     sidecar = skill_dir / ".clio"
     sidecar.mkdir(parents=True, exist_ok=True)
-    (sidecar / "source.clio").write_bytes(source_path.read_bytes())
-    manifest = build_manifest(source_path, skill_dir, clio_version=clio_version)
+    (sidecar / "source.clio").write_bytes(source_bytes)
+    manifest = build_manifest(source_bytes, skill_dir, clio_version=clio_version)
     (sidecar / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

@@ -45,7 +45,7 @@ def test_build_manifest_required_keys(tmp_path):
     (skill_dir / "SKILL.md").write_text("# skill\n")
     src = tmp_path / "src.clio"
     src.write_text("STEP foo\n  MODE: exact\n")
-    manifest = build_manifest(src, skill_dir, clio_version="0.19.0")
+    manifest = build_manifest(src.read_bytes(), skill_dir, clio_version="0.19.0")
     assert manifest["clio_version"] == "0.19.0"
     assert "emitted_at" in manifest
     assert manifest["source_hash"].startswith("sha256:")
@@ -62,7 +62,7 @@ def test_build_manifest_excludes_dotted_paths(tmp_path):
     (skill_dir / "SKILL.md").write_text("# skill\n")
     src = tmp_path / "src.clio"
     src.write_text("STEP foo\n  MODE: exact\n")
-    manifest = build_manifest(src, skill_dir, clio_version="0.19.0")
+    manifest = build_manifest(src.read_bytes(), skill_dir, clio_version="0.19.0")
     assert ".clio/preexisting.txt" not in manifest["file_hashes"]
     # SKILL.md still included
     assert "SKILL.md" in manifest["file_hashes"]
@@ -77,12 +77,12 @@ def test_build_manifest_uses_posix_paths(tmp_path):
     (skill_dir / "SKILL.md").write_text("# skill\n")
     src = tmp_path / "src.clio"
     src.write_text("STEP foo\n  MODE: exact\n")
-    manifest = build_manifest(src, skill_dir, clio_version="0.19.0")
+    manifest = build_manifest(src.read_bytes(), skill_dir, clio_version="0.19.0")
     assert "scripts/01_foo.py" in manifest["file_hashes"]
 
 
 def test_write_sidecar_writes_source_and_manifest(tmp_path):
-    from clio.emitters._sidecar import write_sidecar
+    from clio.emitters._sidecar import compute_source_hash, write_sidecar
 
     skill_dir = tmp_path / "skill"
     skill_dir.mkdir()
@@ -93,6 +93,9 @@ def test_write_sidecar_writes_source_and_manifest(tmp_path):
     assert (skill_dir / ".clio" / "source.clio").read_bytes() == src.read_bytes()
     manifest = json.loads((skill_dir / ".clio" / "manifest.json").read_text())
     assert manifest["clio_version"] == "0.19.0"
+    # Guards the single-read invariant: stored source.clio and recorded
+    # source_hash must agree on the same bytes.
+    assert manifest["source_hash"] == compute_source_hash(src.read_bytes())
 
 
 def test_build_manifest_reproducible_modulo_timestamp(tmp_path):
@@ -103,8 +106,8 @@ def test_build_manifest_reproducible_modulo_timestamp(tmp_path):
     (skill_dir / "SKILL.md").write_text("# skill\n")
     src = tmp_path / "src.clio"
     src.write_text("STEP foo\n  MODE: exact\n")
-    m1 = build_manifest(src, skill_dir, clio_version="0.19.0")
-    m2 = build_manifest(src, skill_dir, clio_version="0.19.0")
+    m1 = build_manifest(src.read_bytes(), skill_dir, clio_version="0.19.0")
+    m2 = build_manifest(src.read_bytes(), skill_dir, clio_version="0.19.0")
     assert m1["source_hash"] == m2["source_hash"]
     assert m1["file_hashes"] == m2["file_hashes"]
     # emitted_at may legitimately differ between calls; not part of the
