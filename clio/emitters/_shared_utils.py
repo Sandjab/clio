@@ -303,3 +303,49 @@ def _python_condition_expr(condition, scope_local: set[str]) -> str:
         # str | ident — both rendered as Python string literals
         lit = repr(condition.literal_value)
     return f"{access} {condition.op} {lit}"
+
+
+def _to_go_field_name(name: str) -> str:
+    """CLIO field name → Go exported identifier (UpperCamelCase).
+
+    Mirrors `_to_field_name` (which targets Python snake_case). Go exports
+    require capitalised first letter to be visible across packages. Splits on
+    both `_` and `-` separators — CLIO identifiers may use either — then
+    capitalises each part and joins without separator."""
+    parts = [p for p in name.replace("-", "_").split("_") if p]
+    return "".join(p[:1].upper() + p[1:] for p in parts)
+
+
+def _type_to_go(t: TypeExpr, contracts: dict[str, ContractIR]) -> str:
+    """Render a CLIO TypeExpr as a Go type expression.
+
+    Used both inline (struct field types) and standalone (variable types).
+    Mirrors `_type_to_python` for the python target. RecordType emits an
+    anonymous Go struct with json struct tags so that `encoding/json` round-trips
+    field names without manual mapping. EnumType emits `string` — the schema-level
+    constraint enforces the value set at Validate() time; generating named Go
+    enum types is deferred to a future refactor."""
+    if isinstance(t, ConstrainedType):
+        return _type_to_go(t.base, contracts)
+    if isinstance(t, PrimitiveType):
+        return {
+            "str": "string",
+            "int": "int64",
+            "float": "float64",
+            "bool": "bool",
+            "any": "any",
+        }[t.name]
+    if isinstance(t, EnumType):
+        return "string"
+    if isinstance(t, ListType):
+        return f"[]{_type_to_go(t.inner, contracts)}"
+    if isinstance(t, RecordType):
+        fields = ", ".join(
+            f'{_to_go_field_name(fname)} {_type_to_go(ftype, contracts)} '
+            f'`json:"{fname}"`'
+            for fname, ftype in t.fields
+        )
+        return f"struct {{ {fields} }}"
+    if isinstance(t, ContractRef):
+        return _to_class_name(t.name)
+    raise ValueError(f"unsupported TypeExpr for Go target: {type(t).__name__}")

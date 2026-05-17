@@ -18,10 +18,18 @@ from clio.emitters._shared_utils import (
     _shape_from_schema,
     _to_class_name,
     _to_field_name,
+    _type_to_go,
     _type_to_python,
     _uses_contract_refs,
 )
-from clio.parser.ast_nodes import ListType, PrimitiveType
+from clio.parser.ast_nodes import (
+    ConstrainedType,
+    ContractRef,
+    EnumType,
+    ListType,
+    PrimitiveType,
+    RecordType,
+)
 
 
 def test_to_class_name_basic():
@@ -111,6 +119,46 @@ def test_uses_contract_refs_false_when_no_takes():
     step = graph.steps[0]
     assert isinstance(_uses_contract_refs(step), bool)
 
+
+def test_type_to_go_primitives():
+    assert _type_to_go(PrimitiveType(name="str"), {}) == "string"
+    assert _type_to_go(PrimitiveType(name="int"), {}) == "int64"
+    assert _type_to_go(PrimitiveType(name="float"), {}) == "float64"
+    assert _type_to_go(PrimitiveType(name="bool"), {}) == "bool"
+
+
+def test_type_to_go_list_of_primitives():
+    t = ListType(inner=PrimitiveType(name="str"))
+    assert _type_to_go(t, {}) == "[]string"
+
+
+def test_type_to_go_list_of_records():
+    t = ListType(inner=RecordType(fields=(
+        ("name", PrimitiveType(name="str")),
+        ("revenue", PrimitiveType(name="float")),
+    )))
+    out = _type_to_go(t, {})
+    assert out.startswith("[]struct ")
+    assert 'Name string `json:"name"`' in out
+    assert 'Revenue float64 `json:"revenue"`' in out
+
+
+def test_type_to_go_contract_ref():
+    from clio.ir.graph import ContractIR
+    contracts = {"customer_risk": ContractIR(name="customer_risk", json_schema={}, assert_json_ast=None, line=0)}
+    t = ContractRef(name="customer_risk", line=0, col=0)
+    assert _type_to_go(t, contracts) == "CustomerRisk"
+
+
+def test_type_to_go_enum():
+    t = EnumType(values=("low", "mid", "high"))
+    # enums render as `string` with a documented constant set elsewhere
+    assert _type_to_go(t, {}) == "string"
+
+
+def test_type_to_go_constrained_unwraps():
+    t = ConstrainedType(base=PrimitiveType(name="str"), constraints=(("max", 300),))
+    assert _type_to_go(t, {}) == "string"
 
 
 @pytest.mark.parametrize(
