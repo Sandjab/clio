@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from clio.emitters._go_flow_renderer import render_flow_go
 from clio.emitters._go_helpers import (
     _flow_uses_cache,
     _go_module_name,
@@ -83,3 +84,8 @@ class GoEmitter(BaseEmitter):
                 filename = f"{idx:02d}_{step.name}.go"
                 src = render_exact_step_go(step, contracts_by_name)
                 (steps_dir / filename).write_text(src)
+
+        # Emit flow/flow.go — top-level orchestrator (unconditional).
+        flow_dir = output_dir / "flow"
+        flow_dir.mkdir(parents=True, exist_ok=True)
+        (flow_dir / "flow.go").write_text(render_flow_go(graph))

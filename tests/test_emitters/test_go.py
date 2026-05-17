@@ -419,3 +419,20 @@ def test_golden_go_minimal(tmp_path: Path) -> None:
     emitted = _read_tree(out)
     golden = _read_tree(golden_dir)
     assert emitted == golden, "Emitted tree differs from golden snapshot"
+
+
+# ---------------------------------------------------------------------------
+# Task 10 — flow/flow.go orchestrator
+
+
+def test_flow_go_chains_exact_steps(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _compile(FIXTURES / "go_minimal.clio", out)
+    body = (out / "flow" / "flow.go").read_text()
+    assert "package flow" in body
+    assert "func Run(ctx context.Context, kwargs map[string]any) (map[string]any, error)" in body
+    assert "loadOut, err := steps.Load(ctx, " in body
+    assert "summariseOut, err := steps.Summarise(ctx, " in body
+    assert 'state["load"]' in body
+    assert 'state["summarise"]' in body
+    assert "return state, nil" in body
