@@ -9,8 +9,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from clio.ir.builder import IRBuildError, build_ir
-from clio.parser.parser import ParseError, parse
+from clio._llm_validation import strip_markdown_fences as _strip_markdown_fences
+from clio._llm_validation import validate as _validate
 from clio.prompts import load_prompt
 
 
@@ -80,34 +80,6 @@ def _gather_skill_files(skill_dir: Path) -> str:
         rel = path.relative_to(skill_dir).as_posix()
         parts.append(f"=== {rel} ===\n{content}\n")
     return "\n".join(parts)
-
-
-def _validate(source: str) -> str | None:
-    """Parse + build_ir. Returns None on success, an error string with
-    line/col on failure."""
-    try:
-        program = parse(source)
-    except ParseError as e:
-        return str(e)
-    try:
-        build_ir(program)
-    except IRBuildError as e:
-        return str(e)
-    return None
-
-
-def _strip_markdown_fences(raw: str) -> str:
-    """Remove leading ```clio/``` and trailing ``` fences if present."""
-    text = raw.strip()
-    if not text.startswith("```"):
-        return raw
-    first_newline = text.find("\n")
-    if first_newline == -1:
-        return raw
-    body = text[first_newline + 1:]
-    if body.rstrip().endswith("```"):
-        body = body.rstrip()[:-3]
-    return body.lstrip("\n").rstrip() + "\n"
 
 
 def _build_user_message_initial(payload: str) -> str:

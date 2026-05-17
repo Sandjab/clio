@@ -206,3 +206,41 @@ def test_import_auto_with_partial_sidecar_falls_back_to_llm(tmp_path, monkeypatc
     rc = main(["import", str(skill)])
     assert rc == 0
     assert capsys.readouterr().out == expected
+
+
+def test_import_strict_with_corrupted_manifest_exits_2(tmp_path, capsys):
+    """source.clio present, manifest.json is invalid JSON → exit 2 with clear message."""
+    from clio.cli import main
+
+    skill = tmp_path / "skill"
+    (skill / ".clio").mkdir(parents=True)
+    (skill / ".clio" / "source.clio").write_text("STEP foo\n  MODE: exact\n")
+    (skill / ".clio" / "manifest.json").write_text("{not valid json")
+    (skill / "SKILL.md").write_text("# skill\n")
+    rc = main(["import", str(skill), "--mode", "strict"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "corrupted" in err.lower()
+
+
+def test_import_auto_with_corrupted_manifest_falls_back_to_llm(tmp_path, monkeypatch, capsys):
+    """source.clio present, manifest.json invalid → warn + LLM fallback."""
+    from clio import skill_to_clio
+    from clio.cli import main
+
+    skill = tmp_path / "skill"
+    (skill / ".clio").mkdir(parents=True)
+    (skill / ".clio" / "source.clio").write_text("STEP cheat\n  MODE: exact\n")
+    (skill / ".clio" / "manifest.json").write_text("{not valid json")
+    (skill / "SKILL.md").write_text("# skill\n")
+
+    expected = "STEP recovered\n  MODE: exact\n  LANG: python\nFLOW f\n  recovered()\n"
+    monkeypatch.setattr(
+        skill_to_clio, "generate",
+        lambda skill_dir, *, model, client=None: expected,
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+    rc = main(["import", str(skill)])
+    assert rc == 0
+    assert capsys.readouterr().out == expected

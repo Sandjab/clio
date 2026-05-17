@@ -279,6 +279,17 @@ def _cmd_status(state_file: str | None, log_file: str | None, limit: int) -> int
     return 0
 
 
+def _print_drift_list(drift: list[str]) -> None:
+    """Print 'N file(s) changed' + first 5 paths + '... and N more' to stderr.
+
+    Shared by --mode strict (exit-2 path) and --mode auto (warn-then-LLM path)."""
+    print(f"{len(drift)} file(s) changed:", file=sys.stderr)
+    for path in drift[:5]:
+        print(f"  - {path}", file=sys.stderr)
+    if len(drift) > 5:
+        print(f"  ... and {len(drift) - 5} more", file=sys.stderr)
+
+
 def _cmd_import(*, skill_dir: str, output: str | None, model: str, mode: str) -> int:
     from clio.emitters._sidecar import check_drift
 
@@ -306,16 +317,20 @@ def _cmd_import(*, skill_dir: str, output: str | None, model: str, mode: str) ->
                 file=sys.stderr,
             )
             return 2
-        if drift:
+        except (ValueError, KeyError) as e:
+            # Corrupted manifest (empty / invalid JSON / missing keys)
             print(
-                f"clio import: --mode strict and skill drifted "
-                f"({len(drift)} file(s) changed):",
+                f"clio import: --mode strict and manifest at {manifest_file} is corrupted "
+                f"({e}). Cannot verify hashes.",
                 file=sys.stderr,
             )
-            for p in drift[:5]:
-                print(f"  - {p}", file=sys.stderr)
-            if len(drift) > 5:
-                print(f"  ... and {len(drift) - 5} more", file=sys.stderr)
+            return 2
+        if drift:
+            print(
+                "clio import: --mode strict and skill drifted.",
+                file=sys.stderr,
+            )
+            _print_drift_list(drift)
             return 2
         return _emit_imported_source(source_file.read_text(), output)
 
@@ -333,6 +348,13 @@ def _cmd_import(*, skill_dir: str, output: str | None, model: str, mode: str) ->
                 file=sys.stderr,
             )
             # treat as drift — fall through to LLM
+        except (ValueError, KeyError) as e:
+            print(
+                f"clio import: source.clio present but manifest at {manifest_file} is corrupted "
+                f"({e}). Falling back to LLM-assisted import.",
+                file=sys.stderr,
+            )
+            # treat as drift — fall through to LLM
         else:
             if drift is None:
                 return _emit_imported_source(source_file.read_text(), output)
@@ -343,11 +365,7 @@ def _cmd_import(*, skill_dir: str, output: str | None, model: str, mode: str) ->
                 + (f" on {emitted_at}." if emitted_at else "."),
                 file=sys.stderr,
             )
-            print(f"{len(drift)} file(s) changed:", file=sys.stderr)
-            for p in drift[:5]:
-                print(f"  - {p}", file=sys.stderr)
-            if len(drift) > 5:
-                print(f"  ... and {len(drift) - 5} more", file=sys.stderr)
+            _print_drift_list(drift)
             print("Falling back to LLM-assisted import.", file=sys.stderr)
 
     return _import_via_llm(sk_path, model=model, output=output)
