@@ -125,6 +125,7 @@ def test_type_to_go_primitives():
     assert _type_to_go(PrimitiveType(name="int"), {}) == "int64"
     assert _type_to_go(PrimitiveType(name="float"), {}) == "float64"
     assert _type_to_go(PrimitiveType(name="bool"), {}) == "bool"
+    assert _type_to_go(PrimitiveType(name="any"), {}) == "any"
 
 
 def test_type_to_go_list_of_primitives():

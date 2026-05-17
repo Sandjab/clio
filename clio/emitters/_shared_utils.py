@@ -336,6 +336,9 @@ def _type_to_go(t: TypeExpr, contracts: dict[str, ContractIR]) -> str:
             "any": "any",
         }[t.name]
     if isinstance(t, EnumType):
+        # v0.20.0: enums render as plain `string`; the schema-level enum
+        # constraint enforces the value set at Validate() time. Typed Go
+        # enum types are deferred to a future refactor.
         return "string"
     if isinstance(t, ListType):
         return f"[]{_type_to_go(t.inner, contracts)}"
