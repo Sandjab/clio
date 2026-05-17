@@ -4,7 +4,7 @@
 
 ## [0.18.3] — 2026-05-17
 
-Patch release rolling up **PR #56** — `target: langgraph` delegates flow-level observability to LangSmith via an inline no-op `clio_runtime/logging.py` stub, removing the half-active verbatim copy of `clio/runtime/logging.py` that the emitter never instrumented at the flow level. `docs/POSITIONING.md` is synced with shipment status at the same time (date-free horizon labels + per-row Status column; the former "LangGraph — conditional, not now" section is renamed "LangGraph — shipped" with its three pre-ship conditions now marked ✅). No language, IR-shape, parser, or other-target change. Net test count `996 → 997` (+1).
+Patch release rolling up **PR #56**, which bundled two coupled changes in a single commit: `target: langgraph` delegates flow-level observability to LangSmith via an inline no-op `clio_runtime/logging.py` stub (removing the half-active verbatim copy of `clio/runtime/logging.py` that the emitter never instrumented at the flow level), and `docs/POSITIONING.md` was synced with shipment status (date-free horizon labels + per-row Status column; the former "LangGraph — conditional, not now" section is renamed "LangGraph — shipped" with its three pre-ship conditions now marked ✅). No language, IR-shape, parser, or other-target change. Net test count `996 → 997` (+1).
 
 ### Changed
 
