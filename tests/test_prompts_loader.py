@@ -41,3 +41,25 @@ def test_load_prompt_is_cached():
     finally:
         target.unlink()
         prompts.load_prompt.cache_clear()
+
+
+def test_nl_to_clio_system_prompt_loads_from_disk():
+    from clio.prompts import load_prompt
+    load_prompt.cache_clear()
+    body = load_prompt("nl_to_clio_system")
+    # Sanity markers preserved from the previous inline constants
+    assert "You are CLIO" in body
+    assert "Output ONLY a valid .clio source" in body
+    assert "ERROR:" in body
+    # The template MUST contain the four placeholders the assembly relies on
+    for placeholder in ("{spec}", "{mvp}", "{entities}", "{classify}"):
+        assert placeholder in body
+
+
+def test_nl_to_clio_retry_prompt_loads_from_disk():
+    from clio.prompts import load_prompt
+    load_prompt.cache_clear()
+    body = load_prompt("nl_to_clio_retry")
+    assert "did not parse" in body
+    assert "{previous_attempt}" in body
+    assert "{error}" in body
