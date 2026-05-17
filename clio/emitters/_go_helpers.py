@@ -268,6 +268,7 @@ def render_exact_step_go(
         lines.append(out_body)
     lines.append("}")
     lines.append("")
+    lines.append(f"// {step_name_go} implements the '{step.name}' step.")
     lines.append(
         f"func {step_name_go}(ctx context.Context, in {step_name_go}In)"
         f" ({step_name_go}Out, error) {{"

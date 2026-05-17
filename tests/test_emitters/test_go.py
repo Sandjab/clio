@@ -395,6 +395,8 @@ def test_step_function_has_typed_input_and_output(tmp_path: Path) -> None:
     assert "type LoadOut struct {" in body
     assert 'File string `json:"file"`' in body
     assert "Rows []struct" in body
+    # godoc comment links Go function back to source step name
+    assert "// Load implements the 'load' step." in body
 
 
 def _read_tree(root: Path) -> dict[str, str]:

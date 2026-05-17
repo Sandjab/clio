@@ -12,6 +12,7 @@ type SummariseOut struct {
 	Total float64 `json:"total"`
 }
 
+// Summarise implements the 'summarise' step.
 func Summarise(ctx context.Context, in SummariseIn) (SummariseOut, error) {
 	panic("fill me in: summarise")
 }
