@@ -130,6 +130,10 @@ def render_contracts_go(graph: FlowGraph) -> str | None:
     """
     # Collect contract names referenced by any step in the graph.
     contracts_used: set[str] = set()
+    # NOTE: graph.steps over-collects — it includes steps declared but
+    # not reached from graph.flow.chain. In v0.20 this is harmless (extra
+    # dead struct types); revisit in T9 if step-function scoping needs
+    # to match the actual chain.
     for step in graph.steps:
         contracts_used |= _collect_contract_refs(step)
     if not contracts_used:
@@ -143,8 +147,7 @@ def render_contracts_go(graph: FlowGraph) -> str | None:
         contract = contracts_by_name[name]
         struct_name = _to_class_name(name)
         # lowerCamelCase for Go unexported const: e.g. customer_risk → customerRiskSchema
-        camel = _to_class_name(name)
-        schema_const = camel[0].lower() + camel[1:] + "Schema"
+        schema_const = struct_name[0].lower() + struct_name[1:] + "Schema"
         parts.append(f"type {struct_name} struct {{")
         for fname, fschema in _shape_from_schema(contract.json_schema):
             go_field = _to_go_field_name(fname)
@@ -152,6 +155,12 @@ def render_contracts_go(graph: FlowGraph) -> str | None:
             parts.append(f'\t{go_field} {go_type} `json:"{fname}"`')
         parts.append("}")
         parts.append("")
+        # Embed the JSON Schema in a Go raw string literal (backtick-delimited).
+        # Today's CLIO surface guarantees no backtick can appear in a generated
+        # JSON Schema: enum values and field names are identifiers, and no
+        # description/title fields are emitted. If a future feature adds a
+        # user-supplied string into the schema (e.g. CONTRACT.DESCRIPTION),
+        # escape backticks here before render — Go has no raw-string escape.
         schema_json = json.dumps(contract.json_schema, indent=2)
         parts.append(f"const {schema_const} = `")
         parts.append(schema_json)

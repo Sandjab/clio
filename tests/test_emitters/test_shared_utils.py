@@ -253,6 +253,30 @@ def test_collect_contract_refs_no_contracts():
     assert _collect_contract_refs(step) == set()
 
 
+def test_collect_contract_refs_takes_field():
+    """ContractRef appearing in TAKES is collected, not just GIVES."""
+    from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
+
+    src = (
+        "CONTRACT customer\n"
+        "  SHAPE: {id: str}\n"
+        "STEP score\n"
+        "  TAKES: c: customer\n"
+        "  GIVES: out: str\n"
+        "  MODE:  exact\n"
+        "  LANG:  python\n"
+        "FLOW pipeline\n"
+        "  score(c=\"hi\")\n"
+        "RESOURCES\n"
+        "  target: python\n"
+        "  models: [haiku]\n"
+    )
+    graph = build_ir(parse(src))
+    step = graph.steps[0]
+    assert "customer" in _collect_contract_refs(step)
+
+
 @pytest.mark.parametrize(
     "emitter_module,emitter_class",
     [
