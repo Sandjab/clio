@@ -131,7 +131,18 @@ def _retry_message(previous_attempt: str, error: str) -> str:
 @cache
 def _build_system_prompt() -> str:
     """Build the system prompt by injecting spec + 3 examples into the
-    template loaded from clio/prompts/nl_to_clio_system.md."""
+    template at clio/prompts/nl_to_clio_system.md.
+
+    The prompt template lives outside Python so it can be edited and
+    reviewed independently of the assembly code — consistent with the
+    skill_to_clio convention introduced in v0.19.
+
+    Reads:
+    - docs/LANGUAGE_SPEC.md (full language reference)
+    - examples/mvp.clio (example 1: customer churn detection)
+    - examples/entities.clio (example 2: NER + summarization)
+    - examples/classify_corpus.clio (example 3: corpus classification with FOR EACH)
+    """
     spec = (_REPO_ROOT / "docs" / "LANGUAGE_SPEC.md").read_text()
     mvp = (_REPO_ROOT / "examples" / "mvp.clio").read_text()
     entities = (_REPO_ROOT / "examples" / "entities.clio").read_text()
