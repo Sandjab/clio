@@ -47,6 +47,52 @@ def _flow_uses_parallel(graph: FlowGraph) -> bool:
     return _has_parallel(graph.flow.chain)
 
 
+def render_cmd_main_go(graph: FlowGraph) -> str:
+    """Render `cmd/<pkg>/main.go` — the CLI entry point for the emitted module.
+
+    Parses --kwargs as JSON, calls flow.Run(ctx, kwargs), prints the returned
+    state as indented JSON, and exits with:
+      0 — success
+      1 — flow.Run returned an error
+      2 — --kwargs is not valid JSON
+    """
+    pkg = _go_module_name(graph)
+    return (
+        "package main\n"
+        "\n"
+        "import (\n"
+        '\t"context"\n'
+        '\t"encoding/json"\n'
+        '\t"flag"\n'
+        '\t"fmt"\n'
+        '\t"os"\n'
+        "\n"
+        f'\t"{pkg}/flow"\n'
+        ")\n"
+        "\n"
+        "func main() {\n"
+        '\tkwargsRaw := flag.String("kwargs", "{}", "JSON-encoded kwargs for the flow")\n'
+        "\tflag.Parse()\n"
+        "\n"
+        "\tvar kwargs map[string]any\n"
+        "\tif err := json.Unmarshal([]byte(*kwargsRaw), &kwargs); err != nil {\n"
+        '\t\tfmt.Fprintf(os.Stderr, "invalid --kwargs: %v\\n", err)\n'
+        "\t\tos.Exit(2)\n"
+        "\t}\n"
+        "\n"
+        "\tctx := context.Background()\n"
+        "\tstate, err := flow.Run(ctx, kwargs)\n"
+        "\tif err != nil {\n"
+        '\t\tfmt.Fprintf(os.Stderr, "flow.Run: %v\\n", err)\n'
+        "\t\tos.Exit(1)\n"
+        "\t}\n"
+        "\n"
+        '\tout, _ := json.MarshalIndent(state, "", "  ")\n'
+        "\tfmt.Println(string(out))\n"
+        "}\n"
+    )
+
+
 def render_go_mod(graph: FlowGraph) -> str:
     """Render the contents of go.mod for the emitted module.
 

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from clio.emitters._go_helpers import render_go_mod
+from clio.emitters._go_helpers import _go_module_name, render_cmd_main_go, render_go_mod
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import FlowGraph
 
@@ -36,3 +36,7 @@ class GoEmitter(BaseEmitter):
         mcp-server, langgraph emitters)."""
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "go.mod").write_text(render_go_mod(graph))
+        pkg = _go_module_name(graph)  # NOT _safe_package_name — Go needs lowercase
+        cmd_dir = output_dir / "cmd" / pkg
+        cmd_dir.mkdir(parents=True, exist_ok=True)
+        (cmd_dir / "main.go").write_text(render_cmd_main_go(graph))

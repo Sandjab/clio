@@ -103,3 +103,43 @@ def test_go_mod_pins_sdk_when_judgment_present(tmp_path: Path) -> None:
     _compile(src, out)
     content = (out / "go.mod").read_text()
     assert "github.com/anthropics/anthropic-sdk-go" in content
+
+
+def test_cmd_main_go_exists(tmp_path: Path) -> None:
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP noop\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "FLOW pipeline\n"
+        "  noop(x=\"hi\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile(src, out)
+    assert (out / "cmd" / "pipeline" / "main.go").exists()
+
+
+def test_cmd_main_go_parses_kwargs_json(tmp_path: Path) -> None:
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP noop\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "FLOW pipeline\n"
+        "  noop(x=\"hi\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile(src, out)
+    body = (out / "cmd" / "pipeline" / "main.go").read_text()
+    assert "package main" in body
+    assert 'flag.String("kwargs"' in body
+    assert "json.Unmarshal" in body
+    assert "flow.Run(ctx, kwargs)" in body
