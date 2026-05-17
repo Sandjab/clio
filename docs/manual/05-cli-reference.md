@@ -93,6 +93,47 @@ clio gen --from-file desc.txt [--output flow.clio] [--model claude-sonnet-4-6]
 
 The generated source is **always** validated by `check` before being written. If validation fails, the LLM is asked to fix it (up to 3 retries) before falling back to printing the raw output to stderr.
 
+## `clio import`
+
+Recover a `.clio` source from a Claude Code skill directory.
+
+```bash
+clio import <skill-dir>                        # write to stdout
+clio import <skill-dir> --output flow.clio     # write to file
+clio import <skill-dir> --model <id>           # override the model (default claude-sonnet-4-6)
+clio import <skill-dir> --mode auto            # default: prefer sidecar, fall back to LLM
+clio import <skill-dir> --mode strict          # require sidecar + matching hashes; exit 2 otherwise
+clio import <skill-dir> --mode infer           # always use the LLM (ignore sidecar)
+```
+
+### Mode dispatch table
+
+| Skill state | `auto` (default) | `--mode strict` | `--mode infer` |
+|---|---|---|---|
+| `.clio/` present, hashes match | Return `source.clio` (no LLM) | Return `source.clio` | LLM call |
+| `.clio/` present, hashes drift | Warning + LLM fallback | Exit 2 (fail loud) | LLM call |
+| `.clio/` absent | LLM call | Exit 2 (fail loud) | LLM call |
+| Skill directory missing | Exit 2 | Exit 2 | Exit 2 |
+
+### Exit codes
+
+- `0` — success regardless of path taken.
+- `1` — LLM-assisted import failed (validation retry exhausted, payload too large, missing API key).
+- `2` — argument error, missing directory, or strict-mode failure.
+
+### Examples
+
+```bash
+# Round-trip on a CLIO-emitted skill (no LLM call)
+clio compile pipe.clio --target claude-skill --output skill/
+clio import skill/ --output recovered.clio
+diff pipe.clio recovered.clio   # byte-identical
+
+# Recover from a hand-written skill (Anthropic key required)
+export ANTHROPIC_API_KEY=sk-...
+clio import ~/.claude/skills/my-skill --output my-skill.clio
+```
+
 ## `doctor` — environment diagnostic (v0.15)
 
 ```

@@ -679,6 +679,33 @@ resolution is deferred for this target.
 `--target claude-skill`, or `--target langgraph` instead. If you must use
 `claude-cli`, inline all imported declarations directly in the entry file.
 
+## `clio import` errors (v0.19+)
+
+### `clio import` warns "skill has been modified since CLIO emitted it"
+
+The skill carries a CLIO `.clio/` sidecar but at least one file's hash no
+longer matches the recorded value. The CLI falls back to LLM-assisted import
+by default. Use `--mode strict` to fail loud instead. To see exactly which
+files drifted, re-run without `--output` — the stderr list shows the first
+five drifted paths.
+
+### `clio import` aborts with "skill payload too large"
+
+The text content of the skill exceeds the ~180k-token abort threshold (with
+~20k tokens of headroom for the response in Sonnet 4.6's 200k context). If
+the skill was CLIO-emitted with sidecar, use `--mode strict` to skip the LLM
+path entirely. Otherwise, split the skill manually or remove large auxiliary
+files (README appendices, embedded fixtures) that are not part of its core
+behavior.
+
+### `clio import` exits 1 with "failed to import skill"
+
+The LLM produced `.clio` that did not parse or build, twice in a row (one
+initial call + one retry with the error fed back). The stderr shows the last
+attempt commented with `#`. Inspect for hallucinated keywords or malformed
+control structures, then either retry (occasionally non-deterministic) or
+file an issue with the offending payload.
+
 ## When the docs and code diverge
 
 The CHANGELOG, language spec, and this manual are kept in sync **per release tag**. If you're on `main` between tags, expect occasional drift.

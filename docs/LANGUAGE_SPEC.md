@@ -1376,4 +1376,25 @@ RESOURCES
   strategy:   escalate
   target:     claude-cli
   lang:       python
+
+## The `.clio/` sidecar convention (v0.19+)
+
+When `clio compile --target claude-skill` emits a skill, it also writes a
+`.clio/` directory inside the skill with two files:
+
+- `source.clio` — a verbatim, byte-identical copy of the input `.clio`.
+- `manifest.json` — CLIO version, emission timestamp, the source hash, and
+  per-file SHA-256 hashes of every emitted file (excluding `.clio/` itself).
+
+Hashes for text files (utf-8 decodable) are computed on LF-normalized bytes
+(CRLF and CR → LF), so a skill edited across platforms (Windows ↔ Unix) does
+not show false drift. Binary files are hashed on raw bytes.
+
+The sidecar enables `clio import <skill-dir>` to recover the original source
+without an LLM call when the skill hasn't been modified. When the skill has
+drifted, `clio import` falls back to an LLM-assisted import (or exits 2
+under `--mode strict`).
+
+`.clio/` is excluded from `_gather_skill_files` so importing a CLIO-emitted
+skill in `--mode infer` does not cheat by reading the stored source.
 ```

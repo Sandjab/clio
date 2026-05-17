@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`clio import <skill-dir>` — recover a `.clio` source from a Claude Code skill directory.** Two dispatched paths: (Path A) when the skill carries a CLIO-emitted `.clio/` sidecar (new in v0.19) and recorded SHA-256 hashes match the current file state, returns the verbatim `source.clio` (no LLM call); (Path B, default fallback) calls the Anthropic SDK with the skill's text content and a one-shot validation-retry loop. Modes: `--mode auto` (default, dispatches based on sidecar presence + hash match), `--mode strict` (requires sidecar + matching hashes, else exit 2), `--mode infer` (always LLM, ignores sidecar). New module `clio/skill_to_clio.py` mirrors the existing `nl_to_clio` architecture; new helper `clio/emitters/_sidecar.py` implements hashing (LF-normalized for text, raw for binary) and drift detection. The system prompt instructs the LLM to preserve the source skill's user-facing language in `DESCRIPTION` / `STRATEGIES` / prompt bodies, and to flag inferred elements with `# CLIO-import: ...` annotations.
+- **`target: claude-skill` — `.clio/` sidecar written alongside emitted skills.** Every `clio compile --target claude-skill` now writes `<skill>/.clio/source.clio` (verbatim copy of the source `.clio`) and `<skill>/.clio/manifest.json` (CLIO version, emission timestamp, source hash, per-file hashes). Enables the trivial round-trip path of `clio import`. Sidecar emission is silent on failure (warns to stderr, never blocks main emission). The sidecar is excluded from `_gather_skill_files` so `clio import --mode infer` cannot accidentally cheat.
+
+### Changed
+
+- **`BaseEmitter.emit(...)` — new keyword-only parameter `source_path: Path | None = None`.** Plumbed by `_cmd_compile` for all five targets; consumed only by `ClaudeSkillEmitter` (for the sidecar). The four other emitters accept and ignore it — no behavior change.
+- **`clio/nl_to_clio.py` — prompts extracted to `clio/prompts/*.md`.** The inline `_ROLE_INTRO` / `_OUTPUT_RULES` / retry-message constants are now `clio/prompts/nl_to_clio_system.md` and `clio/prompts/nl_to_clio_retry.md`, loaded via the new `clio/prompts/load_prompt(name)` helper. Pure refactor — `generate()` behavior is unchanged.
+
+### Docs
+
+- `docs/LANGUAGE_SPEC.md`: new section "The `.clio/` sidecar convention" documenting the emit-side artifact and import-side drift detection contract.
+- `docs/manual/05-cli-reference.md`: `clio import` synopsis, modes table, exit codes, examples.
+- `docs/manual/03-cookbook.md`: new recipe "Recover the `.clio` source from a skill".
+- `docs/manual/06-troubleshooting.md`: entries for "drift detected" warning, "skill payload too large" abort, and LLM retry-budget exhaustion.
+
 ## [0.18.3] — 2026-05-17
 
 Patch release rolling up **PR #56**, which bundled two coupled changes in a single commit: `target: langgraph` delegates flow-level observability to LangSmith via an inline no-op `clio_runtime/logging.py` stub (removing the half-active verbatim copy of `clio/runtime/logging.py` that the emitter never instrumented at the flow level), and `docs/POSITIONING.md` was synced with shipment status (date-free horizon labels + per-row Status column; the former "LangGraph — conditional, not now" section is renamed "LangGraph — shipped" with its three pre-ship conditions now marked ✅). No language, IR-shape, parser, or other-target change. Net test count `996 → 997` (+1).
