@@ -80,7 +80,7 @@ Each compilation target is a separate emitter module. Emitters are independent. 
 
 ## Compilation targets shipped
 
-Five emitters live in `clio/emitters/`. Each takes an IR and writes a runnable project for a different deployment shape:
+Six emitters live in `clio/emitters/`. Each takes an IR and writes a runnable project for a different deployment shape:
 
 | Target | Output | Typical use |
 |---|---|---|
@@ -89,6 +89,7 @@ Five emitters live in `clio/emitters/`. Each takes an IR and writes a runnable p
 | `mcp-server` | Python MCP server (one tool per `EXPOSE FLOW`, judgment via `sampling/createMessage`) | Expose the flow to Claude Desktop / IDE / any MCP client |
 | `langgraph` | Python package whose `flow.py` builds a `langgraph.graph.StateGraph` | Bridge to LangChain stacks; observability delegated to LangSmith |
 | `claude-skill` | Claude Code skill directory (`SKILL.md` + `scripts/` + `prompts/` + `schemas/`) — emits a `.clio/` sidecar (v0.19) so `clio import` can recover the source verbatim | Ship a flow as a host-orchestrated skill, no runtime needed after install |
+| `go` | Go module (parity baseline with the Python target, anthropic-sdk-go v1) | Native Go deployment, no Python runtime |
 
 Read `docs/COMPILATION_TARGETS.md` for the per-target contracts and `docs/manual/04-targets.md` for the cross-target feature matrix.
 
@@ -113,16 +114,18 @@ clio/
     graph.py          # FlowGraph + FlowIR / StepIR / FlowCallIR
     resolver.py       # cross-file FROM…IMPORT resolution (v0.18)
     contracts.py      # contract validation
-  emitters/           # IR → target project (5 emitters)
+  emitters/           # IR → target project (6 emitters)
     base.py           # abstract emitter interface
     claude_cli.py     # target: claude-cli
     python.py         # target: python
     mcp_server.py     # target: mcp-server
     langgraph.py      # target: langgraph
     claude_skill.py   # target: claude-skill
+    go.py             # target: go (v0.20)
     _sidecar.py       # .clio/ sidecar writer + hash drift detection (v0.19)
     _python_helpers.py, _mcp_helpers.py, _langgraph_helpers.py,
-    _claude_skill_helpers.py, _claude_cli_helpers.py, _shared_utils.py
+    _claude_skill_helpers.py, _claude_cli_helpers.py, _shared_utils.py,
+    _go_helpers.py, _go_flow_renderer.py, _go_step_renderers.py, _go_runtime_templates.py
   runtime/            # snippets copied verbatim into emitted Python projects
     cache.py, logging.py, rest.py, sql.py, mcp_client.py
   prompts/            # LLM system prompts loaded by gen/import (v0.19)
@@ -163,12 +166,13 @@ docs/
 ## How to run
 
 ```bash
-# Compile a .clio file to any of the five targets
+# Compile a .clio file to any of the six targets
 python -m clio compile examples/mvp.clio --target claude-cli   --output ./output
 python -m clio compile examples/mvp.clio --target python       --output ./py-out
 python -m clio compile examples/mvp.clio --target mcp-server   --output ./mcp-out
 python -m clio compile examples/mvp.clio --target langgraph    --output ./lg-out
 python -m clio compile examples/skill_minimal.clio --target claude-skill --output ./skill-out
+python -m clio compile examples/mvp_go.clio --target go        --output ./go-out
 
 # Validate a .clio file without emitting
 python -m clio check examples/mvp.clio
