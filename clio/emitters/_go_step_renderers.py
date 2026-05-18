@@ -349,9 +349,13 @@ def render_judgment_step_go(step: StepIR, graph: FlowGraph) -> str:
         lines.append("\t\t\t}")
         lines.append("\t\t}")
         if cache_block_post:
-            # Inline cache store inside successful retry path before return
+            # Inline cache store inside successful retry path before return.
+            # Prepend one tab to each line to nest under the for-loop body —
+            # do NOT lstrip, that would flatten the inner indentation of nested
+            # constructs (the `_ = cache.Store(...)` line is intentionally 2-tab
+            # inside its surrounding `if` block and must stay relative).
             for cline in cache_block_post.rstrip("\n").splitlines():
-                lines.append("\t" + cline.lstrip("\t"))
+                lines.append("\t" + cline)
         lines.append("\t\treturn out, nil")
         lines.append("\t}")
         lines.append("")

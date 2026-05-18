@@ -68,9 +68,9 @@ func DetectChurn(ctx context.Context, in DetectChurnIn) (DetectChurnOut, error) 
 				continue
 			}
 		}
-	if rawBytes, err := json.Marshal(out); err == nil {
-	_ = cache.Store(cacheDir, "detect_churn", key, "claude-haiku-4-5-20251001", string(rawBytes))
-	}
+		if rawBytes, err := json.Marshal(out); err == nil {
+			_ = cache.Store(cacheDir, "detect_churn", key, "claude-haiku-4-5-20251001", string(rawBytes))
+		}
 		return out, nil
 	}
 
