@@ -11,40 +11,68 @@ from clio.emitters._shared_utils import (
     _go_condition_expr,
     _to_class_name,
     _to_go_field_name,
-    _type_to_go,
 )
 from clio.ir.graph import CallIR, ContractIR, FlowGraph, IfBlockIR, StepIR
 
 
-def _kwargs_to_step_input(
-    step: StepIR,
-    prev_state_var: str,
+def _go_kwarg_value(
+    value: object,
     contracts: dict[str, ContractIR],
-    *,
-    is_first_step: bool,
+    state_field_to_step: dict[str, StepIR],
 ) -> str:
-    """Render the literal `<Step>In{...}` initialisation pulling fields from
-    kwargs (first step) or the previous step's typed output (subsequent steps).
+    """Render one CallIR kwarg value as a Go expression.
 
-    v0.20.0 assumes 1:1 GIVES/TAKES field name alignment between adjacent
-    steps. If a later spec adds explicit field remapping at chain time,
-    revisit here.
+    Two cases, mirroring the python emitter's logic in python.py:
+    - Reference ``@<field>`` — the field name is the GIVES name of some prior
+      step.  We emit a state-based type assertion:
+          state["<field>"].(steps.<StepCls>Out).<GoField>
+      This is the same pattern used by `_go_condition_expr` for IF conditions,
+      so the two readers are consistent with the writer.
+    - Literal (str / int / float / bool) — rendered as a Go literal.
+      Plain strings that do not start with ``@`` are string literals.
+    """
+    if isinstance(value, str) and value.startswith("@"):
+        ref = value[1:]  # the state-dict key (= the prior step's GIVES name)
+        step = state_field_to_step.get(ref)
+        if step is not None:
+            cls = _to_class_name(step.name)
+            gf = _to_go_field_name(ref)
+            return f'state["{ref}"].(steps.{cls}Out).{gf}'
+        # Unknown ref — fall back to untyped any access (should not happen
+        # after IR validation, but guards against future call-site bugs).
+        return f'state["{ref}"]'
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return f"int64({value})"
+    if isinstance(value, float):
+        return f"float64({value!r})"
+    # str literal — emit as a Go interpreted string literal (double-quoted).
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
-    TODO(T12): kwargs["x"].(SomeStruct) panics at runtime for ContractRef
-    inputs on the first step. Skip for v0.20.0 (no fixture exercises this
-    path); add type-assertion helper when ContractRef first-step inputs land.
+
+def _kwargs_to_step_input(
+    call: CallIR,
+    step: StepIR,
+    contracts: dict[str, ContractIR],
+    state_field_to_step: dict[str, StepIR],
+) -> str:
+    """Render the ``steps.<Step>In{...}`` initialisation from CallIR.kwargs.
+
+    Each kwarg pair binds a TAKES field name to either a literal value or a
+    reference into a prior step's typed output (``@<field>`` syntax).
+
+    Iterates ``call.kwargs`` directly — no assumptions about GIVES/TAKES field
+    name alignment between adjacent steps.  Mirrors the python emitter's
+    ``_emit_step_call`` logic.
     """
     cls = _to_class_name(step.name)
     parts: list[str] = []
-    for field in step.takes:
-        gf = _to_go_field_name(field.name)
-        if is_first_step:
-            parts.append(
-                f'{gf}: {prev_state_var}["{field.name}"].'
-                f'({_type_to_go(field.type, contracts)})'
-            )
-        else:
-            parts.append(f"{gf}: {prev_state_var}.{gf}")
+    for name, value in call.kwargs:
+        gf = _to_go_field_name(name)
+        rendered = _go_kwarg_value(value, contracts, state_field_to_step)
+        parts.append(f"{gf}: {rendered}")
     return f"steps.{cls}In{{ {', '.join(parts)} }}"
 
 
@@ -57,7 +85,6 @@ def _render_chain_item(
     state_field_to_step: dict[str, StepIR],
     contracts_by_name: dict[str, ContractIR],
     scope_local: set[str],
-    is_first_step: bool,
 ) -> tuple[list[str], str]:
     """Render one chain item.  Returns (rendered_lines, new_prev_var).
 
@@ -80,20 +107,24 @@ def _render_chain_item(
             return [], prev_var
         cls = _to_class_name(step.name)
         input_init = _kwargs_to_step_input(
+            item,
             step,
-            prev_var,
             contracts_by_name,
-            is_first_step=is_first_step,
+            state_field_to_step,
         )
         out_var = f"{step.name}Out"
-        rendered = [
+        rendered: list[str] = [
             f"{indent}{out_var}, err := steps.{cls}(ctx, {input_init})",
             f"{indent}if err != nil {{",
             f"{indent}\treturn nil, err",
             f"{indent}}}",
-            f'{indent}state["{step.name}"] = {out_var}',
-            "",
         ]
+        # Write the result into state under the GIVES field name (= the state-dict
+        # key used by _go_condition_expr and _go_kwarg_value when reading back).
+        # Skip the write entirely for steps with no GIVES (side-effect-only).
+        if step.gives is not None:
+            rendered.append(f'{indent}state["{step.gives.name}"] = {out_var}')
+        rendered.append("")
         return rendered, out_var
 
     if isinstance(item, IfBlockIR):
@@ -102,7 +133,6 @@ def _render_chain_item(
         inner_indent = indent + "\t"
         # then branch
         cur = prev_var
-        first_in_then = is_first_step
         for sub in item.then_body:
             sub_lines, cur = _render_chain_item(
                 sub, cur, inner_indent,
@@ -110,16 +140,12 @@ def _render_chain_item(
                 state_field_to_step=state_field_to_step,
                 contracts_by_name=contracts_by_name,
                 scope_local=scope_local,
-                is_first_step=first_in_then,
             )
             lines.extend(sub_lines)
-            if sub_lines:
-                first_in_then = False
         # else branch
         if item.else_body:
             lines.append(f"{indent}}} else {{")
             cur_else = prev_var
-            first_in_else = is_first_step
             for sub in item.else_body:
                 sub_lines, cur_else = _render_chain_item(
                     sub, cur_else, inner_indent,
@@ -127,11 +153,8 @@ def _render_chain_item(
                     state_field_to_step=state_field_to_step,
                     contracts_by_name=contracts_by_name,
                     scope_local=scope_local,
-                    is_first_step=first_in_else,
                 )
                 lines.extend(sub_lines)
-                if sub_lines:
-                    first_in_else = False
         lines.append(f"{indent}}}")
         lines.append("")
         # prev_var after a branch block stays the pre-branch value; the two
@@ -183,7 +206,6 @@ def render_flow_go(graph: FlowGraph) -> str:
         "",
     ]
     prev_var = "kwargs"
-    is_first = True
     for elem in graph.flow.chain:
         elem_lines, prev_var = _render_chain_item(
             elem,
@@ -193,11 +215,8 @@ def render_flow_go(graph: FlowGraph) -> str:
             state_field_to_step=state_field_to_step,
             contracts_by_name=contracts_by_name,
             scope_local=set(),
-            is_first_step=is_first,
         )
         lines.extend(elem_lines)
-        if elem_lines and is_first and isinstance(elem, CallIR):
-            is_first = False
     lines.append("\treturn state, nil")
     lines.append("}")
     return "\n".join(lines) + "\n"

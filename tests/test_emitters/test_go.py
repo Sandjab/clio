@@ -433,8 +433,10 @@ def test_flow_go_chains_exact_steps(tmp_path: Path) -> None:
     assert "func Run(ctx context.Context, kwargs map[string]any) (map[string]any, error)" in body
     assert "loadOut, err := steps.Load(ctx, " in body
     assert "summariseOut, err := steps.Summarise(ctx, " in body
-    assert 'state["load"]' in body
-    assert 'state["summarise"]' in body
+    # State keys use the GIVES field name (not the step name).
+    # go_minimal: load GIVES rows, summarise GIVES total.
+    assert 'state["rows"]' in body
+    assert 'state["total"]' in body
     assert "return state, nil" in body
 
 

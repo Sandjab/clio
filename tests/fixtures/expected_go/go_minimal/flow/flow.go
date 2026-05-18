@@ -11,17 +11,17 @@ import (
 func Run(ctx context.Context, kwargs map[string]any) (map[string]any, error) {
 	state := map[string]any{}
 
-	loadOut, err := steps.Load(ctx, steps.LoadIn{ File: kwargs["file"].(string) })
+	loadOut, err := steps.Load(ctx, steps.LoadIn{ File: "customers.csv" })
 	if err != nil {
 		return nil, err
 	}
-	state["load"] = loadOut
+	state["rows"] = loadOut
 
-	summariseOut, err := steps.Summarise(ctx, steps.SummariseIn{ Rows: loadOut.Rows })
+	summariseOut, err := steps.Summarise(ctx, steps.SummariseIn{ Rows: state["rows"].(steps.LoadOut).Rows })
 	if err != nil {
 		return nil, err
 	}
-	state["summarise"] = summariseOut
+	state["total"] = summariseOut
 
 	return state, nil
 }

@@ -11,17 +11,17 @@ import (
 func Run(ctx context.Context, kwargs map[string]any) (map[string]any, error) {
 	state := map[string]any{}
 
-	loadOut, err := steps.Load(ctx, steps.LoadIn{ File: kwargs["file"].(string) })
+	loadOut, err := steps.Load(ctx, steps.LoadIn{ File: "customers.csv" })
 	if err != nil {
 		return nil, err
 	}
-	state["load"] = loadOut
+	state["customers"] = loadOut
 
-	detect_churnOut, err := steps.DetectChurn(ctx, steps.DetectChurnIn{ Customers: loadOut.Customers })
+	detect_churnOut, err := steps.DetectChurn(ctx, steps.DetectChurnIn{ Customers: state["customers"].(steps.LoadOut).Customers })
 	if err != nil {
 		return nil, err
 	}
-	state["detect_churn"] = detect_churnOut
+	state["risks"] = detect_churnOut
 
 	return state, nil
 }
