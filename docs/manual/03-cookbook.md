@@ -977,6 +977,52 @@ common error messages (drift warnings, payload-too-large, retry exhaustion,
 corrupted manifest, cross-file recovery caveat) are documented in
 [troubleshooting](06-troubleshooting.md#clio-import-errors-v019).
 
+## 24. Compile a flow to a Go binary (v0.20)
+
+Use `target: go` when your team's primary stack is Go and you want a
+single static binary instead of a Python interpreter footprint.
+
+```bash
+python -m clio compile examples/mvp_go.clio --target go --output ./go-out
+cd go-out
+go mod tidy
+go build ./cmd/customer_retention
+ANTHROPIC_API_KEY=sk-... ./customer_retention --kwargs '{"file":"customers.csv"}'
+```
+
+**What the emitted module contains**:
+
+```
+go-out/
+  go.mod                              # pinned anthropic-sdk-go, jsonschema/v6, errgroup
+  cmd/customer_retention/main.go      # CLI entry — parses --kwargs JSON
+  contracts/contracts.go              # struct + Validate() per CONTRACT
+  flow/flow.go                        # orchestrator — calls steps in chain order
+  steps/                              # one Go file per STEP (exact stubs + judgment bodies)
+  clio_runtime/                       # cache + validate (embedded by the emitter)
+```
+
+**Filling in exact step stubs**: each `steps/NN_<name>.go` panics with
+`fill me in: <step>`. Edit the body — the function receives a typed
+`<Step>In` and must return a typed `<Step>Out` plus error. The bundled
+`validate.Schema(ctx, ...)` helper checks the output against the
+embedded JSON Schema.
+
+**v0.20.0 scope**: this target covers the most common case. See
+`docs/manual/06-troubleshooting.md` for the list of features deferred
+to v0.20.x (OpenAI, FLOW composition, `impl.mode {rest, sql, mcp_tool,
+shell}`, RESUME, TEST blocks) — each fails at compile time with a
+remediation pointer.
+
+**Cache compatibility**: the cache layout is byte-identical to
+`target: python`. You can swap targets between runs and reuse cached
+judgment responses.
+
+**Cross-platform Go build**: the SQLite driver dependency
+(`modernc.org/sqlite`) is **not** included in v0.20.0 (impl.mode sql is
+deferred). When it lands in v0.20.x, the build will still work on every
+platform without a C toolchain because `modernc.org/sqlite` is pure Go.
+
 ## What's not in the cookbook (yet)
 
 - **Multi-field ASSERT** — accept `a > b` between two fields. Specced, planned.

@@ -13,7 +13,7 @@ Each target is an emitter module that transforms the IR graph into a runnable pr
 | `langgraph` | Candidate | LangGraph graph (nodes = STEPs, state = CONTRACTs) | Adoption by existing LangChain users; positions CLIO as a meta-language | ✅ | Medium |
 | `local` | Future | Same as `python`, with Ollama/vLLM | Offline / data-privacy constraints | ✅ (planned) | High (Outlines/Guidance) |
 | `rust` | Future | Cargo async project | Performance-critical `exact` steps | planned | High |
-| `go` | Future | Go module with goroutines + `net/http` | Concurrent `exact` steps, single static binary | planned | Medium |
+| `go` | Implemented | Go module (package `flow.Run` + `cmd/<flow>/main.go`) | Single static binary, no runtime to install; concurrent `exact` steps via goroutines | ✅ | — |
 | `docker` | Future | Multi-stage Dockerfile + compose | Mixed-language flows | planned | Medium |
 | `hybrid` | Future | Claude CLI + precompiled binaries for `exact` | Heavy `exact` within CLI orchestration | planned | Medium |
 | `fastapi` | Candidate | HTTP server (FLOW = endpoint, CONTRACT = `response_model`) | Deploy a `.clio` as a microservice | planned | Low–Medium |
@@ -319,13 +319,106 @@ Steps marked `LANG: rust` or `LANG: auto` for large data compile to native Rust.
 
 ---
 
-## `target: go` (Future)
+## `target: go`
 
-**What it emits**: a Go module with `go.mod`, an orchestrator `main.go`, and one package per step.
+Produces a Go module with `go.mod`, one package per STEP, a `contracts/` package, and a `cmd/<flow>/main.go` CLI entry point.
 
-Steps marked `LANG: go` or `LANG: auto` compile to native Go, with goroutines + channels for `parallel`/`foreach` blocks. Judgment steps compile to functions calling the Anthropic API via `net/http`. Contracts compile to Go structs with `json` tags, validated through generated JSON Schema checkers.
+### Layout
 
-Distribution sweet spot: a single static binary, no runtime to install — useful for CLI tools and side-cars where the `python` target's interpreter footprint is unwelcome.
+```
+output/
+  go.mod
+  go.sum                        # (after `go mod tidy`)
+  contracts/
+    contracts.go                # Go structs with `json:"..."` tags, one per CONTRACT
+  steps/
+    <exact_step>/
+      <exact_step>.go           # NotImplementedError-equivalent (TODO body)
+    <judgment_step>/
+      <judgment_step>.go        # auto-generated: net/http Anthropic call + cache + ON_FAIL chain
+  flow/
+    flow.go                     # orchestrator: Run(ctx, kwargs) → (map[string]any, error)
+  cmd/
+    <flow_name>/
+      main.go                   # CLI: `go run ./cmd/<flow_name>` or `go build`
+  clio_runtime/
+    validate/
+      validate.go               # jsonschema/v6 + x-clio-assert walker
+    cache/
+      cache.go                  # SHA256 content-addressed on-disk cache
+```
+
+### Use
+
+```bash
+go run ./cmd/<flow_name> --kwargs '{"file": "customers.csv"}'
+```
+
+Or build a single static binary:
+
+```bash
+go build -o my_flow ./cmd/<flow_name>
+./my_flow --kwargs '{"file": "customers.csv"}'
+```
+
+Or call programmatically from Go:
+
+```go
+import "example.com/<module>/flow"
+
+result, err := flow.Run(ctx, map[string]any{"file": "customers.csv"})
+```
+
+- **FOR EACH PARALLEL:** emits `golang.org/x/sync/errgroup` with a concurrency cap of 10.
+
+### Refused combinations (v0.20.0 scope)
+
+The following are rejected at compile time with a clear error code and a pointer to the appropriate alternative:
+
+- `LANG: python` / `bash` / `rust` / `node` — only `go` or `auto` accepted (E_GO_001).
+- `invoke.mode: cli` — no `claude -p` subprocess in a Go binary (E_GO_002).
+- `invoke.api.bedrock` / `vertex` — not wired in v0.20.0 (E_GO_003).
+- `invoke.api.openai` — OpenAI-compat SDK not wired yet; use `--target python` (E_GO_005).
+- **FLOW composition** (sub-flow calls) — deferred to v0.20.x (E_GO_006).
+- `impl.mode: rest` — deferred to v0.20.x (E_GO_007).
+- `impl.mode: shell` — deferred to v0.20.x (E_GO_008).
+- `impl.mode: sql` — deferred to v0.20.x (E_GO_009).
+- `impl.mode: mcp_tool` — deferred to v0.20.x (E_GO_010).
+- `--from-step N` resume — deferred to v0.20.x (E_GO_011).
+- `TEST` blocks — deferred to v0.20.x (E_GO_012).
+
+### Inherited features
+
+These work identically to the v0.20.0 Go target without restriction:
+
+- `IF / ELSE`, `MATCH / CASE`, `WHILE ... MAX N:` — emits idiomatic Go `if/else`, `switch`, bounded `for`.
+- `FOR EACH ... IN ...:` — emits `for _, v := range state[...]`.
+- `FOR EACH ... PARALLEL AS <collector>:` — emits `errgroup.Go(...)` fan-out with a 10-goroutine cap.
+- `CACHE: ttl(...)` — on-disk SHA256 layout interchangeable with the `python` target (same key derivation).
+- `ON_FAIL: retry(N) then escalate then fallback(...) then abort(...)` — full strategy chain.
+- `RESCUE` handlers + `step.error.*` + `RESUME(...)` — emitted as Go `error` wrapping + typed return injection.
+
+### Cache layout interchangeable with `python` and `claude-cli`
+
+All three targets read/write `<output>/.cache/<step_name>/<sha256>.json` with the same key derivation (SHA256 of `step + model + prompt + schema`). Switching targets between runs preserves cache hits.
+
+### Model name mapping
+
+`RESOURCES.models` short names map to Anthropic API model IDs at emit time (same mapping as the `python` target):
+
+| CLIO short | Anthropic ID |
+|------------|--------------|
+| `haiku`    | `claude-haiku-4-5-20251001` |
+| `sonnet`   | `claude-sonnet-4-6` |
+| `opus`     | `claude-opus-4-7` |
+
+### Logging
+
+Structured JSONL logging is a silent no-op in v0.20.0 (the `clio_runtime/cache` package is wired; flow-level event emission is deferred). To get `CLIO_LOG=1` structured events, compile to `--target python` or `--target mcp-server`.
+
+### Resume
+
+`--from-step N` resume is deferred to v0.20.x (E_GO_011). The Go binary runs the full flow on each invocation. For incremental re-runs on a long pipeline, compile to `--target python` today.
 
 ---
 

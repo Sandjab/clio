@@ -1,6 +1,6 @@
 # Compilation targets
 
-CLIO emits a runnable project for **one of five targets** today, selected via `--target`:
+CLIO emits a runnable project for **one of six targets** today, selected via `--target`:
 
 | Target | Output | Best for |
 |---|---|---|
@@ -9,6 +9,7 @@ CLIO emits a runnable project for **one of five targets** today, selected via `-
 | `mcp-server` | Python MCP server using the official `mcp` SDK | Exposing the flow as a tool to Claude Desktop / IDE / any MCP client |
 | `langgraph` | Python package whose `flow.py` builds a `langgraph.graph.StateGraph` | Bridging into LangChain ecosystems; using LangGraph's runtime features (persistence, human-in-the-loop) with CLIO-defined logic |
 | `claude-skill` | Claude Code skill directory (`SKILL.md` + `scripts/` + `schemas/` + `prompts/`) | LLM-host-orchestrated skills; ship a flow as a Claude Code skill with no external runtime or API key after install |
+| `go` | Go module (`flow.Run` package + `cmd/<flow>/main.go`) | Single static binary, no runtime to install; Go exact steps + Anthropic judgment |
 
 The `RESOURCES.target:` field in the `.clio` source is **informational** — the `--target` flag at compile time is what actually selects the emitter.
 
@@ -131,32 +132,67 @@ The emitted skill is **LLM-host-orchestrated**: Claude Code reads `SKILL.md` and
 > (or exits 2 under `--mode strict`). Sidecar emission is best-effort — a
 > write failure is logged to stderr but never blocks the main skill output.
 
+### `go`
+
+```bash
+uv run python -m clio compile flow.clio --target go --output ./go-out
+cd go-out && go mod tidy && go run ./cmd/<flow_name> --kwargs '{"file": "input.txt"}'
+```
+
+Or build a single static binary:
+
+```bash
+cd go-out && go build -o my_flow ./cmd/<flow_name>
+./my_flow --kwargs '{"file": "input.txt"}'
+```
+
+You get a `go.mod`, a `contracts/` package (Go structs with `json` tags), `steps/<name>/<name>.go` files (stubs for exact steps, auto-generated for judgment steps), a `flow/flow.go` orchestrator, and a `cmd/<flow>/main.go` CLI entry point.
+
+**Use when:**
+
+- You want a single static binary with no Python interpreter to ship or install.
+- Your exact steps are in Go (or `LANG: auto`) and you want the orchestrator to match.
+- You need concurrent iteration (`FOR EACH PARALLEL`) backed by goroutines and `errgroup`.
+
+**Don't use when (v0.20.0):**
+
+- You need OpenAI / Bedrock / Vertex (only `invoke.api.anthropic` is wired — E_GO_005, E_GO_003).
+- You need `impl.mode: rest / shell / sql / mcp_tool` (deferred — E_GO_007..010).
+- You need FLOW composition (sub-flow calls) — deferred to v0.20.x (E_GO_006).
+- You need `--from-step N` resume (deferred — E_GO_011).
+- You need structured JSONL logging (`CLIO_LOG=1`) — silent no-op in v0.20.0; use `--target python`.
+
+See [`docs/COMPILATION_TARGETS.md`](../COMPILATION_TARGETS.md#target-go) for the full layout and refused-combo table.
+
 ## Cross-target feature support
 
-| Feature | claude-cli | python | mcp-server | langgraph | claude-skill |
-|---|:-:|:-:|:-:|:-:|:-:|
-| `MODE: exact` (code stub) | ✅ | ✅ | ✅ | ✅ | ✅ (`scripts/NN.py` stub) |
-| `MODE: exact` + `impl.shell` | ✅ | ✅ | ✅ | ✅ | ✅ (Python or Bash only) |
-| `MODE: exact` + `impl.shell` + `parse: json` | ⚠️ silently ignored | ✅ | ✅ | ✅ | ✅ |
-| `MODE: exact` + `impl.rest` | ✅ (uses `requests` at runtime) | ✅ | ✅ | ✅ | ✅ |
-| `MODE: judgment` + `invoke: cli` (default) | ✅ | ❌ rejected | ❌ rejected | ❌ rejected | ✅ host-driven |
-| `MODE: judgment` + `invoke.api.anthropic` | (uses `RESOURCES.models` chain) | ✅ | ❌ rejected | ✅ | ✅ host-driven |
-| `MODE: judgment` + `invoke.api.openai` | ❌ | ✅ | ❌ | ❌ rejected (v0) | ✅ host-driven |
-| `MODE: judgment` + `invoke.api.bedrock`/`vertex` | ❌ | ❌ | ❌ | ❌ | ❌ |
-| `CACHE: ttl(...)` | ✅ | ✅ | ✅ | ✅ (reuses python runtime) | ⚠️ documented in `SKILL.md`; helper bundled |
-| `ON_FAIL: retry(N)` | ✅ | ✅ | ✅ | ✅ via `RetryPolicy` | ⚠️ documented in `SKILL.md` (host-followed) |
-| `ON_FAIL: escalate / fallback` | ✅ | ✅ | ✅ minimum-compliance | ❌ rejected (v0) | ⚠️ documented in `SKILL.md` |
-| `ON_FAIL: abort` | ✅ | ✅ | ✅ | ✅ | ⚠️ documented in `SKILL.md` |
-| `RESCUE` + `step.error.*` + `RESUME` | ❌ rejected | ✅ | ✅ | ❌ rejected | ⚠️ documented in `SKILL.md` |
-| `FOR EACH` (sequential) | ✅ | ✅ | ✅ | ❌ rejected (v0; v0.7) | ✅ |
-| `FOR EACH ... PARALLEL AS` | ❌ rejected | ✅ ThreadPool | ✅ asyncio.gather | ❌ rejected (v0; v0.7 via Send) | ⚠️ serialised with warning |
-| `FLOW.TAKES` / `FLOW.GIVES` (v0.16, optional) | ✅ README section | ✅ typed `run()` | ✅ inputSchema / outputSchema | ✅ State subset | ✅ SKILL.md Inputs / Outputs |
-| **FLOW composition** (sub-flow callable, v0.17) | ❌ rejected | ✅ `run_<name>()` | ✅ + multi-tool | ✅ sub-`StateGraph` | ⚠️ documented in SKILL.md (linear-only, `scripts/sub_<name>.py`) |
-| `FOR EACH PARALLEL` body = sub-flow (v0.17) | ❌ rejected | ✅ | ✅ asyncio.gather | ❌ rejected (v0; v0.7 via Send) | ⚠️ linear sub-flow only |
-| mcp-server multi-tool (multi-FLOW source, v0.17) | n/a | n/a | ✅ one tool per uncalled signed FLOW | n/a | n/a |
-| `TEST` blocks (v0.15) | ⚠️ ignored | ✅ pytest emitted | ⚠️ ignored | ⚠️ ignored | ⚠️ ignored |
-| `--from-step N` resume | ❌ | ✅ | ❌ | ❌ (use LangGraph checkpointers) | ❌ |
-| `clio graph --format html` | n/a (graph is target-independent) | n/a | n/a | n/a | n/a |
+| Feature | claude-cli | python | mcp-server | langgraph | claude-skill | go |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| `MODE: exact` (code stub) | ✅ | ✅ | ✅ | ✅ | ✅ (`scripts/NN.py` stub) | ✅ (Go stub) |
+| `MODE: exact` + `LANG: go / auto` | ✅ | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ✅ |
+| `MODE: exact` + `LANG: python / bash / rust / node` | ✅ | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ❌ E_GO_001 |
+| `MODE: exact` + `impl.shell` | ✅ | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ❌ E_GO_008 |
+| `MODE: exact` + `impl.shell` + `parse: json` | ⚠️ silently ignored | ✅ | ✅ | ✅ | ✅ | ❌ E_GO_008 |
+| `MODE: exact` + `impl.rest` | ✅ (uses `requests` at runtime) | ✅ | ✅ | ✅ | ✅ | ❌ E_GO_007 |
+| `MODE: judgment` + `invoke: cli` (default) | ✅ | ❌ rejected | ❌ rejected | ❌ rejected | ✅ host-driven | ❌ E_GO_002 |
+| `MODE: judgment` + `invoke.api.anthropic` | (uses `RESOURCES.models` chain) | ✅ | ❌ rejected | ✅ | ✅ host-driven | ✅ |
+| `MODE: judgment` + `invoke.api.openai` | ❌ | ✅ | ❌ | ❌ rejected (v0) | ✅ host-driven | ❌ E_GO_005 |
+| `MODE: judgment` + `invoke.api.bedrock`/`vertex` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ E_GO_003 |
+| `CACHE: ttl(...)` | ✅ | ✅ | ✅ | ✅ (reuses python runtime) | ⚠️ documented in `SKILL.md`; helper bundled | ✅ |
+| `ON_FAIL: retry(N)` | ✅ | ✅ | ✅ | ✅ via `RetryPolicy` | ⚠️ documented in `SKILL.md` (host-followed) | ✅ |
+| `ON_FAIL: escalate / fallback` | ✅ | ✅ | ✅ minimum-compliance | ❌ rejected (v0) | ⚠️ documented in `SKILL.md` | ✅ |
+| `ON_FAIL: abort` | ✅ | ✅ | ✅ | ✅ | ⚠️ documented in `SKILL.md` | ✅ |
+| `RESCUE` + `step.error.*` + `RESUME` | ❌ rejected | ✅ | ✅ | ❌ rejected | ⚠️ documented in `SKILL.md` | ✅ |
+| `FOR EACH` (sequential) | ✅ | ✅ | ✅ | ❌ rejected (v0; v0.7) | ✅ | ✅ |
+| `FOR EACH ... PARALLEL AS` | ❌ rejected | ✅ ThreadPool | ✅ asyncio.gather | ❌ rejected (v0; v0.7 via Send) | ⚠️ serialised with warning | ✅ errgroup |
+| `FLOW.TAKES` / `FLOW.GIVES` (v0.16, optional) | ✅ README section | ✅ typed `run()` | ✅ inputSchema / outputSchema | ✅ State subset | ✅ SKILL.md Inputs / Outputs | ✅ typed `Run()` |
+| **FLOW composition** (sub-flow callable, v0.17) | ❌ rejected | ✅ `run_<name>()` | ✅ + multi-tool | ✅ sub-`StateGraph` | ⚠️ documented in SKILL.md (linear-only, `scripts/sub_<name>.py`) | ❌ E_GO_006 |
+| `FOR EACH PARALLEL` body = sub-flow (v0.17) | ❌ rejected | ✅ | ✅ asyncio.gather | ❌ rejected (v0; v0.7 via Send) | ⚠️ linear sub-flow only | ❌ E_GO_006 |
+| mcp-server multi-tool (multi-FLOW source, v0.17) | n/a | n/a | ✅ one tool per uncalled signed FLOW | n/a | n/a | n/a |
+| `TEST` blocks (v0.15) | ⚠️ ignored | ✅ pytest emitted | ⚠️ ignored | ⚠️ ignored | ⚠️ ignored | ❌ E_GO_012 |
+| `--from-step N` resume | ❌ | ✅ | ❌ | ❌ (use LangGraph checkpointers) | ❌ | ❌ E_GO_011 |
+| JSONL logging (`CLIO_LOG=1`) | ❌ | ✅ | ✅ | ⏸ delegated to LangSmith | ❌ | ⏸ silent no-op |
+| `clio graph --format html` | n/a (graph is target-independent) | n/a | n/a | n/a | n/a | n/a |
 
 ## A common workflow: `python` for production, `claude-cli` for sketches
 
@@ -168,6 +204,6 @@ A `.clio` file is target-independent (modulo the limitations above). A common pa
 4. **Bridge** to `--target langgraph` if you need to plug into LangChain runtime features (checkpointers, human-in-the-loop, streaming). Subset features today, full parity is on the v0.7+ roadmap.
 5. **Ship as a Claude Code skill** with `--target claude-skill` when the audience is Claude Code users who want a zero-runtime install (no API key, no Python env).
 
-The same source compiles all five (within each target's scope).
+The same source compiles all six (within each target's scope).
 
 Next: [CLI reference](05-cli-reference.md) for every command and flag.

@@ -1,19 +1,21 @@
 """Type-utility helpers shared by emitter modules.
 
 Originally lived in `_python_helpers.py`; extracted in v0.14 because
-3 emitters now consume the same shape-rendering and naming logic
-(python, mcp-server, claude-skill).
+now 4 emitters consume the same shape-rendering and naming logic
+(python, mcp-server, claude-skill, go).
 
 The CLAUDE.md rule "emitters never import from each other" continues
 to hold: `_shared_utils.py` is a utility module, not an emitter. Both
 emitter helper modules (`_python_helpers.py`, `_mcp_helpers.py`,
-`_claude_skill_helpers.py`) import from here.
+`_claude_skill_helpers.py`, `_go_helpers.py`) import from here.
 """
 from __future__ import annotations
 
 import keyword
 
 from clio.ir.graph import (
+    BoolOpIR,
+    ConditionIR,
     ContractIR,
     FlowGraph,
     StepIR,
@@ -29,6 +31,14 @@ from clio.parser.ast_nodes import (
 )
 
 _PYTHON_PRIMITIVES = {"int": "int", "float": "float", "str": "str", "bool": "bool"}
+
+_GO_PRIMITIVES = {
+    "str": "string",
+    "int": "int64",
+    "float": "float64",
+    "bool": "bool",
+    "any": "any",
+}
 
 _MODEL_ID_MAP = {
     "haiku": "claude-haiku-4-5-20251001",
@@ -185,6 +195,63 @@ def _type_to_python(t: TypeExpr, contracts: dict[str, ContractIR]) -> str:
     raise ValueError(f"unhandled type for Python emit: {type(t).__name__}")
 
 
+def _json_type_to_go(schema: dict) -> str:
+    """Render a JSON Schema subschema dict as a Go type expression.
+
+    Mirror of `_json_type_to_python` for the Go target. Used by
+    `render_contracts_go` to convert CONTRACT property schemas — which are
+    plain dicts, not TypeExpr nodes — into Go field types.
+
+    $ref resolves to an UpperCamelCase struct name (mirrors ContractRef
+    handling in `_type_to_go`). enum → string (same as TypeExpr EnumType).
+    Unrecognised shapes → any."""
+    if "$ref" in schema:
+        name = schema["$ref"].rsplit("/", 1)[-1]
+        return _to_class_name(name)
+    if "enum" in schema:
+        return "string"
+    t = schema.get("type")
+    if t == "string":
+        return "string"
+    if t == "integer":
+        return "int64"
+    if t == "number":
+        return "float64"
+    if t == "boolean":
+        return "bool"
+    if t == "array":
+        return f"[]{_json_type_to_go(schema.get('items', {}))}"
+    if t == "object":
+        return "map[string]any"
+    return "any"
+
+
+def _collect_contract_refs(step: StepIR) -> set[str]:
+    """Return the set of CONTRACT names referenced in step's TAKES or GIVES.
+
+    Mirrors the walker in `_uses_contract_refs` but collects names instead
+    of returning a bool. Used by `render_contracts_go` to decide which
+    contracts to emit struct definitions for."""
+    refs: set[str] = set()
+
+    def walk(t: TypeExpr) -> None:
+        if isinstance(t, ContractRef):
+            refs.add(t.name)
+        elif isinstance(t, ListType):
+            walk(t.inner)
+        elif isinstance(t, RecordType):
+            for _, ty in t.fields:
+                walk(ty)
+        elif isinstance(t, ConstrainedType):
+            walk(t.base)
+
+    if step.gives is not None:
+        walk(step.gives.type)
+    for field in step.takes:
+        walk(field.type)
+    return refs
+
+
 def _json_type_to_python(schema: dict) -> str:
     if "$ref" in schema:
         ref = schema["$ref"]
@@ -276,8 +343,6 @@ def _python_condition_expr(condition, scope_local: set[str]) -> str:
     `state[<name>]`. `BoolOpIR` nodes render as `(<left>) and/or (<right>)`
     — the parentheses are unconditional so the emitted Python preserves
     the IR's precedence regardless of nesting."""
-    from clio.ir.graph import BoolOpIR  # avoid top-level circular import
-
     if isinstance(condition, BoolOpIR):
         left = _python_condition_expr(condition.left, scope_local)
         right = _python_condition_expr(condition.right, scope_local)
@@ -303,3 +368,127 @@ def _python_condition_expr(condition, scope_local: set[str]) -> str:
         # str | ident — both rendered as Python string literals
         lit = repr(condition.literal_value)
     return f"{access} {condition.op} {lit}"
+
+
+def _go_condition_expr(
+    condition: ConditionIR | BoolOpIR,
+    scope_local: set[str],
+    state_field_to_step: dict[str, StepIR],
+) -> str:
+    """Render a CLIO IF/WHILE condition as a Go boolean expression.
+
+    Mirrors `_python_condition_expr` but produces Go syntax.  The key
+    difference: state values are `any` (= `interface{}`), so reading a
+    contract field requires a type assertion.
+
+    `ConditionIR.step_name` is the *state field name* (the GIVES name of
+    whatever step produced it — not the step's own name).  The type
+    assertion form is:
+
+        state["<state_field>"].(steps.<StepClassName>Out).<GoField>
+
+    where `<StepClassName>` is the UpperCamelCase rendering of the *step*
+    that GIVES into `<state_field>`.  `state_field_to_step` supplies this
+    mapping (built by the caller).
+
+    When `state_field` is in `scope_local` (loop variable inside FOR EACH
+    body) the local identifier is used directly without `state[...]`:
+
+        <state_field>.(steps.<StepClassName>Out).<GoField>
+
+    `BoolOpIR` nodes render as `(<left>) &&/|| (<right>)` — unconditional
+    parens preserve IR precedence regardless of nesting depth."""
+    if isinstance(condition, BoolOpIR):
+        left = _go_condition_expr(condition.left, scope_local, state_field_to_step)
+        right = _go_condition_expr(condition.right, scope_local, state_field_to_step)
+        go_op = "&&" if condition.op == "and" else "||"
+        return f"({left}) {go_op} ({right})"
+
+    # Leaf: ConditionIR
+    # condition.step_name is the state-dict key (GIVES field name of the
+    # step that produced it), not the step's own name.
+    state_field = condition.step_name
+    step = state_field_to_step.get(state_field)
+    if step is not None:
+        cls = _to_class_name(step.name)
+        type_assert = f"(steps.{cls}Out)"
+    else:
+        # Fallback: unknown state field — use `any`.  Should not happen after
+        # IR validation, but guards against future call-site bugs.
+        type_assert = "(any)"
+    if state_field in scope_local:
+        base = f"{state_field}.{type_assert}"
+    else:
+        base = f'state["{state_field}"].{type_assert}'
+    access = f"{base}.{_to_go_field_name(condition.field)}"
+
+    # Render the RHS literal in Go syntax.
+    if condition.literal_kind == "int":
+        lit = f"int64({condition.literal_value})"
+    elif condition.literal_kind == "float":
+        lit = f"float64({condition.literal_value})"
+    elif condition.literal_kind == "bool":
+        lit = "true" if condition.literal_value else "false"
+    elif condition.literal_kind == "ident":
+        # Enum ident rendered as a Go string constant (unquoted idents are
+        # enum values in CLIO; at runtime they compare against string fields).
+        lit = f'"{condition.literal_value}"'
+    else:
+        # str — Go interpreted string literal: double-quote with backslash escapes.
+        escaped = str(condition.literal_value).replace("\\", "\\\\").replace('"', '\\"')
+        lit = f'"{escaped}"'
+    return f"{access} {condition.op} {lit}"
+
+
+def _to_go_field_name(name: str) -> str:
+    """CLIO field name → Go exported identifier (UpperCamelCase).
+
+    Mirrors `_to_field_name` (which targets Python snake_case). Go exports
+    require capitalised first letter to be visible across packages. Splits on
+    both `_` and `-` separators — CLIO identifiers may use either — then
+    capitalises each part and joins without separator."""
+    parts = [p for p in name.replace("-", "_").split("_") if p]
+    return "".join(p[:1].upper() + p[1:] for p in parts)
+
+
+def _type_to_go(
+    t: TypeExpr, contracts: dict[str, ContractIR], *, qualifier: str = ""
+) -> str:
+    """Render a CLIO TypeExpr as a Go type expression.
+
+    Used both inline (struct field types) and standalone (variable types).
+    Mirrors `_type_to_python` for the python target. RecordType emits an
+    anonymous Go struct with json struct tags so that `encoding/json` round-trips
+    field names without manual mapping. EnumType emits `string` — the schema-level
+    constraint enforces the value set at Validate() time; generating named Go
+    enum types is deferred to a future refactor.
+
+    `qualifier`, when non-empty, prefixes ContractRef names with the given
+    package qualifier (e.g. `qualifier="contracts"` → `contracts.CustomerRisk`).
+    Step files that live in a separate `steps/` package need this to reference
+    types from the `contracts/` package; contracts.go itself uses bare names
+    (same package) and must leave `qualifier` at its default empty string."""
+    if isinstance(t, ConstrainedType):
+        return _type_to_go(t.base, contracts, qualifier=qualifier)
+    if isinstance(t, PrimitiveType):
+        return _GO_PRIMITIVES[t.name]
+    if isinstance(t, EnumType):
+        # v0.20.0: enums render as plain `string`; the schema-level enum
+        # constraint enforces the value set at Validate() time. Typed Go
+        # enum types are deferred to a future refactor.
+        return "string"
+    if isinstance(t, ListType):
+        return f"[]{_type_to_go(t.inner, contracts, qualifier=qualifier)}"
+    if isinstance(t, RecordType):
+        fields = "; ".join(
+            f'{_to_go_field_name(fname)} {_type_to_go(ftype, contracts, qualifier=qualifier)} '
+            f'`json:"{fname}"`'
+            for fname, ftype in t.fields
+        )
+        return f"struct {{ {fields} }}"
+    if isinstance(t, ContractRef):
+        cls = _to_class_name(t.name)
+        if qualifier:
+            return f"{qualifier}.{cls}"
+        return cls
+    raise ValueError(f"unsupported TypeExpr for Go target: {type(t).__name__}")

@@ -48,9 +48,9 @@ Also lifts `FOR EACH <var> IN <collection>:` from spec-only to implemented contr
 
 ### Implementation status (as of v0.2)
 
-| Feature | Parser | IR | python target | claude-cli target | mcp-server target |
-|---|---|---|---|---|---|
-| `LANG:` per step | ✅ | ✅ | ignored (still emits Python on every EXACT) | ignored | ignored |
+| Feature | Parser | IR | python target | claude-cli target | mcp-server target | go target |
+|---|---|---|---|---|---|---|
+| `LANG:` per step | ✅ | ✅ | ignored (still emits Python on every EXACT) | ignored | ignored | only `go` or `auto` accepted (E_GO_001) |
 | `impl.mode: code` | ✅ | ✅ | (default behavior — Python stub) | (default behavior — Python stub) | (default behavior — Python stub) |
 | `impl.mode: rest` (`method`/`url`/`response_path`/`timeout`) | ✅ | ✅ | ✅ `requests.request(...)` | ✅ standalone Python step with `requests` | ✅ `requests.request(...)` |
 | `impl.rest.query` / `impl.rest.headers` (templated dicts) | ✅ | ✅ | ✅ `params=` / `headers=` with `${var}` + `env:NAME` | ✅ same | ✅ same |

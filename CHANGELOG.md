@@ -2,6 +2,43 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`target: go` — sixth compilation target.** Emits a Go module importable as
+  a package (`flow.Run(ctx, kwargs)`) and runnable as a CLI
+  (`cmd/<flow>/main.go`). v0.20.0 scope covers CONTRACT, exact (LANG: go) and
+  judgment (Anthropic SDK via `net/http`), IF/MATCH/WHILE, FOR EACH (sequential
+  + parallel via `errgroup`), RESCUE, ON_FAIL chain, CACHE (layout
+  interchangeable with python target), RESOURCES. New emitter module
+  `clio/emitters/go.py` + helper module `clio/emitters/_go_helpers.py`.
+  Embedded Go runtime templates: `clio_runtime/validate` (jsonschema/v6 +
+  x-clio-assert walker) and `clio_runtime/cache` (SHA256 content-addressed).
+- 12 new compile-time refused-combo errors (`E_GO_001` … `E_GO_012`)
+  documented in `docs/manual/06-troubleshooting.md`. Deferred-to-v0.20.x
+  features (OpenAI SDK, FLOW composition, impl.mode rest/sql/mcp_tool/shell,
+  RESUME, TEST blocks) raise at compile time with a remediation pointer.
+
+### Docs
+
+- `docs/COMPILATION_TARGETS.md`: `target: go` moves from "Future" to
+  "Implemented"; canonical entry added with layout, use, refused combos,
+  inherited features, logging, resume, cache, and model-name-mapping sections.
+- `docs/LANGUAGE_SPEC.md`: Go added to the `LANG per step` target table.
+- `docs/manual/04-targets.md`: Go column added to the cross-target feature
+  matrix; `go` section added to the "When to use which" guide.
+- `docs/manual/06-troubleshooting.md`: entries for E_GO_001..E_GO_010 and
+  E_GO_012, plus "missing Go toolchain" and module-cache notes.
+- `README.md`: `go` added to the compilation targets table; "5 emitters"
+  updated to "6 emitters" in the Current status section.
+
+### Tests
+
+- 65 new tests across `tests/test_emitters/test_go.py`,
+  `tests/test_emitters/test_go_compile.py`, and
+  `tests/test_emitters/test_shared_utils.py`. Net `1067 → 1132` (+65).
+- 5 new fixtures: `tests/fixtures/{go_minimal,go_judgment,go_control_flow,go_parallel,go_rescue}.clio`.
+- 3 new golden snapshots: `tests/fixtures/expected_go/{go_minimal,go_judgment,go_parallel}/`.
+
 ## [0.19.0] — 2026-05-17
 
 Minor release introducing the **`clio import` sub-command** — a round-trip recovery of `.clio` sources from emitted skills (verbatim via the new `.clio/` sidecar when hashes match) and an LLM-assisted import path for arbitrary hand-written Claude Code skills (Anthropic SDK, one-shot validation-retry loop). Net test count `997 → 1067` (+70); 5 new opt-in `e2e_llm` tests skipped by default. PR #66 (squash-merged on `main` at `0834077`), 22 commits + 17 TDD tasks executed via subagent-driven development. Gemini cycle closed with 3 MEDIUM applied + 2 pushback (datetime.UTC Py3.11+/project Py3.12; multi-file IMPORT sidecar deferred to v0.20, see #67).

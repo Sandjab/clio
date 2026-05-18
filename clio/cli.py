@@ -21,7 +21,7 @@ def main(argv: list[str] | None = None) -> int:
     compile_p.add_argument("source")
     compile_p.add_argument(
         "--target", required=True,
-        choices=["claude-cli", "python", "mcp-server", "langgraph", "claude-skill"],
+        choices=["claude-cli", "python", "mcp-server", "langgraph", "claude-skill", "go"],
     )
     compile_p.add_argument("--output", required=True)
     compile_p.add_argument(
@@ -145,6 +145,9 @@ def _cmd_compile(source: str, target: str, output: str, flow: str | None = None)
     elif target == "claude-skill":
         from clio.emitters.claude_skill import ClaudeSkillEmitter
         ClaudeSkillEmitter().emit(graph, out_path, source_path=src_resolved)
+    elif target == "go":
+        from clio.emitters.go import GoEmitter
+        GoEmitter().emit(graph, out_path, source_path=src_resolved)
     else:
         return 2
     return 0

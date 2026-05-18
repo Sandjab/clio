@@ -1,0 +1,23 @@
+CONTRACT customer_risk
+  SHAPE: {client: str, risk: enum(low|mid|high), reason: str(max=300)}
+  ASSERT: len(reason) > 0
+
+STEP load
+  TAKES: file: str
+  GIVES: customers: List<{name: str, revenue: float}>
+  MODE:  exact
+  LANG:  go
+
+STEP detect_churn
+  TAKES: customers: List<{name: str, revenue: float}>
+  GIVES: risks: List<customer_risk>
+  MODE:  judgment
+  CACHE: ttl(24h)
+
+FLOW pipeline
+  load(file="customers.csv")
+    -> detect_churn(customers)
+
+RESOURCES
+  target: go
+  models: [haiku, sonnet]
