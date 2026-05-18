@@ -680,3 +680,255 @@ def test_judgment_step_fallback_step(tmp_path: Path) -> None:
     _compile(src, out)
     body = (out / "steps" / "01_detect.go").read_text()
     assert "Naive(ctx, " in body
+
+
+# ---------------------------------------------------------------------------
+# Task 19 — compile-time validation: E_GO_001..012
+# ---------------------------------------------------------------------------
+
+import pytest  # noqa: E402 (after top-level imports)
+
+
+def _compile_expecting_error(source_path: Path, output_dir: Path, code: str) -> None:
+    with pytest.raises(ValueError, match=code):
+        _compile(source_path, output_dir)
+
+
+def test_E_GO_001_lang_python(tmp_path: Path) -> None:
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP load\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "  LANG:  python\n"
+        "FLOW pipeline\n"
+        "  load(x=\"hi\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    _compile_expecting_error(src, tmp_path / "out", "E_GO_001")
+
+
+def test_E_GO_001_lang_rust(tmp_path: Path) -> None:
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP load\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "  LANG:  rust\n"
+        "FLOW pipeline\n"
+        "  load(x=\"hi\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    _compile_expecting_error(src, tmp_path / "out", "E_GO_001")
+
+
+def test_E_GO_002_invoke_mode_cli(tmp_path: Path) -> None:
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP detect\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  judgment\n"
+        "  invoke:\n"
+        "    mode: cli\n"
+        "FLOW pipeline\n"
+        "  detect(x=\"hi\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    _compile_expecting_error(src, tmp_path / "out", "E_GO_002")
+
+
+def test_E_GO_003_invoke_protocol_bedrock(tmp_path: Path) -> None:
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP detect\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  judgment\n"
+        "  invoke:\n"
+        "    mode: api\n"
+        "    protocol: bedrock\n"
+        "    model: haiku\n"
+        "FLOW pipeline\n"
+        "  detect(x=\"hi\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    _compile_expecting_error(src, tmp_path / "out", "E_GO_003")
+
+
+def test_E_GO_004_no_flow(tmp_path: Path) -> None:
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "CONTRACT just_a_contract\n"
+        "  SHAPE: {x: str}\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    _compile_expecting_error(src, tmp_path / "out", "E_GO_004")
+
+
+def test_E_GO_005_invoke_protocol_openai(tmp_path: Path) -> None:
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP detect\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  judgment\n"
+        "  invoke:\n"
+        "    mode: api\n"
+        "    protocol: openai\n"
+        "    model: haiku\n"
+        "FLOW pipeline\n"
+        "  detect(x=\"hi\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    _compile_expecting_error(src, tmp_path / "out", "E_GO_005")
+
+
+def test_E_GO_006_flow_composition(tmp_path: Path) -> None:
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP a\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "FLOW sub\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  a(x)\n"
+        "FLOW pipeline\n"
+        "  sub(x=\"hi\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    _compile_expecting_error(src, tmp_path / "out", "E_GO_006")
+
+
+def test_E_GO_007_impl_mode_rest(tmp_path: Path) -> None:
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP fetch\n"
+        "  TAKES: id: str\n"
+        "  GIVES: body: str\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: GET\n"
+        "    url: \"http://x/${id}\"\n"
+        "FLOW pipeline\n"
+        "  fetch(id=\"1\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    _compile_expecting_error(src, tmp_path / "out", "E_GO_007")
+
+
+def test_E_GO_008_impl_mode_shell(tmp_path: Path) -> None:
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP grep\n"
+        "  TAKES: file: str\n"
+        "  GIVES: lines: List<str>\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode: shell\n"
+        "    cmd:  \"grep foo ${file}\"\n"
+        "FLOW pipeline\n"
+        "  grep(file=\"x\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    _compile_expecting_error(src, tmp_path / "out", "E_GO_008")
+
+
+def test_E_GO_009_impl_mode_sql(tmp_path: Path) -> None:
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "CONTRACT OrderRow\n"
+        "  SHAPE: {id: int}\n"
+        "STEP q\n"
+        "  TAKES: name: str\n"
+        "  GIVES: rows: List<OrderRow>\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode: sql\n"
+        "    db: crm\n"
+        "    query: |\n"
+        "      SELECT id FROM t WHERE name = :name\n"
+        "FLOW pipeline\n"
+        "  q(name=\"alice\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+        "  databases:\n"
+        "    crm:\n"
+        "      driver: sqlite\n"
+        "      url: \":memory:\"\n"
+    )
+    _compile_expecting_error(src, tmp_path / "out", "E_GO_009")
+
+
+def test_E_GO_010_impl_mode_mcp_tool(tmp_path: Path) -> None:
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP call\n"
+        "  TAKES: payload: str\n"
+        "  GIVES: result: str\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode: mcp_tool\n"
+        "    server: docs\n"
+        "    tool: search\n"
+        "    args: {q: \"${payload}\"}\n"
+        "    parse: json\n"
+        "FLOW pipeline\n"
+        "  call(payload=\"x\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+        "  mcp_servers:\n"
+        "    docs:\n"
+        "      transport: stdio\n"
+        "      command: \"my-mcp\"\n"
+    )
+    _compile_expecting_error(src, tmp_path / "out", "E_GO_010")
+
+
+def test_E_GO_012_test_block(tmp_path: Path) -> None:
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP load\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "FLOW pipeline\n"
+        "  load(x=\"hi\")\n"
+        "TEST sanity:\n"
+        "  FLOW: pipeline\n"
+        "  WITH:\n"
+        "    x: \"hi\"\n"
+        "  EXPECTS:\n"
+        "    y: not_empty\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    _compile_expecting_error(src, tmp_path / "out", "E_GO_012")

@@ -23,7 +23,22 @@ from clio.emitters._shared_utils import (
     _to_class_name,
     _to_go_field_name,
 )
-from clio.ir.graph import FlowGraph, StepIR
+from clio.ir.graph import (
+    ApiInvokeIR,
+    CliInvokeIR,
+    FlowCallIR,
+    FlowGraph,
+    ForEachIR,
+    IfBlockIR,
+    MatchBlockIR,
+    McpToolImplIR,
+    RescueBlockIR,
+    RestImplIR,
+    ShellImplIR,
+    SqlImplIR,
+    StepIR,
+    WhileBlockIR,
+)
 
 _GO_VERSION = "1.22"
 
@@ -206,4 +221,126 @@ def render_contracts_go(graph: FlowGraph) -> str | None:
     return "\n".join(parts)
 
 
+# ---------------------------------------------------------------------------
+# Compile-time validation: refuse unsupported IR constructs (E_GO_001..012)
+# ---------------------------------------------------------------------------
+
+_GO_E_001_MSG = (
+    "E_GO_001: target: go can only embed exact step bodies in Go (LANG: go or "
+    "LANG: auto). For Python/Bash/etc., use --target python (or --target "
+    "claude-skill to let the LLM host drive the flow); for shell glue "
+    "specifically, use impl.mode: shell which target: go supports natively "
+    "(currently deferred to v0.20.x — see E_GO_008)."
+)
+_GO_E_002_MSG = (
+    "E_GO_002: target: go does not subprocess 'claude -p'. Use --target python, "
+    "--target mcp-server, or --target claude-cli."
+)
+_GO_E_003_MSG = (
+    "E_GO_003: target: go ships Anthropic and OpenAI SDKs only. Use --target "
+    "python for Bedrock/Vertex."
+)
+_GO_E_004_MSG = (
+    "E_GO_004: target: go needs at least one FLOW to emit cmd/<flow>/main.go."
+)
+_GO_E_005_MSG = (
+    "E_GO_005: target: go v0.20.0 does not yet support invoke.protocol: openai. "
+    "Use --target python until the v0.20.x OpenAI emitter ships."
+)
+_GO_E_006_MSG = (
+    "E_GO_006: target: go v0.20.0 does not yet support FLOW composition. Use "
+    "--target python until the v0.20.x sub-flow emitter ships."
+)
+_GO_E_007_MSG = (
+    "E_GO_007: target: go v0.20.0 does not yet support impl.mode: rest. Use "
+    "--target python until the v0.20.x REST emitter ships."
+)
+_GO_E_008_MSG = (
+    "E_GO_008: target: go v0.20.0 does not yet support impl.mode: shell. Use "
+    "--target python until the v0.20.x shell emitter ships."
+)
+_GO_E_009_MSG = (
+    "E_GO_009: target: go v0.20.0 does not yet support impl.mode: sql. Use "
+    "--target python until the v0.20.x SQL emitter ships."
+)
+_GO_E_010_MSG = (
+    "E_GO_010: target: go v0.20.0 does not yet support impl.mode: mcp_tool. "
+    "Use --target python until the v0.20.x MCP emitter ships."
+)
+_GO_E_012_MSG = (
+    "E_GO_012: target: go v0.20.0 does not yet emit TEST blocks as `go test`. "
+    "Use --target python until the v0.20.x TEST emitter ships."
+)
+
+_GO_OK_LANGS: frozenset[str | None] = frozenset({"go", "auto", None})
+
+
+def _walk_chain(items: tuple) -> None:  # type: ignore[type-arg]
+    """Recursively walk a FLOW chain and raise on unsupported IR nodes."""
+    for it in items:
+        if isinstance(it, FlowCallIR):
+            raise ValueError(_GO_E_006_MSG)
+        if isinstance(it, IfBlockIR):
+            _walk_chain(it.then_body)
+            _walk_chain(it.else_body)
+        elif isinstance(it, MatchBlockIR):
+            for case in it.cases:
+                _walk_chain(case.body)
+        elif isinstance(it, WhileBlockIR):
+            _walk_chain(it.body)
+        elif isinstance(it, ForEachIR):
+            _walk_chain(it.body)
+        elif isinstance(it, RescueBlockIR):
+            _walk_chain(it.body)
+
+
+def validate_graph_for_go(graph: FlowGraph) -> None:
+    """Raise ValueError with an E_GO_NNN code if the graph uses any feature
+    outside v0.20.0 scope. Runs before any file is written."""
+    # E_GO_006: multiple FLOWs means FLOW composition (entry is ambiguous)
+    if len(graph.flows) > 1:
+        raise ValueError(_GO_E_006_MSG)
+
+    # E_GO_004: no FLOW at all
+    if len(graph.flows) == 0:
+        raise ValueError(_GO_E_004_MSG)
+
+    # E_GO_012: TEST blocks
+    if graph.tests:
+        raise ValueError(_GO_E_012_MSG)
+
+    for step in graph.steps:
+        if not isinstance(step, StepIR):
+            continue
+
+        # E_GO_001: LANG not go/auto/None on an exact step
+        if step.mode == "exact" and step.lang not in _GO_OK_LANGS:
+            raise ValueError(
+                f"{_GO_E_001_MSG} (step={step.name!r}, lang={step.lang!r})"
+            )
+
+        # invoke.* checks
+        if isinstance(step.invoke, CliInvokeIR):
+            raise ValueError(_GO_E_002_MSG)
+        if isinstance(step.invoke, ApiInvokeIR):
+            if step.invoke.protocol in {"bedrock", "vertex"}:
+                raise ValueError(_GO_E_003_MSG)
+            if step.invoke.protocol == "openai":
+                raise ValueError(_GO_E_005_MSG)
+
+        # impl.mode checks
+        if isinstance(step.impl, RestImplIR):
+            raise ValueError(_GO_E_007_MSG)
+        if isinstance(step.impl, ShellImplIR):
+            raise ValueError(_GO_E_008_MSG)
+        if isinstance(step.impl, SqlImplIR):
+            raise ValueError(_GO_E_009_MSG)
+        if isinstance(step.impl, McpToolImplIR):
+            raise ValueError(_GO_E_010_MSG)
+
+    # Walk chain for nested FlowCallIR (E_GO_006 via composition inside chain)
+    if graph.flow is not None:
+        _walk_chain(graph.flow.chain)
+        for rescue in graph.flow.rescues:
+            _walk_chain(rescue.body)
 

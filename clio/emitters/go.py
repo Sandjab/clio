@@ -24,6 +24,7 @@ from clio.emitters._go_helpers import (
     render_cmd_main_go,
     render_contracts_go,
     render_go_mod,
+    validate_graph_for_go,
 )
 from clio.emitters._go_runtime_templates import (
     render_clio_runtime_cache,
@@ -46,6 +47,7 @@ class GoEmitter(BaseEmitter):
 
         `source_path` is accepted and ignored (consistent with python,
         mcp-server, langgraph emitters)."""
+        validate_graph_for_go(graph)
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "go.mod").write_text(render_go_mod(graph))
         pkg = _go_module_name(graph)  # NOT _safe_package_name — Go needs lowercase
