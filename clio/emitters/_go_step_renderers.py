@@ -96,6 +96,15 @@ def render_exact_step_go(
 # ---------------------------------------------------------------------------
 # Judgment step renderer (Anthropic SDK path)
 
+# Go source fragment for the system prompt — used in both the simple path
+# and the retry-loop path. Kept as a constant to stay within the 120-char
+# Python source line limit.
+_GO_SYSTEM_PARAM = (
+    '[]anthropic.TextBlockParam{{Text: "You are a precise function.'
+    " Return only valid JSON matching the requested output schema."
+    ' No prose."}}'
+)
+
 
 def _cache_ttl_seconds(cache: CacheConfigIR | None) -> int | None:
     """Resolve a CacheConfigIR into a TTL in seconds, or None for permanent.
@@ -115,10 +124,42 @@ def _cache_ttl_seconds(cache: CacheConfigIR | None) -> int | None:
     return 0
 
 
+def _on_fail_chain_parts(
+    step: StepIR,
+) -> tuple[int, str | None, str | None]:
+    """Extract (retry_count, fallback_step_name, abort_msg) from the ON_FAIL chain.
+
+    Returns (0, None, None) when there is no chain.
+    escalate is a no-op in v0.20.0 (single model per emission).
+    """
+    if step.on_fail is None:
+        return 0, None, None
+
+    retry_count = 0
+    fallback_step_name: str | None = None
+    abort_msg: str | None = None
+
+    for s in step.on_fail.strategies:
+        if s.kind == "retry" and s.max_retries is not None:
+            retry_count = s.max_retries
+        elif s.kind == "fallback":
+            # Prefer the resolved StepIR name; fall back to the name string.
+            if s.fallback_step is not None:
+                fallback_step_name = s.fallback_step.name
+            else:
+                fallback_step_name = s.fallback_step_name
+        elif s.kind == "abort":
+            abort_msg = s.abort_message or ""
+        # escalate: no-op in v0.20.0
+
+    return retry_count, fallback_step_name, abort_msg
+
+
+
 def render_judgment_step_go(step: StepIR, graph: FlowGraph) -> str:
     """Render steps/NN_<name>.go for a judgment step using anthropic-sdk-go.
 
-    Body shape:
+    Body shape (no ON_FAIL):
       1. Build prompt from inputs (JSON-marshal In struct).
       2. Cache lookup if CACHE is configured (with ttl pointer when ttl(Xh)).
       3. anthropic.NewClient → Messages.New with system=JSON-only directive,
@@ -129,6 +170,14 @@ def render_judgment_step_go(step: StepIR, graph: FlowGraph) -> str:
          outputs and plain structs — plain structs have no Validate method
          so the assertion is skipped at runtime).
       7. cache.Store if cache configured.
+
+    With ON_FAIL chain present:
+      - retry(N): SDK call is wrapped in `for attempt := 0; attempt < N; attempt++`
+        with exponential backoff via time.Sleep.
+      - fallback(step): after retry exhaustion, calls the named step with the
+        same inputs and propagates its output.
+      - abort(msg): returns a wrapped error with the configured message.
+      - escalate: no-op in v0.20.0 (single model per emission).
     """
     cls = _to_class_name(step.name)
     pkg = _go_module_name(graph)
@@ -145,6 +194,10 @@ def render_judgment_step_go(step: StepIR, graph: FlowGraph) -> str:
 
     cache_ttl = _cache_ttl_seconds(step.cache)
     has_cache = cache_ttl != 0  # None (permanent) or positive int → has cache
+
+    # ON_FAIL chain analysis
+    retry_count, fallback_step_name, abort_msg = _on_fail_chain_parts(step)
+    has_on_fail = retry_count > 0 or fallback_step_name is not None or abort_msg is not None
 
     cache_block_pre = ""
     cache_block_post = ""
@@ -189,6 +242,10 @@ def render_judgment_step_go(step: StepIR, graph: FlowGraph) -> str:
         '\t"context"',
         '\t"encoding/json"',
         '\t"fmt"',
+    ]
+    if has_on_fail and retry_count > 0:
+        imports.append('\t"time"')
+    imports += [
         "",
         '\t"github.com/anthropics/anthropic-sdk-go"',
     ]
@@ -233,43 +290,120 @@ def render_judgment_step_go(step: StepIR, graph: FlowGraph) -> str:
     if cache_block_pre:
         lines.append(cache_block_pre.rstrip("\n"))
         lines.append("")
-    lines.append("\tclient := anthropic.NewClient()")
-    lines.append("\tresp, err := client.Messages.New(ctx, anthropic.MessageNewParams{")
-    lines.append(f'\t\tModel:     "{model}",')
-    lines.append("\t\tMaxTokens: int64(8192),")
-    lines.append(
-        "\t\tSystem: []anthropic.TextBlockParam{"
-        '{Text: "You are a precise function. Return only valid JSON matching the requested output schema. No prose."}'
-        "},"
-    )
-    lines.append(
-        "\t\tMessages: []anthropic.MessageParam{"
-        "anthropic.NewUserMessage(anthropic.NewTextBlock(prompt))},"
-    )
-    lines.append("\t})")
-    lines.append("\tif err != nil {")
-    lines.append(f'\t\treturn {cls}Out{{}}, fmt.Errorf("{step.name}: anthropic: %w", err)')
-    lines.append("\t}")
-    lines.append("\tif len(resp.Content) == 0 {")
-    lines.append(f'\t\treturn {cls}Out{{}}, fmt.Errorf("{step.name}: empty response")')
-    lines.append("\t}")
-    lines.append("\traw := resp.Content[0].Text")
-    lines.append(f"\tvar out {cls}Out")
-    lines.append("\tif err := json.Unmarshal([]byte(raw), &out); err != nil {")
-    lines.append(f'\t\treturn {cls}Out{{}}, fmt.Errorf("{step.name}: unmarshal: %w", err)')
-    lines.append("\t}")
-    lines.append("\t// Validate per contract.")
-    lines.append(
-        "\tif validatable, ok := any(&out)"
-        '.(interface{ Validate(context.Context) error }); ok {'
-    )
-    lines.append("\t\tif err := validatable.Validate(ctx); err != nil {")
-    lines.append(f'\t\t\treturn {cls}Out{{}}, fmt.Errorf("{step.name}: validate: %w", err)')
-    lines.append("\t\t}")
-    lines.append("\t}")
-    if cache_block_post:
-        lines.append(cache_block_post.rstrip("\n"))
-    lines.append("\treturn out, nil")
+
+    if has_on_fail and retry_count > 0:
+        # Wrap SDK call in a retry loop with exponential backoff.
+        # On success, jump out of the loop via a named label.
+        lines.append(f"\tvar out {cls}Out")
+        lines.append(f"\tfor attempt := 0; attempt < {retry_count}; attempt++ {{")
+        lines.append("\t\tif attempt > 0 {")
+        lines.append(
+            "\t\t\ttime.Sleep(time.Duration(1<<uint(attempt-1)) * time.Second)"
+        )
+        lines.append("\t\t}")
+        lines.append("\t\tclient := anthropic.NewClient()")
+        lines.append(
+            "\t\tresp, respErr := client.Messages.New(ctx, anthropic.MessageNewParams{"
+        )
+        lines.append(f'\t\t\tModel:     "{model}",')
+        lines.append("\t\t\tMaxTokens: int64(8192),")
+        lines.append(f"\t\t\tSystem: {_GO_SYSTEM_PARAM},")
+        lines.append(
+            "\t\t\tMessages: []anthropic.MessageParam{"
+            "anthropic.NewUserMessage(anthropic.NewTextBlock(prompt))},"
+        )
+        lines.append("\t\t})")
+        lines.append("\t\tif respErr != nil {")
+        lines.append("\t\t\tcontinue")
+        lines.append("\t\t}")
+        lines.append("\t\tif len(resp.Content) == 0 {")
+        lines.append("\t\t\tcontinue")
+        lines.append("\t\t}")
+        lines.append("\t\traw := resp.Content[0].Text")
+        lines.append("\t\tif parseErr := json.Unmarshal([]byte(raw), &out); parseErr != nil {")
+        lines.append("\t\t\tcontinue")
+        lines.append("\t\t}")
+        lines.append(
+            "\t\tif validatable, ok := any(&out)"
+            '.(interface{ Validate(context.Context) error }); ok {'
+        )
+        lines.append("\t\t\tif validateErr := validatable.Validate(ctx); validateErr != nil {")
+        lines.append("\t\t\t\tcontinue")
+        lines.append("\t\t\t}")
+        lines.append("\t\t}")
+        if cache_block_post:
+            # Inline cache store inside successful retry path before return
+            for cline in cache_block_post.rstrip("\n").splitlines():
+                lines.append("\t" + cline.lstrip("\t"))
+        lines.append("\t\treturn out, nil")
+        lines.append("\t}")
+        lines.append("")
+        # After retry exhaustion: fallback then abort
+        if fallback_step_name is not None:
+            fb_cls = _to_class_name(fallback_step_name)
+            in_args = ", ".join(
+                f"{_to_go_field_name(f.name)}: in.{_to_go_field_name(f.name)}"
+                for f in step.takes
+            )
+            lines.append(f"\t// ON_FAIL fallback: {fallback_step_name}")
+            lines.append(
+                f"\tfbOut, fbErr := {fb_cls}(ctx, {fb_cls}In{{{in_args}}})"
+            )
+            lines.append("\tif fbErr != nil {")
+            if abort_msg is not None:
+                lines.append(
+                    f'\t\treturn {cls}Out{{}}, fmt.Errorf("{abort_msg}: %w", fbErr)'
+                )
+            else:
+                lines.append(
+                    f'\t\treturn {cls}Out{{}}, fmt.Errorf("{step.name}: fallback failed: %w", fbErr)'
+                )
+            lines.append("\t}")
+            # Copy the single gives field from fallback output to primary output
+            if step.gives is not None:
+                fb_field = _to_go_field_name(step.gives.name)
+                lines.append(f"\tout.{fb_field} = fbOut.{fb_field}")
+            lines.append("\treturn out, nil")
+        elif abort_msg is not None:
+            lines.append(
+                f'\treturn {cls}Out{{}}, fmt.Errorf("{abort_msg}")'
+            )
+    else:
+        # No ON_FAIL chain — original simple path.
+        lines.append("\tclient := anthropic.NewClient()")
+        lines.append("\tresp, err := client.Messages.New(ctx, anthropic.MessageNewParams{")
+        lines.append(f'\t\tModel:     "{model}",')
+        lines.append("\t\tMaxTokens: int64(8192),")
+        lines.append(f"\t\tSystem: {_GO_SYSTEM_PARAM},")
+        lines.append(
+            "\t\tMessages: []anthropic.MessageParam{"
+            "anthropic.NewUserMessage(anthropic.NewTextBlock(prompt))},"
+        )
+        lines.append("\t})")
+        lines.append("\tif err != nil {")
+        lines.append(f'\t\treturn {cls}Out{{}}, fmt.Errorf("{step.name}: anthropic: %w", err)')
+        lines.append("\t}")
+        lines.append("\tif len(resp.Content) == 0 {")
+        lines.append(f'\t\treturn {cls}Out{{}}, fmt.Errorf("{step.name}: empty response")')
+        lines.append("\t}")
+        lines.append("\traw := resp.Content[0].Text")
+        lines.append(f"\tvar out {cls}Out")
+        lines.append("\tif err := json.Unmarshal([]byte(raw), &out); err != nil {")
+        lines.append(f'\t\treturn {cls}Out{{}}, fmt.Errorf("{step.name}: unmarshal: %w", err)')
+        lines.append("\t}")
+        lines.append("\t// Validate per contract.")
+        lines.append(
+            "\tif validatable, ok := any(&out)"
+            '.(interface{ Validate(context.Context) error }); ok {'
+        )
+        lines.append("\t\tif err := validatable.Validate(ctx); err != nil {")
+        lines.append(f'\t\t\treturn {cls}Out{{}}, fmt.Errorf("{step.name}: validate: %w", err)')
+        lines.append("\t\t}")
+        lines.append("\t}")
+        if cache_block_post:
+            lines.append(cache_block_post.rstrip("\n"))
+        lines.append("\treturn out, nil")
+
     lines.append("}")
     lines.append("")
     return "\n".join(lines)

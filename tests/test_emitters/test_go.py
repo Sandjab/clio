@@ -629,3 +629,54 @@ def test_golden_go_parallel(tmp_path: Path) -> None:
     emitted = _read_tree(out)
     golden = _read_tree(golden_dir)
     assert emitted == golden, "Emitted tree differs from golden snapshot"
+
+
+# ---------------------------------------------------------------------------
+# Task 18 — ON_FAIL chain: retry / escalate / fallback / abort
+
+
+def test_judgment_step_wraps_in_retry_loop(tmp_path: Path) -> None:
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP detect\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  judgment\n"
+        '  ON_FAIL: retry(3) then abort("ouch")\n'
+        "FLOW pipeline\n"
+        '  detect(x="hi")\n'
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile(src, out)
+    body = (out / "steps" / "01_detect.go").read_text()
+    assert "for attempt := 0; attempt < 3; attempt++ {" in body
+    assert "time.Sleep" in body
+    assert 'fmt.Errorf("ouch' in body
+
+
+def test_judgment_step_fallback_step(tmp_path: Path) -> None:
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP detect\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  judgment\n"
+        '  ON_FAIL: retry(2) then fallback(naive) then abort("done")\n'
+        "STEP naive\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "FLOW pipeline\n"
+        '  detect(x="hi")\n'
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile(src, out)
+    body = (out / "steps" / "01_detect.go").read_text()
+    assert "Naive(ctx, " in body
