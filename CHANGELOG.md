@@ -6,8 +6,8 @@ Minor release introducing the **sixth compilation target `target: go`** — emit
 
 ### Added
 
-- **`target: go` — sixth compilation target.** v0.20.0 scope covers CONTRACT, exact (LANG: go) and judgment (anthropic-sdk-go v1.43.0), IF/MATCH/WHILE, FOR EACH (sequential + parallel via `golang.org/x/sync/errgroup`), RESCUE, ON_FAIL chain (retry with exponential backoff / fallback / abort), CACHE (layout interchangeable with python target), RESOURCES. Four emitter modules under `clio/emitters/` (`go.py`, `_go_helpers.py`, `_go_step_renderers.py`, `_go_runtime_templates.py`, `_go_flow_renderer.py`), each under 300 LOC. Embedded Go runtime templates: `clio_runtime/validate` (jsonschema/v6 + x-clio-assert walker) and `clio_runtime/cache` (SHA256 content-addressed).
-- 12 new compile-time refused-combo errors (`E_GO_001` … `E_GO_012`, with E_GO_011 omitted since RESUME is a first-class IR node) documented in `docs/manual/06-troubleshooting.md`. Deferred-to-v0.20.x features (OpenAI SDK, FLOW composition, impl.mode rest/sql/mcp_tool/shell, TEST blocks) raise at compile time with a remediation pointer to `--target python`.
+- **`target: go` — sixth compilation target.** v0.20.0 scope covers CONTRACT, exact (LANG: go) and judgment (anthropic-sdk-go v1.43.0), IF/MATCH/WHILE, FOR EACH (sequential + parallel via `golang.org/x/sync/errgroup`), RESCUE, ON_FAIL chain (retry with exponential backoff / fallback / abort), CACHE (layout interchangeable with python target), RESOURCES. Five emitter modules under `clio/emitters/` (`go.py`, `_go_helpers.py`, `_go_step_renderers.py`, `_go_runtime_templates.py`, `_go_flow_renderer.py`). Embedded Go runtime templates: `clio_runtime/validate` (jsonschema/v6 + x-clio-assert walker) and `clio_runtime/cache` (SHA256 content-addressed).
+- 11 new compile-time refused-combo errors (`E_GO_001` … `E_GO_012`, with E_GO_011 omitted since RESUME is a first-class IR node) documented in `docs/manual/06-troubleshooting.md`. Deferred-to-v0.20.x features (OpenAI SDK, FLOW composition, impl.mode rest/sql/mcp_tool/shell, TEST blocks) raise at compile time with a remediation pointer to `--target python`.
 
 ### Docs
 
