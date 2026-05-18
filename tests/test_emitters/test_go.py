@@ -554,6 +554,15 @@ def test_golden_go_judgment(tmp_path: Path) -> None:
 # Task 15 — sequential FOR EACH emission in flow.go
 
 
+def test_rescue_emits_defer_recover(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _compile(FIXTURES / "go_rescue.clio", out)
+    body = (out / "flow" / "flow.go").read_text()
+    assert "defer func() {" in body
+    assert "if r := recover(); r != nil" in body
+    assert "steps.Recover(ctx," in body
+
+
 def test_for_each_sequential(tmp_path: Path) -> None:
     """FOR EACH block renders as `for _, item := range <collection> { ... }`.
 

@@ -12,7 +12,18 @@ from clio.emitters._shared_utils import (
     _to_class_name,
     _to_go_field_name,
 )
-from clio.ir.graph import CallIR, ContractIR, FlowGraph, ForEachIR, IfBlockIR, MatchBlockIR, StepIR, WhileBlockIR
+from clio.ir.graph import (
+    CallIR,
+    ContractIR,
+    FlowGraph,
+    ForEachIR,
+    IfBlockIR,
+    MatchBlockIR,
+    RescueBlockIR,
+    ResumeIR,
+    StepIR,
+    WhileBlockIR,
+)
 
 
 def _go_kwarg_value(
@@ -96,6 +107,7 @@ def _render_chain_item(
     state_field_to_step: dict[str, StepIR],
     contracts_by_name: dict[str, ContractIR],
     scope_local: set[str],
+    rescues_by_step: dict[str, RescueBlockIR] | None = None,
 ) -> tuple[list[str], str]:
     """Render one chain item.  Returns (rendered_lines, new_prev_var).
 
@@ -110,8 +122,10 @@ def _render_chain_item(
 
     v0.20.0 supports: `CallIR`, `IfBlockIR`, `MatchBlockIR`, `WhileBlockIR`,
     and sequential `ForEachIR` (T15).  Parallel `ForEachIR` raises
-    `NotImplementedError` and is handled in T17.
+    `NotImplementedError` and is handled in T17.  RESCUE wrapping (T16) is
+    applied at the `CallIR` level when `rescues_by_step` contains the step.
     """
+    _rescues = rescues_by_step or {}
     if isinstance(item, CallIR):
         step = steps_by_name.get(item.step_name)
         if step is None or step.mode not in ("exact", "judgment"):
@@ -126,6 +140,76 @@ def _render_chain_item(
             scope_local,
         )
         out_var = f"{step.name}Out"
+
+        # RESCUE: if this step has a rescue handler and we are at the top-level
+        # scope (not inside FOR EACH / IF / etc.), wrap the call in an IIFE with
+        # a deferred recover so the handler body runs on panic.
+        if item.step_name in _rescues and not scope_local:
+            rb = _rescues[item.step_name]
+            body_indent = indent + "\t"
+            on_fail_indent = indent + "\t\t\t"
+            # Build the deferred recover block first (inserted before the protected call).
+            defer_lines: list[str] = [
+                f"{body_indent}defer func() {{",
+                f"{body_indent}\tif r := recover(); r != nil {{",
+            ]
+            # Render rescue body steps.  Each non-terminal CallIR uses a
+            # simplified error path (no `return nil, err` — deferred funcs
+            # cannot propagate errors to the outer caller; on-fail errors are
+            # discarded here, matching the python emitter's semantics).
+            for sub in rb.body:
+                if isinstance(sub, ResumeIR):
+                    # RESUME(<fallback_step>.<field>) — update state with the
+                    # fallback result so the outer flow can continue.
+                    # The fallback step was already called above and its typed
+                    # output is in <fallback_step>Out.
+                    fallback_out_var = f"{sub.fallback_step}Out"
+                    if step.gives is not None:
+                        gf = _to_go_field_name(sub.field_name)
+                        defer_lines.append(
+                            f"{on_fail_indent}state[\"{step.gives.name}\"] = "
+                            f"{fallback_out_var}.{gf}"
+                        )
+                elif isinstance(sub, CallIR):
+                    sub_step = steps_by_name.get(sub.step_name)
+                    if sub_step is None or sub_step.mode not in ("exact", "judgment"):
+                        continue
+                    sub_cls = _to_class_name(sub_step.name)
+                    sub_input = _kwargs_to_step_input(
+                        sub, sub_step, contracts_by_name, state_field_to_step, scope_local,
+                    )
+                    sub_out_var = f"{sub.step_name}Out"
+                    defer_lines.append(
+                        f"{on_fail_indent}{sub_out_var}, _ := steps.{sub_cls}(ctx, {sub_input})"
+                    )
+                    # Do NOT write to state here: if the rescue body ends with
+                    # RESUME(<this_step>.<field>), the RESUME terminal writes
+                    # the extracted field value into state.  For abort-terminated
+                    # rescues there is no continuation, so state writes are moot.
+                # Other node types inside rescue body are not supported in v0.20.0.
+            defer_lines.extend([
+                f"{body_indent}\t}}",
+                f"{body_indent}}}()",
+            ])
+            # Build the IIFE: opener → defer block → protected call → closer.
+            rescue_lines: list[str] = [f"{indent}func() {{"]
+            rescue_lines.extend(defer_lines)
+            # Protected step call — uses panic(err) instead of return nil, err
+            # so the deferred recover catches it.
+            rescue_lines.append(
+                f"{body_indent}{out_var}, err := steps.{cls}(ctx, {input_init})"
+            )
+            rescue_lines.append(f"{body_indent}if err != nil {{")
+            rescue_lines.append(f"{body_indent}\tpanic(err)")
+            rescue_lines.append(f"{body_indent}}}")
+            if step.gives is not None:
+                rescue_lines.append(
+                    f'{body_indent}state["{step.gives.name}"] = {out_var}'
+                )
+            rescue_lines.append(f"{indent}}}()")
+            rescue_lines.append("")
+            return rescue_lines, out_var
+
         rendered: list[str] = [
             f"{indent}{out_var}, err := steps.{cls}(ctx, {input_init})",
             f"{indent}if err != nil {{",
@@ -153,6 +237,7 @@ def _render_chain_item(
                 state_field_to_step=state_field_to_step,
                 contracts_by_name=contracts_by_name,
                 scope_local=scope_local,
+                rescues_by_step=_rescues,
             )
             lines.extend(sub_lines)
         # else branch
@@ -166,6 +251,7 @@ def _render_chain_item(
                     state_field_to_step=state_field_to_step,
                     contracts_by_name=contracts_by_name,
                     scope_local=scope_local,
+                    rescues_by_step=_rescues,
                 )
                 lines.extend(sub_lines)
         lines.append(f"{indent}}}")
@@ -210,6 +296,7 @@ def _render_chain_item(
                     state_field_to_step=state_field_to_step,
                     contracts_by_name=contracts_by_name,
                     scope_local=scope_local,
+                    rescues_by_step=_rescues,
                 )
                 match_lines.extend(sub_lines)
         match_lines.append(f"{indent}}}")
@@ -228,6 +315,7 @@ def _render_chain_item(
                 state_field_to_step=state_field_to_step,
                 contracts_by_name=contracts_by_name,
                 scope_local=scope_local,
+                rescues_by_step=_rescues,
             )
             while_lines.extend(sub_lines)
         while_lines.append(f"{indent}}}")
@@ -262,6 +350,7 @@ def _render_chain_item(
                 state_field_to_step=state_field_to_step,
                 contracts_by_name=contracts_by_name,
                 scope_local=inner_scope,
+                rescues_by_step=_rescues,
             )
             for_lines.extend(sub_lines)
         for_lines.append(f"{indent}}}")
@@ -296,6 +385,10 @@ def render_flow_go(graph: FlowGraph) -> str:
     for s in graph.steps:
         if isinstance(s, StepIR) and s.gives is not None:
             state_field_to_step[s.gives.name] = s
+    # Maps protected step name → RescueBlockIR for RESCUE handlers (T16).
+    rescues_by_step: dict[str, RescueBlockIR] = {
+        rb.step_name: rb for rb in graph.flow.rescues
+    }
 
     lines: list[str] = [
         "package flow",
@@ -322,6 +415,7 @@ def render_flow_go(graph: FlowGraph) -> str:
             state_field_to_step=state_field_to_step,
             contracts_by_name=contracts_by_name,
             scope_local=set(),
+            rescues_by_step=rescues_by_step,
         )
         lines.extend(elem_lines)
     lines.append("\treturn state, nil")

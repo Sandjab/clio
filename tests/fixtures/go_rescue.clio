@@ -1,0 +1,22 @@
+STEP risky
+  TAKES: x: str
+  GIVES: y: str
+  MODE:  exact
+  LANG:  go
+
+STEP recover
+  TAKES: x: str
+  GIVES: y: str
+  MODE:  exact
+  LANG:  go
+
+FLOW pipeline
+  risky(x="hi")
+
+  RESCUE risky:
+    -> recover(x="hi")
+    -> RESUME(recover.y)
+
+RESOURCES
+  target: go
+  models: [haiku]
