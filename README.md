@@ -66,6 +66,7 @@ The same `.clio` source compiles to different targets:
 | `mcp-server`   | MCP server (FLOW = tool, judgment via `sampling/createMessage`, exact via the same runtime as `python`) |
 | `langgraph`    | LangGraph StateGraph (single-step IF / MATCH branches, sequential chain only — multi-step branches deferred) |
 | `claude-skill` | Claude Code skill directory (`SKILL.md` + `scripts/` + `schemas/` + `prompts/`); LLM-host-orchestrated, no external runtime |
+| `go`           | Go module (`flow.Run` package + `cmd/<flow>/main.go`); single static binary, Anthropic judgment, goroutine-parallel FOR EACH |
 | `rust` / `docker` | *(planned)* not yet implemented; the emitter interface is target-agnostic, only the dispatch is missing |
 
 ## Quick start
@@ -210,7 +211,7 @@ docs/
 
 ## Current status
 
-**v0.19.0 (current)**: **5 compilation targets** (`claude-cli`, `python`, `mcp-server`, `langgraph`, `claude-skill`) + **`clio import`** (skill → `.clio` recovery, sidecar or LLM-assisted). **1067 unit tests + 1 xfail + gated e2e (incl. 5 opt-in `e2e_llm`).**
+**v0.19.0 (current)**: **6 compilation targets** (`claude-cli`, `python`, `mcp-server`, `langgraph`, `claude-skill`, `go`) + **`clio import`** (skill → `.clio` recovery, sidecar or LLM-assisted). **1067 unit tests + 1 xfail + gated e2e (incl. 5 opt-in `e2e_llm`).**
 
 What's in the language today:
 - **Control flow**: sequential chains, `FOR EACH`, `FOR EACH ... PARALLEL AS <name>`, `IF/ELSE` (with `and` / `or` composition since v0.12), `MATCH/CASE/DEFAULT`, `WHILE ... MAX N` (composed conditions in v0.12 too).

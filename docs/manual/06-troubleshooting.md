@@ -441,6 +441,90 @@ def my_step(*, input_field: str) -> dict:
 
 Use the bundled `scripts/_validate.py` to check the return value against `schemas/NN_<step_name>.output.json` during development.
 
+## `target: go` errors (v0.20.0+)
+
+### E_GO_001 — `ValueError: target=go only accepts LANG: go or LANG: auto on exact steps`
+
+**Cause**: an `exact` STEP declares `LANG: python`, `LANG: bash`, `LANG: rust`, or `LANG: node`. The Go emitter cannot embed a non-Go step body in a Go binary.
+
+**Fix**: set `LANG: go` (or omit LANG so it defaults to `auto` → Go). For Python step bodies, compile with `--target python` instead.
+
+### E_GO_002 — `ValueError: target=go does not support invoke.mode: cli`
+
+**Cause**: a judgment STEP declares `invoke.mode: cli`. There is no `claude` subprocess available inside a Go binary.
+
+**Fix**: remove the `invoke:` block (the Go emitter defaults to `invoke.api.anthropic`) or compile with `--target claude-cli`.
+
+### E_GO_003 — `ValueError: target=go does not support invoke.api.bedrock / vertex`
+
+**Cause**: a judgment STEP uses `invoke.api.bedrock` or `invoke.api.vertex`. These are not wired in v0.20.0.
+
+**Fix**: use `invoke.api.anthropic` (the default for the Go target), or compile to `--target python` for full protocol coverage.
+
+### E_GO_005 — `ValueError: target=go does not support invoke.api.openai`
+
+**Cause**: a judgment STEP uses `invoke.api.openai` (OpenAI-compat SDK). OpenAI-compat is not wired in v0.20.0.
+
+**Fix**: use `--target python`, which supports LiteLLM / OpenRouter / Ollama / vLLM via the OpenAI-compat path. OpenAI support for the Go target is tracked for v0.20.x.
+
+### E_GO_006 — `ValueError: target=go does not support FLOW composition (sub-flow calls) in v0.20.0`
+
+**Cause**: the source contains a `FlowCallIR` site (a signed FLOW called as a step inside another FLOW).
+
+**Fix**: compile to `--target python` or `--target mcp-server` for full sub-flow support. FLOW composition for the Go target is tracked for v0.20.x. As a workaround, inline the sub-flow's steps directly in the parent FLOW.
+
+### E_GO_007 — `ValueError: target=go does not support impl.mode: rest in v0.20.0`
+
+**Cause**: a STEP declares `impl.mode: rest`. HTTP client generation for the Go target is deferred.
+
+**Fix**: compile to `--target python` or `--target mcp-server`. REST support for Go is tracked for v0.20.x.
+
+### E_GO_008 — `ValueError: target=go does not support impl.mode: shell in v0.20.0`
+
+**Cause**: a STEP declares `impl.mode: shell`. Shell subprocess emission for the Go target is deferred.
+
+**Fix**: compile to `--target python` or `--target mcp-server`. Shell support for Go is tracked for v0.20.x.
+
+### E_GO_009 — `ValueError: target=go does not support impl.mode: sql in v0.20.0`
+
+**Cause**: a STEP declares `impl.mode: sql`. Database access for the Go target is deferred.
+
+**Fix**: compile to `--target python` or `--target mcp-server`. SQL support for Go is tracked for v0.20.x.
+
+### E_GO_010 — `ValueError: target=go does not support impl.mode: mcp_tool in v0.20.0`
+
+**Cause**: a STEP declares `impl.mode: mcp_tool`. MCP tool client generation for the Go target is deferred.
+
+**Fix**: compile to `--target python` or `--target mcp-server`. MCP tool support for Go is tracked for v0.20.x.
+
+### E_GO_011 — `ValueError: target=go does not support --from-step resume in v0.20.0`
+
+**Cause**: you passed `--from-step N` to the Go binary (or tried to configure resume in the flow). State-file resume for the Go target is deferred.
+
+**Fix**: compile to `--target python` for `--from-step N` resume. Go resume is tracked for v0.20.x.
+
+### E_GO_012 — `ValueError: target=go does not support TEST blocks in v0.20.0`
+
+**Cause**: the source contains a `TEST` block. Go test generation is deferred.
+
+**Fix**: compile to `--target python`, which emits pytest files under `<output>/tests/`. Go test generation is tracked for v0.20.x.
+
+### `go: command not found` when running a compiled Go target
+
+The Go toolchain is not installed or not on PATH.
+
+**Fix**: install Go ≥ 1.21 from [go.dev/dl](https://go.dev/dl/). Verify with `go version`. The CLIO compiler itself does not need Go; only the emitted project does.
+
+### `go mod tidy` reports missing `github.com/anthropics/anthropic-sdk-go`
+
+The emitted project declares the Anthropic Go SDK as a dependency in `go.mod`. `go mod tidy` will fetch it.
+
+**Fix**: run `go mod tidy` inside the emitted project directory, then `go build` as normal. Requires internet access for the first build (subsequent builds use the module cache).
+
+### `cgo: C compiler not found` when building with the default sqlite driver
+
+If the emitted project was compiled from a source using `impl.mode: sql` with `driver: sqlite`, the generated code uses `modernc.org/sqlite` (pure Go, no CGo required). This error should not appear with v0.20.0 scope (sql is deferred — E_GO_009). If you see it with a future version, check your Go module's `go.mod` for the correct driver import.
+
 ## At runtime (after `bash run.sh` / `python -m flow_name`)
 
 ### `pydantic_core.ValidationError: ASSERT failed: (urgency_score >= 0.0) and (urgency_score <= 1.0)`
