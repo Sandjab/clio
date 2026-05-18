@@ -17,12 +17,13 @@ from clio.emitters._shared_utils import (
     _to_class_name,
     _to_go_field_name,
     _type_to_go,
+    _uses_contract_refs,
 )
 from clio.ir.graph import CacheConfigIR, ContractIR, FlowGraph, StepIR
 
 
 def _step_in_out_struct(
-    step: StepIR, contracts: dict[str, ContractIR]
+    step: StepIR, contracts: dict[str, ContractIR], *, qualifier: str = ""
 ) -> tuple[str, str]:
     """Return (in_struct_body, out_struct_body) for the step's typed stubs.
 
@@ -31,44 +32,56 @@ def _step_in_out_struct(
 
     In struct: one field per entry in step.takes.
     Out struct: one field for step.gives (singular), or empty when None.
+
+    `qualifier` is forwarded to `_type_to_go` for ContractRef rendering.
+    Step files (in the `steps/` package) pass `qualifier="contracts"` so
+    that contract types are emitted as `contracts.CustomerRisk` rather than
+    the bare `CustomerRisk` that is only valid within the `contracts/` package.
     """
     in_lines: list[str] = []
     for field in step.takes:
         go_field = _to_go_field_name(field.name)
-        go_type = _type_to_go(field.type, contracts)
+        go_type = _type_to_go(field.type, contracts, qualifier=qualifier)
         in_lines.append(f'\t{go_field} {go_type} `json:"{field.name}"`')
     in_body = "\n".join(in_lines)
 
     out_body = ""
     if step.gives is not None:
         go_field = _to_go_field_name(step.gives.name)
-        go_type = _type_to_go(step.gives.type, contracts)
+        go_type = _type_to_go(step.gives.type, contracts, qualifier=qualifier)
         out_body = f'\t{go_field} {go_type} `json:"{step.gives.name}"`'
 
     return in_body, out_body
 
 
 def render_exact_step_go(
-    step: StepIR, contracts: dict[str, ContractIR]
+    step: StepIR, contracts: dict[str, ContractIR], graph: FlowGraph
 ) -> str:
     """Render a single exact step as a Go source file in the `steps` package.
 
     Emits:
       - package steps
-      - import ("context")
+      - import ("context" [+ "<pkg>/contracts" when needed])
       - type <Step>In struct { ... }
       - type <Step>Out struct { ... }
       - func <Step>(ctx context.Context, in <Step>In) (<Step>Out, error)
           with panic("fill me in: <step_name>") body
     """
     step_name_go = _to_class_name(step.name)
-    in_body, out_body = _step_in_out_struct(step, contracts)
+    has_contracts = _uses_contract_refs(step)
+    qualifier = "contracts" if has_contracts else ""
+    in_body, out_body = _step_in_out_struct(step, contracts, qualifier=qualifier)
+
+    import_lines = ['\t"context"']
+    if has_contracts:
+        pkg = _go_module_name(graph)
+        import_lines += ["", f'\t"{pkg}/contracts"']
 
     lines: list[str] = [
         "package steps",
         "",
         "import (",
-        '\t"context"',
+        *import_lines,
         ")",
         "",
         f"type {step_name_go}In struct {{",
@@ -182,7 +195,9 @@ def render_judgment_step_go(step: StepIR, graph: FlowGraph) -> str:
     cls = _to_class_name(step.name)
     pkg = _go_module_name(graph)
     contracts_by_name = {c.name: c for c in graph.contracts}
-    in_body, out_body = _step_in_out_struct(step, contracts_by_name)
+    has_contract_refs = _uses_contract_refs(step)
+    qualifier = "contracts" if has_contract_refs else ""
+    in_body, out_body = _step_in_out_struct(step, contracts_by_name, qualifier=qualifier)
 
     # Resolve model: first declared in RESOURCES
     model_short = (
@@ -251,6 +266,8 @@ def render_judgment_step_go(step: StepIR, graph: FlowGraph) -> str:
     ]
     if has_cache:
         imports.append(f'\t"{pkg}/clio_runtime/cache"')
+    if has_contract_refs:
+        imports.append(f'\t"{pkg}/contracts"')
 
     lines: list[str] = [
         "package steps",

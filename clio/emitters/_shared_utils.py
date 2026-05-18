@@ -451,7 +451,9 @@ def _to_go_field_name(name: str) -> str:
     return "".join(p[:1].upper() + p[1:] for p in parts)
 
 
-def _type_to_go(t: TypeExpr, contracts: dict[str, ContractIR]) -> str:
+def _type_to_go(
+    t: TypeExpr, contracts: dict[str, ContractIR], *, qualifier: str = ""
+) -> str:
     """Render a CLIO TypeExpr as a Go type expression.
 
     Used both inline (struct field types) and standalone (variable types).
@@ -459,9 +461,15 @@ def _type_to_go(t: TypeExpr, contracts: dict[str, ContractIR]) -> str:
     anonymous Go struct with json struct tags so that `encoding/json` round-trips
     field names without manual mapping. EnumType emits `string` — the schema-level
     constraint enforces the value set at Validate() time; generating named Go
-    enum types is deferred to a future refactor."""
+    enum types is deferred to a future refactor.
+
+    `qualifier`, when non-empty, prefixes ContractRef names with the given
+    package qualifier (e.g. `qualifier="contracts"` → `contracts.CustomerRisk`).
+    Step files that live in a separate `steps/` package need this to reference
+    types from the `contracts/` package; contracts.go itself uses bare names
+    (same package) and must leave `qualifier` at its default empty string."""
     if isinstance(t, ConstrainedType):
-        return _type_to_go(t.base, contracts)
+        return _type_to_go(t.base, contracts, qualifier=qualifier)
     if isinstance(t, PrimitiveType):
         return _GO_PRIMITIVES[t.name]
     if isinstance(t, EnumType):
@@ -470,14 +478,17 @@ def _type_to_go(t: TypeExpr, contracts: dict[str, ContractIR]) -> str:
         # enum types are deferred to a future refactor.
         return "string"
     if isinstance(t, ListType):
-        return f"[]{_type_to_go(t.inner, contracts)}"
+        return f"[]{_type_to_go(t.inner, contracts, qualifier=qualifier)}"
     if isinstance(t, RecordType):
         fields = "; ".join(
-            f'{_to_go_field_name(fname)} {_type_to_go(ftype, contracts)} '
+            f'{_to_go_field_name(fname)} {_type_to_go(ftype, contracts, qualifier=qualifier)} '
             f'`json:"{fname}"`'
             for fname, ftype in t.fields
         )
         return f"struct {{ {fields} }}"
     if isinstance(t, ContractRef):
-        return _to_class_name(t.name)
+        cls = _to_class_name(t.name)
+        if qualifier:
+            return f"{qualifier}.{cls}"
+        return cls
     raise ValueError(f"unsupported TypeExpr for Go target: {type(t).__name__}")

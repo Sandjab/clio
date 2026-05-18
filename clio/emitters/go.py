@@ -89,7 +89,7 @@ class GoEmitter(BaseEmitter):
                     steps_dir.mkdir(parents=True, exist_ok=True)
                 filename = f"{step_idx:02d}_{step.name}.go"
                 if step.mode == "exact":
-                    src = render_exact_step_go(step, contracts_by_name)
+                    src = render_exact_step_go(step, contracts_by_name, graph)
                 else:
                     src = render_judgment_step_go(step, graph)
                 (steps_dir / filename).write_text(src)

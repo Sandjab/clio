@@ -10,6 +10,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"customer_retention/clio_runtime/cache"
+	"customer_retention/contracts"
 )
 
 type DetectChurnIn struct {
@@ -17,7 +18,7 @@ type DetectChurnIn struct {
 }
 
 type DetectChurnOut struct {
-	Risks []CustomerRisk `json:"risks"`
+	Risks []contracts.CustomerRisk `json:"risks"`
 }
 
 // DetectChurn implements the 'detect_churn' judgment step (Anthropic SDK).
