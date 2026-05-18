@@ -548,3 +548,40 @@ def test_golden_go_judgment(tmp_path: Path) -> None:
     emitted = _read_tree(out)
     golden = _read_tree(golden_dir)
     assert emitted == golden, "Emitted tree differs from golden snapshot"
+
+
+# ---------------------------------------------------------------------------
+# Task 15 — sequential FOR EACH emission in flow.go
+
+
+def test_for_each_sequential(tmp_path: Path) -> None:
+    """FOR EACH block renders as `for _, item := range <collection> { ... }`.
+
+    The loop variable is added to scope_local so that the inner step call
+    resolves `item` as a bare identifier rather than a state lookup.
+    """
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP load\n"
+        "  TAKES: file: str\n"
+        "  GIVES: items: List<str>\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "STEP process\n"
+        "  TAKES: item: str\n"
+        "  GIVES: result: str\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "FLOW pipeline\n"
+        "  load(file=\"in.csv\")\n"
+        "    -> FOR EACH item IN items:\n"
+        "         process(item=item)\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile(src, out)
+    body = (out / "flow" / "flow.go").read_text()
+    assert "for _, item := range" in body
+    assert "steps.Process(ctx," in body

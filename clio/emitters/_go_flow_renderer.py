@@ -1,8 +1,8 @@
 """Renderer for the top-level flow orchestrator (`flow/flow.go`).
 
 Emits `func Run(ctx, kwargs) (state, error)` that chains every item in
-graph.flow.chain.  v0.20.0 scope: sequential chain + IF/ELSE (T12).
-T13-T15 will extend `_render_chain_item` with MATCH/WHILE/FOR EACH.
+graph.flow.chain.  v0.20.0 scope: sequential chain + IF/ELSE (T12),
+MATCH (T13), WHILE (T14), sequential FOR EACH (T15).
 """
 from __future__ import annotations
 
@@ -12,13 +12,14 @@ from clio.emitters._shared_utils import (
     _to_class_name,
     _to_go_field_name,
 )
-from clio.ir.graph import CallIR, ContractIR, FlowGraph, IfBlockIR, MatchBlockIR, StepIR, WhileBlockIR
+from clio.ir.graph import CallIR, ContractIR, FlowGraph, ForEachIR, IfBlockIR, MatchBlockIR, StepIR, WhileBlockIR
 
 
 def _go_kwarg_value(
     value: object,
     contracts: dict[str, ContractIR],
     state_field_to_step: dict[str, StepIR],
+    scope_local: set[str] | None = None,
 ) -> str:
     """Render one CallIR kwarg value as a Go expression.
 
@@ -26,13 +27,19 @@ def _go_kwarg_value(
     - Reference ``@<field>`` — the field name is the GIVES name of some prior
       step.  We emit a state-based type assertion:
           state["<field>"].(steps.<StepCls>Out).<GoField>
+      When <field> is in `scope_local` (a FOR EACH loop variable), we render
+      it as the bare identifier instead: just `<field>` (no state lookup).
       This is the same pattern used by `_go_condition_expr` for IF conditions,
       so the two readers are consistent with the writer.
     - Literal (str / int / float / bool) — rendered as a Go literal.
       Plain strings that do not start with ``@`` are string literals.
     """
+    _scope = scope_local or set()
     if isinstance(value, str) and value.startswith("@"):
         ref = value[1:]  # the state-dict key (= the prior step's GIVES name)
+        if ref in _scope:
+            # Loop variable — use bare identifier (no state lookup needed).
+            return ref
         step = state_field_to_step.get(ref)
         if step is not None:
             cls = _to_class_name(step.name)
@@ -57,11 +64,15 @@ def _kwargs_to_step_input(
     step: StepIR,
     contracts: dict[str, ContractIR],
     state_field_to_step: dict[str, StepIR],
+    scope_local: set[str] | None = None,
 ) -> str:
     """Render the ``steps.<Step>In{...}`` initialisation from CallIR.kwargs.
 
     Each kwarg pair binds a TAKES field name to either a literal value or a
     reference into a prior step's typed output (``@<field>`` syntax).
+
+    `scope_local` is forwarded to `_go_kwarg_value` so that FOR EACH loop
+    variables are rendered as bare identifiers rather than state lookups.
 
     Iterates ``call.kwargs`` directly — no assumptions about GIVES/TAKES field
     name alignment between adjacent steps.  Mirrors the python emitter's
@@ -71,7 +82,7 @@ def _kwargs_to_step_input(
     parts: list[str] = []
     for name, value in call.kwargs:
         gf = _to_go_field_name(name)
-        rendered = _go_kwarg_value(value, contracts, state_field_to_step)
+        rendered = _go_kwarg_value(value, contracts, state_field_to_step, scope_local)
         parts.append(f"{gf}: {rendered}")
     return f"steps.{cls}In{{ {', '.join(parts)} }}"
 
@@ -97,8 +108,9 @@ def _render_chain_item(
     to the StepIR that produced it.  Used by `_go_condition_expr` to resolve
     the Go type assertion for `state[<key>].(steps.<Cls>Out)`.
 
-    v0.20.0 supports: `CallIR`, `IfBlockIR`.  Other block kinds raise
-    `NotImplementedError`; T13-T15 will add MATCH/WHILE/FOR EACH.
+    v0.20.0 supports: `CallIR`, `IfBlockIR`, `MatchBlockIR`, `WhileBlockIR`,
+    and sequential `ForEachIR` (T15).  Parallel `ForEachIR` raises
+    `NotImplementedError` and is handled in T17.
     """
     if isinstance(item, CallIR):
         step = steps_by_name.get(item.step_name)
@@ -111,6 +123,7 @@ def _render_chain_item(
             step,
             contracts_by_name,
             state_field_to_step,
+            scope_local,
         )
         out_var = f"{step.name}Out"
         rendered: list[str] = [
@@ -220,6 +233,40 @@ def _render_chain_item(
         while_lines.append(f"{indent}}}")
         while_lines.append("")
         return while_lines, prev_var
+
+    if isinstance(item, ForEachIR) and not item.parallel:
+        # Render the collection expression from the state dict.  The collection
+        # is a slice stored under `item.collection` (the GIVES field name of the
+        # step that produced it).  We need to type-assert to the producing step's
+        # Out struct and then access the field by its Go name so that `range`
+        # iterates over a typed slice rather than `any`.
+        coll_name = item.collection
+        coll_step = state_field_to_step.get(coll_name)
+        if coll_step is not None:
+            coll_cls = _to_class_name(coll_step.name)
+            coll_gf = _to_go_field_name(coll_name)
+            coll_expr = f'state["{coll_name}"].(steps.{coll_cls}Out).{coll_gf}'
+        else:
+            # Unknown collection source — fall back to untyped (should not
+            # happen after IR validation).
+            coll_expr = f'state["{coll_name}"].([]any)'
+        var = item.loop_var
+        for_lines: list[str] = [f"{indent}for _, {var} := range {coll_expr} {{"]
+        inner_indent = indent + "\t"
+        inner_scope = scope_local | {var}
+        cur_fe = prev_var
+        for sub in item.body:
+            sub_lines, cur_fe = _render_chain_item(
+                sub, cur_fe, inner_indent,
+                steps_by_name=steps_by_name,
+                state_field_to_step=state_field_to_step,
+                contracts_by_name=contracts_by_name,
+                scope_local=inner_scope,
+            )
+            for_lines.extend(sub_lines)
+        for_lines.append(f"{indent}}}")
+        for_lines.append("")
+        return for_lines, prev_var
 
     raise NotImplementedError(
         f"chain item kind not yet supported in v0.20.0: {type(item).__name__}"
