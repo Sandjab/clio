@@ -1,43 +1,29 @@
 # Changelog
 
-## [Unreleased]
+## [0.20.0] — 2026-05-18
+
+Minor release introducing the **sixth compilation target `target: go`** — emits a runnable Go module (`flow.Run(ctx, kwargs)` package + `cmd/<flow>/main.go` CLI) using `anthropic-sdk-go v1.43.0` for judgment steps and `errgroup` for parallel FOR EACH. Cache layout is byte-identical to `target: python` so `.cache/` directories swap between targets. Net test count `1067 → 1133` (+66). PR #71 (squash-merged on `main` at `0323ee8`), 31 commits + 21 TDD tasks executed via subagent-driven development. Gemini cycle closed with 1 HIGH applied (cache_block_post indentation in retry loop). Two Critical bugs caught by code review during the sprint: validate.go template read `m["fn"]` instead of `"func"` (every `len()`-based ASSERT silently false); pinned `anthropic-sdk-go v0.5.0` which doesn't exist (Go module proxy returns `unknown revision`) — corrected to `v1.43.0` + v1.x plain-field API after Context7 verification. CI runner caught a third post-PR bug: step files referenced contract types by their bare class name (`CustomerRisk`) instead of the qualified `contracts.CustomerRisk` — fixed before merge.
 
 ### Added
 
-- **`target: go` — sixth compilation target.** Emits a Go module importable as
-  a package (`flow.Run(ctx, kwargs)`) and runnable as a CLI
-  (`cmd/<flow>/main.go`). v0.20.0 scope covers CONTRACT, exact (LANG: go) and
-  judgment (Anthropic SDK via `net/http`), IF/MATCH/WHILE, FOR EACH (sequential
-  + parallel via `errgroup`), RESCUE, ON_FAIL chain, CACHE (layout
-  interchangeable with python target), RESOURCES. New emitter module
-  `clio/emitters/go.py` + helper module `clio/emitters/_go_helpers.py`.
-  Embedded Go runtime templates: `clio_runtime/validate` (jsonschema/v6 +
-  x-clio-assert walker) and `clio_runtime/cache` (SHA256 content-addressed).
-- 12 new compile-time refused-combo errors (`E_GO_001` … `E_GO_012`)
-  documented in `docs/manual/06-troubleshooting.md`. Deferred-to-v0.20.x
-  features (OpenAI SDK, FLOW composition, impl.mode rest/sql/mcp_tool/shell,
-  RESUME, TEST blocks) raise at compile time with a remediation pointer.
+- **`target: go` — sixth compilation target.** v0.20.0 scope covers CONTRACT, exact (LANG: go) and judgment (anthropic-sdk-go v1.43.0), IF/MATCH/WHILE, FOR EACH (sequential + parallel via `golang.org/x/sync/errgroup`), RESCUE, ON_FAIL chain (retry with exponential backoff / fallback / abort), CACHE (layout interchangeable with python target), RESOURCES. Five emitter modules under `clio/emitters/` (`go.py`, `_go_helpers.py`, `_go_step_renderers.py`, `_go_runtime_templates.py`, `_go_flow_renderer.py`). Embedded Go runtime templates: `clio_runtime/validate` (jsonschema/v6 + x-clio-assert walker) and `clio_runtime/cache` (SHA256 content-addressed).
+- 11 new compile-time refused-combo errors (`E_GO_001` … `E_GO_012`, with E_GO_011 omitted since RESUME is a first-class IR node) documented in `docs/manual/06-troubleshooting.md`. Deferred-to-v0.20.x features (OpenAI SDK, FLOW composition, impl.mode rest/sql/mcp_tool/shell, TEST blocks) raise at compile time with a remediation pointer to `--target python`.
 
 ### Docs
 
-- `docs/COMPILATION_TARGETS.md`: `target: go` moves from "Future" to
-  "Implemented"; canonical entry added with layout, use, refused combos,
-  inherited features, logging, resume, cache, and model-name-mapping sections.
+- `docs/COMPILATION_TARGETS.md`: `target: go` moves from "Future" to "Implemented"; canonical entry added with layout, use, refused combos, inherited features, logging, resume, cache, and model-name-mapping sections.
 - `docs/LANGUAGE_SPEC.md`: Go added to the `LANG per step` target table.
-- `docs/manual/04-targets.md`: Go column added to the cross-target feature
-  matrix; `go` section added to the "When to use which" guide.
-- `docs/manual/06-troubleshooting.md`: entries for E_GO_001..E_GO_010 and
-  E_GO_012, plus "missing Go toolchain" and module-cache notes.
-- `README.md`: `go` added to the compilation targets table; "5 emitters"
-  updated to "6 emitters" in the Current status section.
+- `docs/manual/04-targets.md`: Go column added to the cross-target feature matrix; `go` section added to the "When to use which" guide.
+- `docs/manual/06-troubleshooting.md`: entries for E_GO_001..E_GO_010 and E_GO_012, plus "missing Go toolchain" and module-cache notes.
+- `docs/manual/03-cookbook.md`: new recipe "Compile a flow to a Go binary" walks through `clio compile → go mod tidy → go build → run`.
+- `README.md`: `go` added to the compilation targets table; "5 emitters" updated to "6 emitters" in the Current status section.
 
 ### Tests
 
-- 65 new tests across `tests/test_emitters/test_go.py`,
-  `tests/test_emitters/test_go_compile.py`, and
-  `tests/test_emitters/test_shared_utils.py`. Net `1067 → 1132` (+65).
+- 66 new tests across `tests/test_emitters/test_go.py`, `tests/test_emitters/test_go_compile.py`, and `tests/test_emitters/test_shared_utils.py`. Net `1067 → 1133` (+66). The `test_go_compile.py` smoke runs `go build ./...` against the minimal contract fixture; skipped locally when Go is not on PATH but fires green on CI (caught the bare-class-name bug pre-merge).
 - 5 new fixtures: `tests/fixtures/{go_minimal,go_judgment,go_control_flow,go_parallel,go_rescue}.clio`.
-- 3 new golden snapshots: `tests/fixtures/expected_go/{go_minimal,go_judgment,go_parallel}/`.
+- 4 new golden snapshots: `tests/fixtures/expected_go/{go_minimal,go_judgment,go_parallel,mvp_go}/`.
+- New example: `examples/mvp_go.clio` (customer-retention flow exercising CONTRACT + exact + judgment + CACHE + ON_FAIL chain end-to-end).
 
 ## [0.19.0] — 2026-05-17
 
