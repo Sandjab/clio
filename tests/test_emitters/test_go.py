@@ -491,6 +491,22 @@ def test_if_else_emits_go_branches(tmp_path: Path) -> None:
     assert "steps.StoreRecord(ctx," in body
 
 
+def test_match_emits_go_switch(tmp_path: Path) -> None:
+    """MATCH/CASE block renders as a Go switch statement in flow.go.
+
+    The scrutinee is the typed state-field access for the step GIVES field,
+    and each CASE arm becomes a quoted string constant (enum idents are
+    rendered as Go string constants, consistent with IF condition rendering).
+    """
+    out = tmp_path / "out"
+    _compile(FIXTURES / "go_control_flow.clio", out)
+    body = (out / "flow" / "flow.go").read_text()
+    assert 'switch state["assessment"].(steps.DetectOut).Level {' in body
+    assert 'case "low":' in body
+    assert 'case "mid":' in body
+    assert 'case "high":' in body
+
+
 def test_golden_go_judgment(tmp_path: Path) -> None:
     """Full-tree comparison against the committed golden snapshot."""
     golden_dir = EXPECTED_GO / "go_judgment"

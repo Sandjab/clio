@@ -1,5 +1,5 @@
 CONTRACT risk_assessment
-  SHAPE: {level: enum(low|high), score: float}
+  SHAPE: {level: enum(low|mid|high), score: float}
 
 STEP detect
   TAKES: x: str
@@ -19,12 +19,28 @@ STEP store_record
   MODE:  exact
   LANG:  go
 
+STEP archive
+  TAKES: x: str
+  GIVES: archived: bool
+  MODE:  exact
+  LANG:  go
+
+STEP flag
+  TAKES: x: str
+  GIVES: flagged: bool
+  MODE:  exact
+  LANG:  go
+
 FLOW pipeline
   detect(x="incoming")
   -> IF assessment.level == high:
        notify_team(x="incoming")
   ELSE:
        store_record(x="incoming")
+  -> MATCH assessment.level:
+       CASE low:  archive(x="incoming")
+       CASE mid:  flag(x="incoming")
+       CASE high: flag(x="incoming")
 
 RESOURCES
   target: go

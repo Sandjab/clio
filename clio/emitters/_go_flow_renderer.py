@@ -12,7 +12,7 @@ from clio.emitters._shared_utils import (
     _to_class_name,
     _to_go_field_name,
 )
-from clio.ir.graph import CallIR, ContractIR, FlowGraph, IfBlockIR, StepIR
+from clio.ir.graph import CallIR, ContractIR, FlowGraph, IfBlockIR, MatchBlockIR, StepIR
 
 
 def _go_kwarg_value(
@@ -160,6 +160,48 @@ def _render_chain_item(
         # prev_var after a branch block stays the pre-branch value; the two
         # branches may each update state under different keys.
         return lines, prev_var
+
+    if isinstance(item, MatchBlockIR):
+        # Render the scrutinee as a typed state-field access, mirroring the
+        # pattern used by _go_condition_expr for IF conditions.
+        state_field = item.state_field
+        step = state_field_to_step.get(state_field)
+        if step is not None:
+            cls = _to_class_name(step.name)
+            type_assert = f"(steps.{cls}Out)"
+        else:
+            type_assert = "(any)"
+        if state_field in scope_local:
+            base = f"{state_field}.{type_assert}"
+        else:
+            base = f'state["{state_field}"].{type_assert}'
+        gf = _to_go_field_name(item.sub_field)
+        subject_expr = f"{base}.{gf}"
+        match_lines: list[str] = [f"{indent}switch {subject_expr} {{"]
+        inner_indent = indent + "\t"
+        for arm in item.cases:
+            if arm.value is None:
+                # DEFAULT arm — Go uses `default:`.
+                match_lines.append(f"{inner_indent}default:")
+            else:
+                # Enum idents and string literals both render as double-quoted
+                # Go string constants (same convention as _go_condition_expr's
+                # "ident" / "str" literal rendering).
+                escaped = arm.value.replace("\\", "\\\\").replace('"', '\\"')
+                match_lines.append(f'{inner_indent}case "{escaped}":')
+            cur = prev_var
+            for sub in arm.body:
+                sub_lines, cur = _render_chain_item(
+                    sub, cur, inner_indent + "\t",
+                    steps_by_name=steps_by_name,
+                    state_field_to_step=state_field_to_step,
+                    contracts_by_name=contracts_by_name,
+                    scope_local=scope_local,
+                )
+                match_lines.extend(sub_lines)
+        match_lines.append(f"{indent}}}")
+        match_lines.append("")
+        return match_lines, prev_var
 
     raise NotImplementedError(
         f"chain item kind not yet supported in v0.20.0: {type(item).__name__}"
