@@ -1,0 +1,20 @@
+STEP load
+  TAKES: file: str
+  GIVES: items: List<str>
+  MODE:  exact
+  LANG:  go
+
+STEP classify
+  TAKES: item: str
+  GIVES: label: str
+  MODE:  judgment
+  CACHE: ttl(24h)
+
+FLOW pipeline
+  load(file="in.csv")
+    -> FOR EACH item IN items PARALLEL AS labels:
+         classify(item=item)
+
+RESOURCES
+  target: go
+  models: [haiku]

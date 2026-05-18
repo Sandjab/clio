@@ -2,11 +2,12 @@
 
 Emits `func Run(ctx, kwargs) (state, error)` that chains every item in
 graph.flow.chain.  v0.20.0 scope: sequential chain + IF/ELSE (T12),
-MATCH (T13), WHILE (T14), sequential FOR EACH (T15).
+MATCH (T13), WHILE (T14), sequential FOR EACH (T15), parallel FOR EACH
+via errgroup (T17).
 """
 from __future__ import annotations
 
-from clio.emitters._go_helpers import _go_module_name
+from clio.emitters._go_helpers import _flow_uses_parallel, _go_module_name
 from clio.emitters._shared_utils import (
     _go_condition_expr,
     _to_class_name,
@@ -98,6 +99,16 @@ def _kwargs_to_step_input(
     return f"steps.{cls}In{{ {', '.join(parts)} }}"
 
 
+def _rewrite_return_in_goroutine(lines: list[str]) -> list[str]:
+    """Replace `return nil, err` with `return err` inside goroutine bodies.
+
+    CallIR-emitted error handling uses `return nil, err` (the Run function's
+    return signature).  Inside a goroutine passed to errgroup.Go the signature
+    is `func() error`, so the two-value return must become a single-value one.
+    """
+    return [line.replace("return nil, err", "return err") for line in lines]
+
+
 def _render_chain_item(
     item: object,
     prev_var: str,
@@ -108,6 +119,7 @@ def _render_chain_item(
     contracts_by_name: dict[str, ContractIR],
     scope_local: set[str],
     rescues_by_step: dict[str, RescueBlockIR] | None = None,
+    suppress_state_write: bool = False,
 ) -> tuple[list[str], str]:
     """Render one chain item.  Returns (rendered_lines, new_prev_var).
 
@@ -120,10 +132,15 @@ def _render_chain_item(
     to the StepIR that produced it.  Used by `_go_condition_expr` to resolve
     the Go type assertion for `state[<key>].(steps.<Cls>Out)`.
 
+    `suppress_state_write`: when True, the `state["<gives>"] = stepOut` write
+    is omitted.  Used inside parallel goroutine bodies to avoid a data race on
+    the shared state map.  The goroutine body writes its result into a
+    pre-allocated results slice instead (T17).
+
     v0.20.0 supports: `CallIR`, `IfBlockIR`, `MatchBlockIR`, `WhileBlockIR`,
-    and sequential `ForEachIR` (T15).  Parallel `ForEachIR` raises
-    `NotImplementedError` and is handled in T17.  RESCUE wrapping (T16) is
-    applied at the `CallIR` level when `rescues_by_step` contains the step.
+    sequential `ForEachIR` (T15), and parallel `ForEachIR` via errgroup (T17).
+    RESCUE wrapping (T16) is applied at the `CallIR` level when
+    `rescues_by_step` contains the step.
     """
     _rescues = rescues_by_step or {}
     if isinstance(item, CallIR):
@@ -218,8 +235,11 @@ def _render_chain_item(
         ]
         # Write the result into state under the GIVES field name (= the state-dict
         # key used by _go_condition_expr and _go_kwarg_value when reading back).
-        # Skip the write entirely for steps with no GIVES (side-effect-only).
-        if step.gives is not None:
+        # Skip the write when suppress_state_write=True (inside parallel goroutine
+        # bodies) to avoid concurrent writes to the shared state map — the parallel
+        # block writes collected results once after g.Wait() instead.
+        # Skip entirely for steps with no GIVES (side-effect-only).
+        if step.gives is not None and not suppress_state_write:
             rendered.append(f'{indent}state["{step.gives.name}"] = {out_var}')
         rendered.append("")
         return rendered, out_var
@@ -357,6 +377,74 @@ def _render_chain_item(
         for_lines.append("")
         return for_lines, prev_var
 
+    if isinstance(item, ForEachIR) and item.parallel:
+        # Parallel variant — errgroup.WithContext + pre-allocated result slice.
+        #
+        # Race-condition handling: goroutines each write to a distinct, pre-
+        # assigned slot of `_results` (index _i is owned by iteration _i).
+        # Go's memory model guarantees that errgroup.Wait() synchronises with
+        # all goroutines before the caller reads from _results, so no mutex is
+        # needed.  This mirrors the python emitter's pre-allocated _results list
+        # pattern (see _python_helpers.py:emit_parallel_for_each_python).
+        # After g.Wait() succeeds, `state[<collector>] = _results` is written
+        # once at the outer scope — parallel goroutines never touch `state`.
+        #
+        # Cap of 10 matches python's ThreadPoolExecutor(max_workers=10).
+        # Go 1.22+ scopes loop variables per-iteration, so no `item := item`
+        # capture copy is needed.
+        coll_name = item.collection
+        coll_step = state_field_to_step.get(coll_name)
+        if coll_step is not None:
+            coll_cls = _to_class_name(coll_step.name)
+            coll_gf = _to_go_field_name(coll_name)
+            coll_expr = f'state["{coll_name}"].(steps.{coll_cls}Out).{coll_gf}'
+        else:
+            coll_expr = f'state["{coll_name}"].([]any)'
+        var = item.loop_var
+        collector = item.collector  # state key for the collected results slice
+        inner_indent = indent + "\t\t\t"
+        inner_scope = scope_local | {var}
+        par_lines: list[str] = [
+            f"{indent}{{",
+            f"{indent}\t_items := {coll_expr}",
+            f"{indent}\t_results := make([]any, len(_items))",
+            f"{indent}\tg, ctx := errgroup.WithContext(ctx)",
+            f"{indent}\tg.SetLimit(10)",
+            f"{indent}\tfor _i, {var} := range _items {{",
+            # Go 1.22+ scopes loop variables per-iteration — no capture copy needed.
+            f"{indent}\t\tg.Go(func() error {{",
+        ]
+        cur_par = var
+        for sub in item.body:
+            sub_lines, cur_par = _render_chain_item(
+                sub, cur_par, inner_indent,
+                steps_by_name=steps_by_name,
+                state_field_to_step=state_field_to_step,
+                contracts_by_name=contracts_by_name,
+                scope_local=inner_scope,
+                rescues_by_step=_rescues,
+                suppress_state_write=True,
+            )
+            par_lines.extend(_rewrite_return_in_goroutine(sub_lines))
+        # Store the last step's output into the pre-allocated results slot.
+        # cur_par is now the Go identifier for the last body step's typed output.
+        par_lines.extend([
+            f"{inner_indent}_results[_i] = {cur_par}",
+            f"{inner_indent}return nil",
+            f"{indent}\t\t}})",
+            f"{indent}\t}}",
+            f"{indent}\tif err := g.Wait(); err != nil {{",
+            f"{indent}\t\treturn nil, err",
+            f"{indent}\t}}",
+        ])
+        if collector is not None:
+            par_lines.append(f'{indent}\tstate["{collector}"] = _results')
+        par_lines.extend([
+            f"{indent}}}",
+            "",
+        ])
+        return par_lines, prev_var
+
     raise NotImplementedError(
         f"chain item kind not yet supported in v0.20.0: {type(item).__name__}"
     )
@@ -390,15 +478,21 @@ def render_flow_go(graph: FlowGraph) -> str:
         rb.step_name: rb for rb in graph.flow.rescues
     }
 
+    # Build the import block dynamically so errgroup is only included when
+    # the flow contains a FOR EACH PARALLEL block (T17).
+    import_lines: list[str] = ['\t"context"', ""]
+    if _flow_uses_parallel(graph):
+        import_lines.append('\t"golang.org/x/sync/errgroup"')
+        import_lines.append("")
+    import_lines.append(f'\t"{pkg}/steps"')
+
     lines: list[str] = [
         "package flow",
         "",
         "// Auto-generated by CLIO. Do not edit by hand.",
         "",
         "import (",
-        '\t"context"',
-        "",
-        f'\t"{pkg}/steps"',
+        *import_lines,
         ")",
         "",
         "func Run(ctx context.Context, kwargs map[string]any) (map[string]any, error) {",

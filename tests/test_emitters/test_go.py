@@ -594,3 +594,38 @@ def test_for_each_sequential(tmp_path: Path) -> None:
     body = (out / "flow" / "flow.go").read_text()
     assert "for _, item := range" in body
     assert "steps.Process(ctx," in body
+
+
+# ---------------------------------------------------------------------------
+# Task 17 — parallel FOR EACH via errgroup
+
+
+def test_for_each_parallel_emits_errgroup(tmp_path: Path) -> None:
+    """FOR EACH PARALLEL renders as errgroup.WithContext + g.Go goroutines.
+
+    Race-condition handling: state writes are suppressed inside goroutine bodies;
+    results are collected into a pre-allocated slice indexed by loop position and
+    written to state[<collector>] once after g.Wait().  Go 1.22+ scopes loop
+    variables per-iteration so no `item := item` capture copy is emitted.
+    """
+    out = tmp_path / "out"
+    _compile(FIXTURES / "go_parallel.clio", out)
+    body = (out / "flow" / "flow.go").read_text()
+    assert "errgroup" in body
+    assert "g.SetLimit(10)" in body
+    assert "g.Go(func() error {" in body
+    assert "g.Wait()" in body
+    assert "item := item" not in body  # Go 1.22+ scoped loop var
+
+
+def test_golden_go_parallel(tmp_path: Path) -> None:
+    """Full-tree comparison against the committed golden snapshot."""
+    golden_dir = EXPECTED_GO / "go_parallel"
+    if not golden_dir.exists():
+        import pytest
+        pytest.skip("golden snapshot not yet generated")
+    out = tmp_path / "out"
+    _compile(FIXTURES / "go_parallel.clio", out)
+    emitted = _read_tree(out)
+    golden = _read_tree(golden_dir)
+    assert emitted == golden, "Emitted tree differs from golden snapshot"
