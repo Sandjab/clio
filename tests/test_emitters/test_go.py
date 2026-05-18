@@ -507,6 +507,36 @@ def test_match_emits_go_switch(tmp_path: Path) -> None:
     assert 'case "high":' in body
 
 
+def test_while_loop_emits_for_with_condition(tmp_path: Path) -> None:
+    """WHILE block emits a Go `for <cond> { ... }` loop."""
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "CONTRACT poll_result\n"
+        "  SHAPE: {done: bool}\n"
+        "\n"
+        "STEP poll\n"
+        "  TAKES: x: str\n"
+        "  GIVES: result: poll_result\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "\n"
+        "FLOW pipeline\n"
+        '  poll(x="start")\n'
+        "  -> WHILE result.done != true MAX 10:\n"
+        '    poll(x="job-id")\n'
+        "\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile(src, out)
+    body = (out / "flow" / "flow.go").read_text()
+    assert 'for state["result"].(steps.PollOut).Done != true {' in body, \
+           f"Expected WHILE→for loop in flow.go, got:\n{body}"
+    assert "steps.Poll(ctx," in body
+
+
 def test_golden_go_judgment(tmp_path: Path) -> None:
     """Full-tree comparison against the committed golden snapshot."""
     golden_dir = EXPECTED_GO / "go_judgment"

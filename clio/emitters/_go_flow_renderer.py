@@ -12,7 +12,7 @@ from clio.emitters._shared_utils import (
     _to_class_name,
     _to_go_field_name,
 )
-from clio.ir.graph import CallIR, ContractIR, FlowGraph, IfBlockIR, MatchBlockIR, StepIR
+from clio.ir.graph import CallIR, ContractIR, FlowGraph, IfBlockIR, MatchBlockIR, StepIR, WhileBlockIR
 
 
 def _go_kwarg_value(
@@ -202,6 +202,24 @@ def _render_chain_item(
         match_lines.append(f"{indent}}}")
         match_lines.append("")
         return match_lines, prev_var
+
+    if isinstance(item, WhileBlockIR):
+        cond = _go_condition_expr(item.condition, scope_local, state_field_to_step)
+        while_lines: list[str] = [f"{indent}for {cond} {{"]
+        inner_indent = indent + "\t"
+        cur_while = prev_var
+        for sub in item.body:
+            sub_lines, cur_while = _render_chain_item(
+                sub, cur_while, inner_indent,
+                steps_by_name=steps_by_name,
+                state_field_to_step=state_field_to_step,
+                contracts_by_name=contracts_by_name,
+                scope_local=scope_local,
+            )
+            while_lines.extend(sub_lines)
+        while_lines.append(f"{indent}}}")
+        while_lines.append("")
+        return while_lines, prev_var
 
     raise NotImplementedError(
         f"chain item kind not yet supported in v0.20.0: {type(item).__name__}"
