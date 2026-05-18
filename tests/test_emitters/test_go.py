@@ -911,6 +911,21 @@ def test_E_GO_010_impl_mode_mcp_tool(tmp_path: Path) -> None:
     _compile_expecting_error(src, tmp_path / "out", "E_GO_010")
 
 
+# ---------------------------------------------------------------------------
+# Task 21 — mvp_go.clio end-to-end golden snapshot
+
+
+def test_golden_mvp_go(tmp_path: Path) -> None:
+    """Full-tree comparison against the committed golden snapshot.
+
+    exercises/mvp_go.clio covers the full v0.20.0 surface:
+    CONTRACT + exact (LANG: go) + judgment + CACHE + ON_FAIL chain.
+    """
+    out = tmp_path / "out"
+    _compile(Path("examples/mvp_go.clio"), out)
+    assert _read_tree(out) == _read_tree(EXPECTED_GO / "mvp_go")
+
+
 def test_E_GO_012_test_block(tmp_path: Path) -> None:
     src = tmp_path / "src.clio"
     src.write_text(

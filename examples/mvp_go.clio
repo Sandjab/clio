@@ -1,0 +1,30 @@
+CONTRACT customer_risk
+  SHAPE: {client: str, risk: enum(low|mid|high), reason: str(max=300)}
+  ASSERT: len(reason) > 0
+
+STEP load_customers
+  TAKES: file: str
+  GIVES: customers: List<{name: str, revenue: float}>
+  MODE:  exact
+  LANG:  go
+
+STEP detect_churn_naive
+  TAKES: customers: List<{name: str, revenue: float}>
+  GIVES: risks: List<customer_risk>
+  MODE:  exact
+  LANG:  go
+
+STEP detect_churn
+  TAKES: customers: List<{name: str, revenue: float}>
+  GIVES: risks: List<customer_risk>
+  MODE:  judgment
+  CACHE: ttl(24h)
+  ON_FAIL: retry(3) then fallback(detect_churn_naive) then abort("churn detection exhausted")
+
+FLOW customer_retention
+  load_customers(file="customers.csv")
+    -> detect_churn(customers)
+
+RESOURCES
+  target: go
+  models: [haiku, sonnet, opus]
