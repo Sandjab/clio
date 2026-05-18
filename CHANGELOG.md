@@ -33,9 +33,9 @@
 
 ### Tests
 
-- 85 new tests across `tests/test_emitters/test_go.py`,
+- 65 new tests across `tests/test_emitters/test_go.py`,
   `tests/test_emitters/test_go_compile.py`, and
-  `tests/test_emitters/test_shared_utils.py`. Net `1067 → 1152`.
+  `tests/test_emitters/test_shared_utils.py`. Net `1067 → 1132` (+65).
 - 5 new fixtures: `tests/fixtures/{go_minimal,go_judgment,go_control_flow,go_parallel,go_rescue}.clio`.
 - 3 new golden snapshots: `tests/fixtures/expected_go/{go_minimal,go_judgment,go_parallel}/`.
 
