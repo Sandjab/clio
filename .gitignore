@@ -213,3 +213,6 @@ tmp/
 graph-ticket-*.png
 playground-*.png
 vfix_*.png
+
+# session-local manual test sandboxes (one subdir per probe: skill2clio, etc.)
+testprojects/
