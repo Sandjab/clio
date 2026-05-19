@@ -1,5 +1,25 @@
 # Changelog
 
+## [Unreleased]
+
+Consolidation pass on `clio import`, driven by dogfooding the LLM-assisted path against three hand-written third-party skills (`math-olympiad`, `agent-development`, `hook-development`). Two changes ship together because the same exploration proved both necessary.
+
+### Fixed
+
+- **`clio import` no longer crashes when the LLM produces a `.clio` that fails lexing, expression parsing, or cross-file resolution.** Prior behaviour: `_llm_validation.validate()` caught only `ParseError` and `IRBuildError`, so a `LexError` (unexpected character), `ExpressionError` (unknown function, malformed comparator), or `CompileError` (resolver failure on `FROM "..." IMPORT`) leaked as an uncaught Python traceback bypassing the retry loop. Now all five parser/IR exception classes are caught and turned into an error string that the retry prompt can show the model.
+
+### Improved
+
+- **`clio/prompts/skill_to_clio_system.md` gains a Few-shot example section** (≈125 lines) — one compact valid `.clio` (CONTRACT + exact loader + judgment step with `|` block-scalar `DESCRIPTION:` / `STRATEGIES:` + `FOR EACH PARALLEL`) plus a structured list of pitfalls the LLM repeatedly tripped over in dogfooding: multi-line `SHAPE: { ... }` rejected, `Optional<T>` rejected, nested generics rejected, `CACHE`/`ON_FAIL` are judgment-only, `MATCH` and `IF` require `<contract_field>.<sub_field>` (no bare identifiers), `impl.parse` ∈ {`json`, `none`}, numeric constraints (`int(min=N)`, `float(precision=N)`) rejected, reserved keywords (`sonnet`/`opus`/`haiku`/`python`/`bash`/…) cannot be enum values, step-call args must type-match the callee `TAKES`, `FLOW.GIVES` field names must match step productions. Dogfooding measured: LLM output grew 119 → 151 lines of valid `.clio` over the iteration cycle on `agent-development`, with a successful end-to-end round-trip (skill → `.clio` → `claude-skill` emitter → strict-mode re-import bit-perfect).
+
+### Tests
+
+- 3 new tests in `tests/test_skill_to_clio.py` exercising the retry-loop on `LexError`, `ExpressionError`, `CompileError` (mirror of the existing `ParseError`/`IRBuildError` cases). Net `1133 → 1136` (+3).
+
+### Surfaced (not fixed here — follow-ups)
+
+- **Doc/impl drift in `docs/LANGUAGE_SPEC.md`**: `Optional<T>` (line 155), `int(min=N, max=N)` (line 158, 1321), and `float(precision=N)` are documented as supported but the parser rejects them (`expected RBRACE, got LANGLE '<'` and `constrained types are only supported on str in v0.1`). Either the parser should be extended to honour the spec, or the spec tightened to match. Tracked separately.
+
 ## [0.20.0] — 2026-05-18
 
 Minor release introducing the **sixth compilation target `target: go`** — emits a runnable Go module (`flow.Run(ctx, kwargs)` package + `cmd/<flow>/main.go` CLI) using `anthropic-sdk-go v1.43.0` for judgment steps and `errgroup` for parallel FOR EACH. Cache layout is byte-identical to `target: python` so `.cache/` directories swap between targets. Net test count `1067 → 1133` (+66). PR #71 (squash-merged on `main` at `0323ee8`), 31 commits + 21 TDD tasks executed via subagent-driven development. Gemini cycle closed with 1 HIGH applied (cache_block_post indentation in retry loop). Two Critical bugs caught by code review during the sprint: validate.go template read `m["fn"]` instead of `"func"` (every `len()`-based ASSERT silently false); pinned `anthropic-sdk-go v0.5.0` which doesn't exist (Go module proxy returns `unknown revision`) — corrected to `v1.43.0` + v1.x plain-field API after Context7 verification. CI runner caught a third post-PR bug: step files referenced contract types by their bare class name (`CustomerRisk`) instead of the qualified `contracts.CustomerRisk` — fixed before merge.

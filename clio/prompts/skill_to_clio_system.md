@@ -54,6 +54,150 @@ Map the skill structure to CLIO as follows:
   `STRATEGIES`, `RESCUE`. Emit an annotation marking the omission instead
   of inventing values.
 
+# Few-shot example
+
+Below is a reference `.clio` for a tiny note-summarization skill (one exact
+loader, one judgment step, one FLOW with `FOR EACH PARALLEL`). It compiles
+successfully — match its style, indentation, and field syntax exactly.
+
+```clio
+CONTRACT note
+  SHAPE:  {path: str, body: str(max=4000)}
+  ASSERT: len(body) > 0
+
+CONTRACT summary
+  SHAPE: {path: str, gist: str(max=300), tags: List<str>}
+
+STEP load_notes
+  TAKES: file:  str
+  GIVES: notes: List<note>
+  MODE:  exact
+  impl:
+    mode:  shell
+    cmd:   "cat ${file}"
+    parse: json
+
+STEP summarize_note
+  TAKES: n: note
+  GIVES: s: summary
+  MODE:  judgment
+  CACHE: ttl(24h)
+  ON_FAIL: retry(2) then abort("summarization failed")
+  DESCRIPTION: |
+    Read the note body and produce a 1-2 sentence gist plus
+    up to 5 lowercase topical tags.
+  STRATEGIES: |
+    Meeting notes: extract decisions, not chat.
+    Bug reports: the gist is the symptom plus the root cause.
+
+FLOW summarize_folder
+  DESCRIPTION: "Summarize every note in a JSON file."
+  TAKES: file:      str
+  GIVES: summaries: List<summary>
+  load_notes(file=file)
+    -> FOR EACH n IN notes PARALLEL AS summaries:
+         summarize_note(n=n)
+```
+
+Key points to copy:
+
+- **Multi-line strings use `|` followed by an indented block** (see
+  `DESCRIPTION:` and `STRATEGIES:` on `summarize_note`). Never put a
+  newline inside a `"..."` quoted string — it is a single-line literal.
+- **Single-line strings use double quotes** (see `FLOW.DESCRIPTION:` and
+  `cmd: "cat ${file}"`).
+- **Indentation under a step / flow header is 2 spaces**, consistent for
+  every field. Fields are `KEY: value` pairs, one per line.
+- **Identifiers are `[a-zA-Z_][a-zA-Z0-9_]*`** — no `?`, `-`, or other
+  punctuation in step / contract / flow / field names.
+- **`SHAPE: { ... }` must be on a single line.** Multi-line record types
+  with each field on its own line are NOT supported by the parser. Pack
+  all fields inside one set of braces:
+  ```
+  CONTRACT t
+    SHAPE: {a: int, b: str(max=200), c: List<{k: str, v: int}>}
+  ```
+  Constraints supported on `str` ONLY: `str(max=N)`, `str(min=N)`.
+  No `int(min=N)`, `int(max=N)`, `float(precision=N)` — the parser rejects
+  any constraint on numeric types. Use `ASSERT: x >= 0` for numeric bounds.
+  Other type forms: `enum(a|b|c)`, `List<T>`, `Dict<K, V>`.
+- **No `Optional<T>`, no nested generics.** The parser rejects `Optional<T>`
+  entirely, plus any nested generic like `Dict<str, List<int>>`. For
+  optional fields, just make the field required and document the convention
+  in `DESCRIPTION` (e.g. accept empty string / empty list as "absent").
+  Nested records inside `List<>` are fine: `List<{k: str, v: int}>` parses.
+- **`FOR EACH <var> IN <coll> PARALLEL AS <out>:`** introduces a body
+  block that is indented one more level under the `:` line.
+- **`IF` condition shape**: `IF <contract_field>.<sub_field> <op> <literal>:`,
+  with `<op>` in `== != < <= > >=` and `<literal>` a string/number/bare enum
+  variant / `true` / `false`. The left side **must** be a dotted reference
+  to a CONTRACT field — not a bare `TAKES:` parameter (which is just `str`
+  or `int`). If you need to branch on a bare string parameter, first run
+  a judgment STEP that returns a CONTRACT with an enum field, then branch
+  on that contract's field.
+- **`IF / ELSE` alignment inside a chain**: when `IF` is reached via `-> IF cond:`,
+  the matching `ELSE:` aligns with the **`->` arrow**, NOT with `IF`. Bodies
+  go one indent deeper under each clause:
+  ```
+  validate_thing(thing=t)
+      -> IF result.valid:
+           use_it(thing=result)
+      ELSE:
+           abort("invalid")
+  ```
+- **`MATCH` only branches on `<contract_field>.<enum_subfield>`**, never on
+  a bare identifier. A `TAKES: mode: str` cannot be MATCH-ed directly. If
+  the source skill branches on a string mode, first wrap it as an enum
+  CONTRACT field (classify it through a judgment STEP), then MATCH on
+  `c.field`. Alternatively, use a chain of `IF / ELSE IF` (the parser does
+  not support `ELSE IF` — chain via nested `-> IF` in the `ELSE:` body).
+  CASE values are bare enum variants (no quotes):
+  ```
+  CONTRACT classification
+    SHAPE: {category: enum(bug|feature|praise|other)}
+
+  classify(text=text)
+    -> MATCH c.category:
+         CASE bug:     route_bug(c=c)
+         CASE feature: route_feature(c=c)
+         DEFAULT:      route_other(c=c)
+  ```
+- **`len()` is the only length function** — `length(...)` does not exist.
+- **`CACHE:` and `ON_FAIL:` are judgment-only.** Never emit them on a
+  `MODE: exact` step (the IR builder rejects it). For exact steps, use
+  shell-level retry inside the script or rely on the host runtime.
+  Conversely, `LANG:` (and `impl:`) is exact-only.
+- **`impl.parse` accepts only `json` or `none`** (or omit it — stdout is
+  then a raw `str`). No `parse: text`, `parse: yaml`, `parse: lines`, etc.
+  If the script emits non-JSON, omit `parse:` and let the caller treat
+  stdout as a string.
+- **Step call arguments are type-checked against the step's `TAKES:` block.**
+  `STEP s TAKES: x: my_contract` MUST be called with a value whose declared
+  type is exactly `my_contract`, not a bare `str`. Mismatches like
+  `s(x=request_description)` where `request_description` is a flow input of
+  type `str` will fail with `type mismatch on '<arg>'`. Either:
+  (a) re-type the FLOW input to the contract the step expects, or
+  (b) re-type the step's `TAKES:` to a primitive that matches the input,
+  or (c) insert an intermediate STEP that produces the expected contract.
+- **`FLOW.GIVES` field NAMES must match field names produced by steps in
+  the chain.** The IR builder cross-checks by NAME, not just by type.
+  Example: if the last step has `GIVES: result: validation_result`, the
+  FLOW must declare `GIVES: result: validation_result` (NOT
+  `GIVES: validation: validation_result` — the name `validation` is not
+  produced anywhere). For `FOR EACH x IN xs PARALLEL AS out:`, the
+  produced field name is `out`. **When in doubt, OMIT `FLOW.TAKES` /
+  `FLOW.GIVES`** — the IR infers them from the chain. Only `EXPOSE FLOW`
+  REQUIRES both blocks; an internal FLOW without them is legal.
+- **Reserved keywords cannot appear as identifiers or enum values.** If a
+  domain term collides with one of these, rename it (e.g. `model_sonnet`
+  instead of `sonnet`, or switch to `str` instead of an enum):
+  `STEP FLOW CONTRACT MODE exact judgment TAKES GIVES CACHE on off ttl
+  ON_FAIL retry then escalate fallback abort LANG python rust go node
+  bash auto IF ELSE MATCH CASE DEFAULT FOR EACH IN PARALLEL AS WHILE
+  and or target models claude-cli mcp-server langgraph claude-skill
+  haiku sonnet opus budget prefer strategy anthropic openai bedrock vertex
+  impl invoke rest code shell api cli enum SHAPE ASSERT RESOURCES`.
+
 # Annotation rules
 
 Emit `# CLIO-import: ...` line comments above any element whose origin is

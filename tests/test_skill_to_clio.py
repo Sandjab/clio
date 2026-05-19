@@ -164,6 +164,43 @@ def test_generate_retries_on_ir_build_error(tmp_path):
     assert out == _VALID_CLIO
 
 
+def test_generate_retries_on_lex_error(tmp_path):
+    from clio.skill_to_clio import generate
+
+    invalid = "STEP foo\n  ?\n"  # '?' is an unexpected character → LexError
+    client = _FakeClient([invalid, _VALID_CLIO])
+    out = generate(_tiny_skill(tmp_path), client=client)
+    assert out == _VALID_CLIO
+
+
+def test_generate_retries_on_expression_error(tmp_path):
+    from clio.skill_to_clio import generate
+
+    invalid = (
+        "CONTRACT t\n"
+        "  SHAPE: {x: int}\n"
+        "  ASSERT: length(x) > 0\n"  # 'length' is not a known function → ExpressionError
+        "STEP s\n  GIVES: r: t\n  MODE: judgment\n"
+        "FLOW f\n  s()\n"
+    )
+    client = _FakeClient([invalid, _VALID_CLIO])
+    out = generate(_tiny_skill(tmp_path), client=client)
+    assert out == _VALID_CLIO
+
+
+def test_generate_retries_on_compile_error(tmp_path):
+    from clio.skill_to_clio import generate
+
+    invalid = (
+        'FROM "missing.clio" IMPORT something\n'  # resolver rejects → CompileError
+        "STEP s\n  MODE: exact\n"
+        "FLOW f\n  s()\n"
+    )
+    client = _FakeClient([invalid, _VALID_CLIO])
+    out = generate(_tiny_skill(tmp_path), client=client)
+    assert out == _VALID_CLIO
+
+
 def test_generate_raises_after_retry_exhausted(tmp_path):
     from clio.skill_to_clio import GenerationError, generate
 

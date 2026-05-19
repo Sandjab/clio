@@ -10,6 +10,9 @@ caller so a change applies uniformly to both modules."""
 from __future__ import annotations
 
 from clio.ir.builder import IRBuildError, build_ir
+from clio.ir.resolver import CompileError
+from clio.parser.expressions import ExpressionError
+from clio.parser.lexer import LexError
 from clio.parser.parser import ParseError, parse
 
 
@@ -18,11 +21,11 @@ def validate(source: str) -> str | None:
     line/col on failure."""
     try:
         program = parse(source)
-    except ParseError as e:
+    except (LexError, ParseError, ExpressionError) as e:
         return str(e)
     try:
         build_ir(program)
-    except IRBuildError as e:
+    except (IRBuildError, CompileError) as e:
         return str(e)
     return None
 
