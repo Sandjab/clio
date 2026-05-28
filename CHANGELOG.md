@@ -1,8 +1,8 @@
 # Changelog
 
-## [Unreleased]
+## [0.21.0] — 2026-05-28
 
-v0.21 push to align `docs/LANGUAGE_SPEC.md` with what the parser actually accepts. The spec has documented `Dict<K, V>`, `Optional<T>`, and numeric/string constraints (`int(min, max)`, `float(precision)`, `str(min)`) since v0.1 but the parser rejected every one. This release closes all three.
+Minor release closing the **v0.21 spec-alignment trilogy** — the parser now accepts the three type-system extensions `docs/LANGUAGE_SPEC.md` has documented since v0.1: `Dict<K, V>`, `Optional<T>`, and numeric/string constraints (`int(min, max)`, `float(min, max, precision)`, `str(min)`). Three feature PRs squash-merged on `main` (PR #76 Dict, #77 Optional, #78 constraints), each gone through CI + Gemini review (10 inline comments total, 8 applied — 2 pushback as out-of-scope refactor candidates). Net test count `1136 → 1188` (+52: 6+5+8 parser, 3+3+5 IR, 6+7+7 cross-target smoke). Notable Gemini catches: an idiomatic-Go fix (no `*` on slices/maps which are already nilable), and a HIGH-severity bug where `Optional<str(max=200)>` silently dropped its `max_length` Field kwarg because `_field_from_schema` did not unwrap the `anyOf` Optional shape.
 
 ### Added
 
