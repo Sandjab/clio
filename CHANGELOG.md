@@ -1,12 +1,13 @@
 # Changelog
 
-## [Unreleased]
+## [0.20.1] — 2026-05-28
 
-Consolidation pass on `clio import`, driven by dogfooding the LLM-assisted path against three hand-written third-party skills (`math-olympiad`, `agent-development`, `hook-development`). Two changes ship together because the same exploration proved both necessary.
+Patch release consolidating `clio import` after dogfooding the LLM-assisted path against three hand-written third-party skills (`math-olympiad`, `agent-development`, `hook-development`), plus a catch-up bump of the in-package `__version__` that was missed in the v0.20.0 release-admin PR.
 
 ### Fixed
 
-- **`clio import` no longer crashes when the LLM produces a `.clio` that fails lexing, expression parsing, or cross-file resolution.** Prior behaviour: `_llm_validation.validate()` caught only `ParseError` and `IRBuildError`, so a `LexError` (unexpected character), `ExpressionError` (unknown function, malformed comparator), or `CompileError` (resolver failure on `FROM "..." IMPORT`) leaked as an uncaught Python traceback bypassing the retry loop. Now all five parser/IR exception classes are caught and turned into an error string that the retry prompt can show the model.
+- **`clio import` no longer crashes when the LLM produces a `.clio` that fails lexing, expression parsing, or cross-file resolution.** Prior behaviour: `_llm_validation.validate()` caught only `ParseError` and `IRBuildError`, so a `LexError` (unexpected character), `ExpressionError` (unknown function, malformed comparator), or `CompileError` (resolver failure on `FROM "..." IMPORT`) leaked as an uncaught Python traceback bypassing the retry loop. Now all five parser/IR exception classes are caught and turned into an error string that the retry prompt can show the model. (PR #74)
+- **`clio/__init__.py` `__version__` catches up to the project version.** v0.20.0's release-admin PR (#72) bumped `pyproject.toml` 0.19.0 → 0.20.0 but missed `clio/__init__.py`, which stayed at `"0.19.0"`. `ClaudeSkillEmitter` reads this constant when writing `.clio/manifest.json` (the sidecar that powers verbatim `clio import`), so v0.20.0-emitted skills stamped `clio_version: "0.19.0"` in their manifests — cosmetically wrong, no functional impact (hash-based dispatch in `clio import` does not consult the version field). Now both pin to `"0.20.1"` together.
 
 ### Improved
 
