@@ -470,23 +470,21 @@ def _output_schema_for_flow(graph: FlowGraph, flow: FlowIR | None = None) -> dic
     if last is None or last.gives is None:
         return None
     t = last.gives.type
+    by_name = {c.name: c for c in graph.contracts}
     # ContractRef → expand the contract's JSON schema inline
     if isinstance(t, ContractRef):
-        by_name = {c.name: c for c in graph.contracts}
         contract = by_name.get(t.name)
         if contract is None:
             return None
         return contract.json_schema
     # List<ContractRef> → inline items schema; never emit a $ref (clients can't resolve it)
     if isinstance(t, ListType) and isinstance(t.inner, ContractRef):
-        by_name = {c.name: c for c in graph.contracts}
         contract = by_name.get(t.inner.name)
         if contract is None:
             return None
         return {"type": "array", "items": contract.json_schema}
     # Dict<str, ContractRef> → inline additionalProperties schema
     if isinstance(t, DictType) and isinstance(t.value, ContractRef):
-        by_name = {c.name: c for c in graph.contracts}
         contract = by_name.get(t.value.name)
         if contract is None:
             return None
