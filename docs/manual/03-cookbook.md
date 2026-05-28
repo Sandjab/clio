@@ -1076,6 +1076,41 @@ runtime layer instead.
 `List<Optional<r>>` all parse. The natural read order matches Python:
 `Optional<X>` = `X | None`.
 
+## 27. Numeric and length constraints (v0.21)
+
+Constraints attach directly to primitive types and enforce ranges at the
+schema level — no runtime `ASSERT` needed for bounds.
+
+```
+CONTRACT measurement
+  SHAPE: {
+    label:   str(min=1, max=80),
+    count:   int(min=0, max=1000),
+    ratio:   float(min=0.0, max=1.0),
+    price:   float(precision=2)
+  }
+```
+
+**Renderings**:
+- **Pydantic** (python / mcp-server / langgraph / claude-skill):
+  `Field(min_length=1, max_length=80)`, `Field(ge=0, le=1000)`,
+  `Field(ge=0.0, le=1.0)`, `Field(multiple_of=0.01)` for the four fields
+  above.
+- **JSON Schema** (claude-cli, claude-skill, Go runtime): `minLength` /
+  `maxLength`, `minimum` / `maximum` (inclusive), `multipleOf` for
+  `precision`.
+- **Go**: the field type is unchanged (`string`, `int64`, `float64`);
+  constraints are enforced at runtime by the embedded `jsonschema/v6`
+  validator.
+
+**Semantic notes**:
+- `str(max=N)` means string LENGTH ≤ N. `int(max=N)` means VALUE ≤ N.
+  Context (the base) determines the meaning.
+- `float(precision=N)` is exact: the value must be a multiple of `10**-N`.
+  `precision=2` accepts `1.23` but rejects `1.234`.
+- `bool` accepts no constraints. Use `ASSERT` for cross-field constraints
+  (`ASSERT: end > start`).
+
 ## What's not in the cookbook (yet)
 
 - **Multi-field ASSERT** — accept `a > b` between two fields. Specced, planned.

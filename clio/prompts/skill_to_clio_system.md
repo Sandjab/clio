@@ -117,10 +117,14 @@ Key points to copy:
   CONTRACT t
     SHAPE: {a: int, b: str(max=200), c: List<{k: str, v: int}>}
   ```
-  Constraints supported on `str` ONLY: `str(max=N)`, `str(min=N)`.
-  No `int(min=N)`, `int(max=N)`, `float(precision=N)` — the parser rejects
-  any constraint on numeric types. Use `ASSERT: x >= 0` for numeric bounds.
-  Other type forms: `enum(a|b|c)`, `List<T>`, `Dict<K, V>`.
+  Constraints (v0.21+):
+    - `str(max=N)`, `str(min=N)` — string LENGTH (int values)
+    - `int(min=N, max=N)` — integer VALUE (inclusive)
+    - `float(min=N, max=N)` — numeric VALUE (inclusive, float values allowed)
+    - `float(precision=N)` — exactly N decimal places (renders as JSON Schema
+      `multipleOf: 10**-N`)
+  `bool` accepts no constraint. Other type forms: `enum(a|b|c)`, `List<T>`,
+  `Dict<K, V>`, `Optional<T>`.
 - **`Dict<K, V>` constraints (v0.21+):** the key type `K` MUST be `str`
   (`Dict<int, V>`, `Dict<enum(...), V>`, etc. are rejected at parse time —
   JSON object keys are strings, Go's `encoding/json` only natively supports

@@ -75,6 +75,16 @@ class ParseError(Exception):
 
 
 _PRIMITIVE_TYPES = {"int", "float", "str", "bool"}
+
+# v0.21 — allowed constraint names per primitive base. `bool` carries no
+# constraints. See LANGUAGE_SPEC.md §Constrained types for the semantics
+# (length for `str`, value for `int` / `float`, decimal places for
+# `float(precision=N)` which renders to JSON Schema `multipleOf: 10**-N`).
+_ALLOWED_CONSTRAINTS: dict[str, frozenset[str]] = {
+    "str": frozenset({"max", "min"}),
+    "int": frozenset({"max", "min"}),
+    "float": frozenset({"max", "min", "precision"}),
+}
 _VALID_MODES = {"exact", "judgment"}
 _VALID_LANGS = {"python", "rust", "go", "node", "bash", "auto"}
 _VALID_IMPL_MODES = {"code", "rest", "shell", "mcp_tool", "sql"}
@@ -2066,38 +2076,83 @@ class _Parser:
         )
 
     def _parse_constraints(self, base: PrimitiveType) -> "ConstrainedType":
-        if base.name != "str":
+        allowed = _ALLOWED_CONSTRAINTS.get(base.name)
+        if allowed is None:
             t = self.peek()
             raise ParseError(
-                f"constrained types are only supported on `str` in v0.1, got {base.name!r}",
+                f"constraints not supported on `{base.name}` in v0.21 "
+                f"(allowed bases: str, int, float)",
                 t.line, t.col,
             )
-        self.expect(TokenType.LPAREN)
-        constraints: list[tuple[str, int]] = []
-        constraints.append(self._parse_one_constraint())
+        lparen = self.expect(TokenType.LPAREN)
+        constraints: list[tuple[str, int | float]] = []
+        seen: set[str] = set()
+        first = self._parse_one_constraint(base.name, allowed)
+        constraints.append(first)
+        seen.add(first[0])
         while self.peek().type == TokenType.COMMA:
             self.advance()
-            constraints.append(self._parse_one_constraint())
+            nxt = self._parse_one_constraint(base.name, allowed)
+            if nxt[0] in seen:
+                # Duplicate constraint keys would silently overwrite at
+                # JSON-Schema build time. PR-C Gemini #3317312607.
+                t = self.peek()
+                raise ParseError(
+                    f"duplicate constraint `{nxt[0]}` on `{base.name}`",
+                    t.line, t.col,
+                )
+            constraints.append(nxt)
+            seen.add(nxt[0])
         self.expect(TokenType.RPAREN)
+        # Cross-constraint validation: min ≤ max. The dict-merge in
+        # type_to_json_schema would otherwise produce an unsatisfiable
+        # schema (every value rejected) with no source line. PR-C Gemini
+        # #3317312613.
+        by_name = dict(constraints)
+        if "min" in by_name and "max" in by_name and by_name["min"] > by_name["max"]:
+            raise ParseError(
+                f"`{base.name}({list(by_name.items())})` is unsatisfiable: "
+                f"min ({by_name['min']}) > max ({by_name['max']})",
+                lparen.line, lparen.col,
+            )
         return ConstrainedType(base=base, constraints=tuple(constraints))
 
-    def _parse_one_constraint(self) -> tuple[str, int]:
+    def _parse_one_constraint(
+        self, base_name: str, allowed: frozenset[str]
+    ) -> tuple[str, int | float]:
         name_tok = self.expect(TokenType.IDENT)
-        if name_tok.value != "max":
+        name = name_tok.value
+        if name not in allowed:
+            if name == "precision":
+                raise ParseError(
+                    f"`precision` constraint is only valid on `float`, "
+                    f"not `{base_name}`",
+                    name_tok.line, name_tok.col,
+                )
             raise ParseError(
-                f"only the `max` constraint is supported in v0.1, got {name_tok.value!r}",
+                f"constraint `{name}` not supported on `{base_name}` "
+                f"(allowed: {', '.join(sorted(allowed))})",
                 name_tok.line, name_tok.col,
             )
         self.expect(TokenType.EQUALS)
         num_tok = self.expect(TokenType.NUMBER)
+        # Value type per (base, constraint):
+        #   str(min/max):       int (length)
+        #   int(min/max):       int (value)
+        #   float(min/max):     float (value)
+        #   float(precision):   int (decimal places — a count, not a value)
+        wants_float = base_name == "float" and name in {"min", "max"}
         try:
-            value = int(num_tok.value)
+            value: int | float = (
+                float(num_tok.value) if wants_float else int(num_tok.value)
+            )
         except ValueError as err:
+            kind = "a number" if wants_float else "an integer"
             raise ParseError(
-                f"`max` requires an integer, got {num_tok.value!r}",
+                f"`{name}` requires {kind}, got {num_tok.value!r}",
                 num_tok.line, num_tok.col,
             ) from err
-        return (name_tok.value, value)
+        return (name, value)
 
     def parse_list_type(self) -> ListType:
         self.expect(TokenType.KEYWORD, "List")

@@ -100,8 +100,17 @@ class ContractDecl:
 
 @dataclass(frozen=True)
 class ConstrainedType(TypeExpr):
-    base: TypeExpr            # always PrimitiveType("str") in v0.1
-    constraints: tuple[tuple[str, int], ...]   # e.g. (("max", 300),)
+    """Numeric / string constraints on a primitive type.
+
+    v0.21 allowed constraint sets per base:
+      - `str`:   `max=N` (length ≤ N), `min=N` (length ≥ N) — both int values
+      - `int`:   `min=N`, `max=N` — int values, inclusive
+      - `float`: `min=N`, `max=N` (float values), `precision=N` (int — number
+                 of decimal places, renders to JSON Schema `multipleOf: 10**-N`)
+
+    `bool` does not accept any constraint."""
+    base: TypeExpr
+    constraints: tuple[tuple[str, int | float], ...]   # e.g. (("max", 300),)
 
 
 @dataclass(frozen=True)
