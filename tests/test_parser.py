@@ -327,6 +327,28 @@ def test_parse_int_precision_raises():
         parse(src)
 
 
+def test_parse_duplicate_constraint_raises():
+    """PR-C Gemini #3317312607 — duplicate constraints would silently
+    overwrite during schema build; reject at parse time instead."""
+    src = "CONTRACT c\n  SHAPE: {s: str(min=1, min=5)}\n"
+    with pytest.raises(ParseError, match="duplicate constraint `min`"):
+        parse(src)
+
+
+def test_parse_unsatisfiable_min_gt_max_raises():
+    """PR-C Gemini #3317312613 — min > max produces an unsatisfiable
+    schema with no error; reject at parse time."""
+    src = "CONTRACT c\n  SHAPE: {n: int(min=10, max=5)}\n"
+    with pytest.raises(ParseError, match="unsatisfiable.*min.*10.*max.*5"):
+        parse(src)
+
+
+def test_parse_unsatisfiable_str_min_gt_max_raises():
+    src = "CONTRACT c\n  SHAPE: {s: str(min=20, max=5)}\n"
+    with pytest.raises(ParseError, match="unsatisfiable.*min.*20.*max.*5"):
+        parse(src)
+
+
 def test_parse_unbalanced_brace_raises():
     src = "STEP foo\n  GIVES: x: {name: str\n  MODE: exact\n"
     with pytest.raises(ParseError):

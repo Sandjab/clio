@@ -119,6 +119,34 @@ def test_claude_skill_target_emits_json_schema_constraints(tmp_path):
     assert '"multipleOf": 0.01' in output_schema
 
 
+def test_constraints_inside_optional_are_preserved_in_pydantic(tmp_path):
+    """PR-C Gemini #3317312596 (HIGH) — `Optional<str(max=200)>` must not
+    silently drop the `max_length` Field kwarg. `_field_from_schema` now
+    unwraps the `anyOf` Optional shape before reading constraint keys."""
+    src = (
+        "CONTRACT c\n"
+        "  SHAPE: {note: Optional<str(max=200)>, score: Optional<int(min=0, max=10)>}\n"
+        "\n"
+        "STEP s\n"
+        "  TAKES: raw: str\n"
+        "  GIVES: out: c\n"
+        "  MODE: exact\n"
+        "  LANG: python\n"
+        "\n"
+        "FLOW main\n"
+        '  s(raw="x")\n'
+    )
+    PythonEmitter().emit(build_ir(parse(src)), tmp_path)
+    contracts_py = _find(_tree(tmp_path), "contracts.py")
+    # str(max=200) constraint must survive under Optional<>
+    assert "max_length=200" in contracts_py, (
+        "Optional<str(max=N)> dropped the max_length kwarg:\n" + contracts_py
+    )
+    # int(min=0, max=10) constraints must survive under Optional<>
+    assert "ge=0" in contracts_py
+    assert "le=10" in contracts_py
+
+
 def test_go_target_embeds_json_schema_constraints(tmp_path):
     src = (
         "RESOURCES\n"

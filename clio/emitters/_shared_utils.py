@@ -369,19 +369,23 @@ def _field_from_schema(name: str, schema: dict) -> str:
     if py_name != name:
         field_kwargs.append(f"alias={name!r}")
         field_kwargs.append(f"validation_alias={name!r}")
-    t = schema.get("type")
+    # Optional<T> wraps the constrained primitive in an `anyOf` — unwrap so
+    # the constraint kwargs are extracted from the inner branch instead of
+    # being silently dropped. PR-C Gemini #3317312596 (HIGH).
+    effective = _anyof_optional_inner(schema) or schema
+    t = effective.get("type")
     if t == "string":
-        if "maxLength" in schema:
-            field_kwargs.append(f"max_length={schema['maxLength']}")
-        if "minLength" in schema:
-            field_kwargs.append(f"min_length={schema['minLength']}")
+        if "maxLength" in effective:
+            field_kwargs.append(f"max_length={effective['maxLength']}")
+        if "minLength" in effective:
+            field_kwargs.append(f"min_length={effective['minLength']}")
     if t in {"integer", "number"}:
-        if "minimum" in schema:
-            field_kwargs.append(f"ge={schema['minimum']!r}")
-        if "maximum" in schema:
-            field_kwargs.append(f"le={schema['maximum']!r}")
-        if "multipleOf" in schema:
-            field_kwargs.append(f"multiple_of={schema['multipleOf']!r}")
+        if "minimum" in effective:
+            field_kwargs.append(f"ge={effective['minimum']!r}")
+        if "maximum" in effective:
+            field_kwargs.append(f"le={effective['maximum']!r}")
+        if "multipleOf" in effective:
+            field_kwargs.append(f"multiple_of={effective['multipleOf']!r}")
     if field_kwargs:
         return f"{py_name}: {py_type} = Field({', '.join(field_kwargs)})"
     return f"{py_name}: {py_type}"

@@ -2084,13 +2084,37 @@ class _Parser:
                 f"(allowed bases: str, int, float)",
                 t.line, t.col,
             )
-        self.expect(TokenType.LPAREN)
+        lparen = self.expect(TokenType.LPAREN)
         constraints: list[tuple[str, int | float]] = []
-        constraints.append(self._parse_one_constraint(base.name, allowed))
+        seen: set[str] = set()
+        first = self._parse_one_constraint(base.name, allowed)
+        constraints.append(first)
+        seen.add(first[0])
         while self.peek().type == TokenType.COMMA:
             self.advance()
-            constraints.append(self._parse_one_constraint(base.name, allowed))
+            nxt = self._parse_one_constraint(base.name, allowed)
+            if nxt[0] in seen:
+                # Duplicate constraint keys would silently overwrite at
+                # JSON-Schema build time. PR-C Gemini #3317312607.
+                t = self.peek()
+                raise ParseError(
+                    f"duplicate constraint `{nxt[0]}` on `{base.name}`",
+                    t.line, t.col,
+                )
+            constraints.append(nxt)
+            seen.add(nxt[0])
         self.expect(TokenType.RPAREN)
+        # Cross-constraint validation: min ≤ max. The dict-merge in
+        # type_to_json_schema would otherwise produce an unsatisfiable
+        # schema (every value rejected) with no source line. PR-C Gemini
+        # #3317312613.
+        by_name = dict(constraints)
+        if "min" in by_name and "max" in by_name and by_name["min"] > by_name["max"]:
+            raise ParseError(
+                f"`{base.name}({list(by_name.items())})` is unsatisfiable: "
+                f"min ({by_name['min']}) > max ({by_name['max']})",
+                lparen.line, lparen.col,
+            )
         return ConstrainedType(base=base, constraints=tuple(constraints))
 
     def _parse_one_constraint(
