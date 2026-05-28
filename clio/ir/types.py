@@ -4,6 +4,7 @@ from clio.parser.ast_nodes import (
     DictType,
     EnumType,
     ListType,
+    OptionalType,
     PrimitiveType,
     RecordType,
     TypeExpr,
@@ -26,6 +27,8 @@ def types_equal(a: TypeExpr, b: TypeExpr, contracts: dict) -> bool:
             types_equal(a.key, b.key, contracts)
             and types_equal(a.value, b.value, contracts)
         )
+    if isinstance(a, OptionalType) and isinstance(b, OptionalType):
+        return types_equal(a.inner, b.inner, contracts)
     if isinstance(a, RecordType) and isinstance(b, RecordType):
         if len(a.fields) != len(b.fields):
             return False

@@ -2,11 +2,12 @@
 
 ## [Unreleased]
 
-First half of the v0.21 push to align `docs/LANGUAGE_SPEC.md` with what the parser actually accepts. The spec has documented `Dict<K, V>`, `Optional<T>`, and numeric/string constraints (`int(min, max)`, `float(precision)`, `str(min)`) since v0.1 but the parser rejected every one. This release ships `Dict<K, V>`; `Optional<T>` and the extended constraints land in subsequent PRs (v0.21.0 will not cut until all three are in).
+v0.21 push to align `docs/LANGUAGE_SPEC.md` with what the parser actually accepts. The spec has documented `Dict<K, V>`, `Optional<T>`, and numeric/string constraints (`int(min, max)`, `float(precision)`, `str(min)`) since v0.1 but the parser rejected every one. This release ships `Dict<K, V>` and `Optional<T>`; extended constraints land in PR-C before v0.21.0 cuts.
 
 ### Added
 
 - **`Dict<K, V>` — homogeneous string-keyed map type.** Parser accepts `Dict<str, V>` in CONTRACTs, STEP TAKES / GIVES, and FLOW TAKES / GIVES. Renders to: `dict[str, V]` (Pydantic — python/mcp-server/langgraph/claude-skill targets), `map[string]V` (Go target), `{"type": "object", "additionalProperties": V}` (JSON Schema — claude-cli and claude-skill schemas, MCP tool inputSchema/outputSchema). v0.21 constraints (enforced at parse time with clear errors): (1) `K` must be `str` — `Dict<int, V>`, `Dict<enum(...), V>`, etc. are rejected (JSON object keys are strings; Go's `encoding/json` only natively supports string-keyed maps); (2) `FOR EACH` over a `Dict` is forbidden — model as `List<{key: str, val: V}>` upstream if iteration is needed. Nested generics inside the value are supported: `Dict<str, List<int>>`, `Dict<str, {a: int, b: str}>`, `Dict<str, ContractRef>`. Documented as cookbook recipe #25.
+- **`Optional<T>` — nullable T.** Renders to `T | None` (Pydantic), `*T` (Go pointer), `{"anyOf": [<T>, {"type": "null"}]}` (JSON Schema). v0.21 semantics: the field is REQUIRED at the schema level (must be present, just possibly null) — Pydantic v2's distinction between `T | None` (must be present, can be None) and `T = None` (missing-allowed with default). CLIO has no syntax for "missing-allowed" today; default at the runtime layer instead. Nests with `List` / `Dict` / records / enums uniformly (`Optional<List<int>>`, `List<Optional<r>>`, `Dict<str, Optional<int>>` all parse). `_json_type_to_go` / `_json_type_to_python` walkers recognise the `anyOf: [<T>, null]` shape and emit `*T` / `T | None` respectively (shared helper `_anyof_optional_inner` keeps the two walkers in sync). Documented as cookbook recipe #26.
 
 ### Fixed
 
@@ -14,9 +15,9 @@ First half of the v0.21 push to align `docs/LANGUAGE_SPEC.md` with what the pars
 
 ### Tests
 
-- 6 new parser tests in `tests/test_parser.py` exercising `Dict<str, primitive>`, `Dict<str, ContractRef>`, `Dict<str, List<int>>` (nested), plus the two parse-time rejection cases (`Dict<int, int>`, `Dict<enum(...), int>`).
-- 3 new IR tests in `tests/test_ir.py` covering `type_to_json_schema` for `Dict<str, primitive>` and `Dict<str, ContractRef>`, plus IR-build rejection of `Dict<str, missing>` (unknown contract ref).
-- 6 new cross-target smoke tests in `tests/test_emitters/test_dict_type.py` — one per emitter, asserting Dict renders correctly in the emitted contract / schema / Go struct. Net `1136 → 1150` (+14).
+- 6 new parser tests in `tests/test_parser.py` for `Dict<K, V>` (3 happy paths, 2 rejections), 5 new for `Optional<T>` (primitive, ContractRef, nested List/Dict combinations).
+- 3 new IR tests for `Dict` (JSON Schema + ref resolution), 3 new for `Optional` (primitive + ContractRef JSON Schema, IR ref check).
+- 6 new cross-target smoke tests per type form: `tests/test_emitters/test_dict_type.py` and `tests/test_emitters/test_optional_type.py`. Net `1136 → 1164` (+28).
 
 ## [0.20.1] — 2026-05-28
 

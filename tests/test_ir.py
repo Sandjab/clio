@@ -102,6 +102,37 @@ def test_build_ir_dict_unresolved_ref_raises():
     assert "missing" in str(exc.value)
 
 
+def test_optional_primitive_to_json_schema():
+    from clio.parser.ast_nodes import OptionalType, PrimitiveType
+    t = OptionalType(inner=PrimitiveType("int"))
+    assert type_to_json_schema(t) == {
+        "anyOf": [{"type": "integer"}, {"type": "null"}],
+    }
+
+
+def test_optional_contract_ref_to_json_schema():
+    from clio.parser.ast_nodes import ContractRef, OptionalType
+    t = OptionalType(inner=ContractRef(name="r", line=1, col=1))
+    assert type_to_json_schema(t) == {
+        "anyOf": [
+            {"$ref": "../contracts/r.schema.json"},
+            {"type": "null"},
+        ],
+    }
+
+
+def test_build_ir_optional_unresolved_ref_raises():
+    import pytest
+    src = (
+        "STEP s\n"
+        "  GIVES: out: Optional<missing>\n"
+        "  MODE:  judgment\n"
+    )
+    with pytest.raises(ValueError) as exc:
+        build_ir(parse(src))
+    assert "missing" in str(exc.value)
+
+
 def test_build_ir_with_contract_and_ref():
     src = (
         "CONTRACT r\n"

@@ -33,6 +33,7 @@ from clio.parser.ast_nodes import (
     DictType,
     EnumType,
     ListType,
+    OptionalType,
     PrimitiveType,
     RecordType,
     TypeExpr,
@@ -50,6 +51,8 @@ def _type_to_display(t: TypeExpr) -> str:
         return f"List<{_type_to_display(t.inner)}>"
     if isinstance(t, DictType):
         return f"Dict<{_type_to_display(t.key)}, {_type_to_display(t.value)}>"
+    if isinstance(t, OptionalType):
+        return f"Optional<{_type_to_display(t.inner)}>"
     if isinstance(t, RecordType):
         fields = ", ".join(f"{n}: {_type_to_display(ty)}" for n, ty in t.fields)
         return "{" + fields + "}"

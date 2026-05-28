@@ -89,6 +89,7 @@ from clio.parser.ast_nodes import (
     MultipartBody,
     OnFailChain,
     OnFailStrategy,
+    OptionalType,
     Predicate,
     PrimitiveType,
     Program,
@@ -508,6 +509,8 @@ def _rename_decl(
             return ListType(inner=rename_type(t.inner))
         if isinstance(t, DictType):
             return DictType(key=rename_type(t.key), value=rename_type(t.value))
+        if isinstance(t, OptionalType):
+            return OptionalType(inner=rename_type(t.inner))
         if isinstance(t, RecordType):
             return RecordType(
                 fields=tuple(
@@ -1973,6 +1976,8 @@ def _check_refs(t: TypeExpr, contracts: dict[str, ContractIR], line: int, col: i
     elif isinstance(t, DictType):
         _check_refs(t.key, contracts, line, col)
         _check_refs(t.value, contracts, line, col)
+    elif isinstance(t, OptionalType):
+        _check_refs(t.inner, contracts, line, col)
     elif isinstance(t, RecordType):
         for _, ty in t.fields:
             _check_refs(ty, contracts, line, col)
@@ -2197,6 +2202,8 @@ def _render(t: TypeExpr) -> str:
         return f"List<{_render(t.inner)}>"
     if isinstance(t, DictType):
         return f"Dict<{_render(t.key)}, {_render(t.value)}>"
+    if isinstance(t, OptionalType):
+        return f"Optional<{_render(t.inner)}>"
     if isinstance(t, RecordType):
         return "{" + ", ".join(f"{n}: {_render(ty)}" for n, ty in t.fields) + "}"
     if isinstance(t, EnumType):
@@ -2247,6 +2254,11 @@ def _literal_matches_type(value: object, t: TypeExpr) -> bool:
             isinstance(k, str) and _literal_matches_type(v, t.value)
             for k, v in value.items()
         )
+    if isinstance(t, OptionalType):
+        # v0.21: Optional<T> accepts None or any value matching the inner type.
+        if value is None:
+            return True
+        return _literal_matches_type(value, t.inner)
     if isinstance(t, RecordType):
         if not isinstance(value, dict):
             return False

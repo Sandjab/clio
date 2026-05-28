@@ -128,9 +128,13 @@ Key points to copy:
   if you need iteration, model the data as `List<{key: str, val: V}>`
   upstream. Nested generics inside Dict values are fine:
   `Dict<str, List<int>>`, `Dict<str, {a: int, b: str}>` both parse.
-- **No `Optional<T>`.** The parser rejects `Optional<T>` entirely. For
-  optional fields, just make the field required and document the convention
-  in `DESCRIPTION` (e.g. accept empty string / empty list as "absent").
+- **`Optional<T>` (v0.21+):** nullable T. Renders to `T | None` (Pydantic),
+  `*T` (Go pointer), and JSON Schema `anyOf: [<T>, {type: null}]`. The field
+  remains REQUIRED at the schema level — it must be present, just possibly
+  null. If you want missing-allowed semantics, omit the field from the
+  record entirely (no current syntax for that — use a default value at the
+  runtime layer). Nested with other generics is fine:
+  `Optional<List<int>>`, `List<Optional<r>>`, `Dict<str, Optional<int>>`.
 - **`FOR EACH <var> IN <coll> PARALLEL AS <out>:`** introduces a body
   block that is indented one more level under the `:` line.
 - **`IF` condition shape**: `IF <contract_field>.<sub_field> <op> <literal>:`,

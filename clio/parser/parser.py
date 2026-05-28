@@ -39,6 +39,7 @@ from clio.parser.ast_nodes import (
     MultipartBody,
     OnFailChain,
     OnFailStrategy,
+    OptionalType,
     Predicate,
     PrimitiveType,
     Program,
@@ -2050,6 +2051,8 @@ class _Parser:
             return self.parse_list_type()
         if t.type == TokenType.KEYWORD and t.value == "Dict":
             return self.parse_dict_type()
+        if t.type == TokenType.KEYWORD and t.value == "Optional":
+            return self.parse_optional_type()
         if t.type == TokenType.KEYWORD and t.value == "enum":
             return self.parse_enum_type()
         if t.type == TokenType.LBRACE:
@@ -2118,6 +2121,13 @@ class _Parser:
         value = self.parse_type_expr()
         self.expect(TokenType.RANGLE)
         return DictType(key=key, value=value)
+
+    def parse_optional_type(self) -> OptionalType:
+        self.expect(TokenType.KEYWORD, "Optional")
+        self.expect(TokenType.LANGLE)
+        inner = self.parse_type_expr()
+        self.expect(TokenType.RANGLE)
+        return OptionalType(inner=inner)
 
     def parse_record_type(self) -> RecordType:
         self.expect(TokenType.LBRACE)

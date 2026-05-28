@@ -43,6 +43,7 @@ from clio.parser.ast_nodes import (
     ContractRef,
     DictType,
     ListType,
+    OptionalType,
     PrimitiveType,
     RecordType,
     TypeExpr,
@@ -76,6 +77,12 @@ def _gives_validator_expr(gives) -> str:
         return (
             f"(lambda raw: {{k: contracts.{cls}.model_validate(v) "
             "for k, v in raw.items()})"
+        )
+    if isinstance(t, OptionalType) and isinstance(t.inner, ContractRef):
+        cls = _to_class_name(t.inner.name)
+        return (
+            f"(lambda raw: None if raw is None "
+            f"else contracts.{cls}.model_validate(raw))"
         )
     return "(lambda raw: raw)"
 

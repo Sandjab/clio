@@ -26,7 +26,7 @@ from clio.ir.graph import (
     StepIR,
     WhileBlockIR,
 )
-from clio.parser.ast_nodes import ContractRef, DictType, ListType
+from clio.parser.ast_nodes import ContractRef, DictType, ListType, OptionalType
 
 # ---------------------------------------------------------------------------
 # Shared async-chain walker (issue #29, item 1).
@@ -440,6 +440,10 @@ def _declared_field_schema(t, contracts_by_name: dict) -> dict | None:
         contract = contracts_by_name.get(t.value.name)
         if contract is not None:
             return {"type": "object", "additionalProperties": contract.json_schema}
+    if isinstance(t, OptionalType) and isinstance(t.inner, ContractRef):
+        contract = contracts_by_name.get(t.inner.name)
+        if contract is not None:
+            return {"anyOf": [contract.json_schema, {"type": "null"}]}
     try:
         return type_to_json_schema(t)
     except (NotImplementedError, Exception):
@@ -489,6 +493,12 @@ def _output_schema_for_flow(graph: FlowGraph, flow: FlowIR | None = None) -> dic
         if contract is None:
             return None
         return {"type": "object", "additionalProperties": contract.json_schema}
+    # Optional<ContractRef> → inline anyOf[schema, null]
+    if isinstance(t, OptionalType) and isinstance(t.inner, ContractRef):
+        contract = by_name.get(t.inner.name)
+        if contract is None:
+            return None
+        return {"anyOf": [contract.json_schema, {"type": "null"}]}
     try:
         return type_to_json_schema(t)
     except (NotImplementedError, Exception):
@@ -1040,7 +1050,7 @@ def emit_judgment_step_via_sampling(
     session.create_message(...). No anthropic/openai SDK in the emitted code."""
     from clio.emitters._claude_cli_helpers import _inline_schema, _render_prompt
     from clio.emitters._python_helpers import _step_signature, _to_class_name, _type_to_python
-    from clio.parser.ast_nodes import ContractRef, DictType, ListType
+    from clio.parser.ast_nodes import ContractRef, DictType, ListType, OptionalType
 
     params = _step_signature(step, contracts_by_name)
     # Append _session keyword argument to the existing kwargs-only signature.
@@ -1091,6 +1101,16 @@ def emit_judgment_step_via_sampling(
             validate_block = (
                 f"    return {{k: contracts.{cls}.model_validate(v) "
                 f"for k, v in json.loads(cleaned).items()}}"
+            )
+        elif isinstance(t, OptionalType) and isinstance(t.inner, ContractRef):
+            cls = _to_class_name(t.inner.name)
+            # Single-line `return ...` so the validate_expr-strip pattern
+            # (line ~1134: `validate_block.lstrip().removeprefix("return ")`)
+            # still produces a bare expression. Walrus operator binds the
+            # parsed JSON once so we don't json.loads twice.
+            validate_block = (
+                f"    return None if (_v := json.loads(cleaned)) is None "
+                f"else contracts.{cls}.model_validate(_v)"
             )
         else:
             validate_block = "    return json.loads(cleaned)"
