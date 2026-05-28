@@ -20,14 +20,30 @@ _PRIMITIVE_JSON_TYPES = {
 
 def type_to_json_schema(t: TypeExpr) -> dict:
     if isinstance(t, ConstrainedType):
-        if not isinstance(t.base, PrimitiveType) or t.base.name != "str":
-            raise NotImplementedError("v0.1 only supports str(max=N) constraints")
+        if not isinstance(t.base, PrimitiveType):
+            raise NotImplementedError(
+                f"constraints not supported on {type(t.base).__name__}"
+            )
         out = type_to_json_schema(t.base)
+        base = t.base.name
         for kind, value in t.constraints:
-            if kind == "max":
+            if base == "str" and kind == "max":
                 out["maxLength"] = value
+            elif base == "str" and kind == "min":
+                out["minLength"] = value
+            elif base in {"int", "float"} and kind == "min":
+                out["minimum"] = value
+            elif base in {"int", "float"} and kind == "max":
+                out["maximum"] = value
+            elif base == "float" and kind == "precision":
+                # v0.21: precision=N → multipleOf 10**-N (exact N decimal
+                # places). JSON Schema's multipleOf is portable across
+                # validators (Pydantic, jsonschema/v6, etc.).
+                out["multipleOf"] = 10 ** -value
             else:
-                raise NotImplementedError(f"unknown constraint kind: {kind!r}")
+                raise NotImplementedError(
+                    f"unsupported constraint `{kind}` on `{base}`"
+                )
         return out
     if isinstance(t, PrimitiveType):
         return {"type": _PRIMITIVE_JSON_TYPES[t.name]}

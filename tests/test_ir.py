@@ -133,6 +133,57 @@ def test_build_ir_optional_unresolved_ref_raises():
     assert "missing" in str(exc.value)
 
 
+def test_str_min_to_json_schema():
+    from clio.parser.ast_nodes import ConstrainedType, PrimitiveType
+    t = ConstrainedType(base=PrimitiveType("str"), constraints=(("min", 1),))
+    assert type_to_json_schema(t) == {"type": "string", "minLength": 1}
+
+
+def test_str_min_max_to_json_schema():
+    from clio.parser.ast_nodes import ConstrainedType, PrimitiveType
+    t = ConstrainedType(
+        base=PrimitiveType("str"),
+        constraints=(("min", 1), ("max", 200)),
+    )
+    assert type_to_json_schema(t) == {
+        "type": "string", "minLength": 1, "maxLength": 200,
+    }
+
+
+def test_int_min_max_to_json_schema():
+    from clio.parser.ast_nodes import ConstrainedType, PrimitiveType
+    t = ConstrainedType(
+        base=PrimitiveType("int"),
+        constraints=(("min", 0), ("max", 120)),
+    )
+    assert type_to_json_schema(t) == {
+        "type": "integer", "minimum": 0, "maximum": 120,
+    }
+
+
+def test_float_min_max_to_json_schema():
+    from clio.parser.ast_nodes import ConstrainedType, PrimitiveType
+    t = ConstrainedType(
+        base=PrimitiveType("float"),
+        constraints=(("min", 0.0), ("max", 1.0)),
+    )
+    assert type_to_json_schema(t) == {
+        "type": "number", "minimum": 0.0, "maximum": 1.0,
+    }
+
+
+def test_float_precision_to_json_schema():
+    from clio.parser.ast_nodes import ConstrainedType, PrimitiveType
+    t = ConstrainedType(
+        base=PrimitiveType("float"),
+        constraints=(("precision", 2),),
+    )
+    # precision=2 → multipleOf 0.01 (exact 2 decimal places)
+    schema = type_to_json_schema(t)
+    assert schema["type"] == "number"
+    assert schema["multipleOf"] == 0.01
+
+
 def test_build_ir_with_contract_and_ref():
     src = (
         "CONTRACT r\n"

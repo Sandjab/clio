@@ -265,6 +265,68 @@ def test_parse_dict_optional_value():
     assert t.value.__class__.__name__ == "OptionalType"
 
 
+def test_parse_str_min_constraint():
+    src = "CONTRACT c\n  SHAPE: {s: str(min=1)}\n"
+    program = parse(src)
+    field_type = dict(program.decls[0].shape.fields)["s"]
+    assert field_type.__class__.__name__ == "ConstrainedType"
+    assert ("min", 1) in field_type.constraints
+
+
+def test_parse_str_min_max_combined():
+    src = "CONTRACT c\n  SHAPE: {s: str(min=1, max=200)}\n"
+    program = parse(src)
+    field_type = dict(program.decls[0].shape.fields)["s"]
+    assert ("min", 1) in field_type.constraints
+    assert ("max", 200) in field_type.constraints
+
+
+def test_parse_int_min_max():
+    src = "CONTRACT c\n  SHAPE: {age: int(min=0, max=120)}\n"
+    program = parse(src)
+    field_type = dict(program.decls[0].shape.fields)["age"]
+    assert field_type.__class__.__name__ == "ConstrainedType"
+    assert field_type.base.name == "int"
+    assert ("min", 0) in field_type.constraints
+    assert ("max", 120) in field_type.constraints
+
+
+def test_parse_float_precision():
+    src = "CONTRACT c\n  SHAPE: {price: float(precision=2)}\n"
+    program = parse(src)
+    field_type = dict(program.decls[0].shape.fields)["price"]
+    assert field_type.base.name == "float"
+    assert ("precision", 2) in field_type.constraints
+
+
+def test_parse_float_min_max():
+    src = "CONTRACT c\n  SHAPE: {ratio: float(min=0.0, max=1.0)}\n"
+    program = parse(src)
+    field_type = dict(program.decls[0].shape.fields)["ratio"]
+    assert field_type.base.name == "float"
+    constraints = dict(field_type.constraints)
+    assert constraints["min"] == 0.0
+    assert constraints["max"] == 1.0
+
+
+def test_parse_bool_constraints_raises():
+    src = "CONTRACT c\n  SHAPE: {x: bool(min=0)}\n"
+    with pytest.raises(ParseError, match="constraints.*not supported.*bool"):
+        parse(src)
+
+
+def test_parse_str_precision_raises():
+    src = "CONTRACT c\n  SHAPE: {s: str(precision=2)}\n"
+    with pytest.raises(ParseError, match="precision.*float"):
+        parse(src)
+
+
+def test_parse_int_precision_raises():
+    src = "CONTRACT c\n  SHAPE: {n: int(precision=2)}\n"
+    with pytest.raises(ParseError, match="precision.*float"):
+        parse(src)
+
+
 def test_parse_unbalanced_brace_raises():
     src = "STEP foo\n  GIVES: x: {name: str\n  MODE: exact\n"
     with pytest.raises(ParseError):

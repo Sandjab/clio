@@ -1345,7 +1345,23 @@ Nested records are allowed: `{user: {name: str, age: int}, score: float}`
 
 ### Constrained types
 
-`str(max=200)`, `str(min=1)`, `int(min=0, max=100)`, `float(precision=2)`
+`str(max=200)`, `str(min=1)`, `int(min=0, max=100)`, `float(min=0.0, max=1.0)`, `float(precision=2)`
+
+**Semantics per base (v0.21):**
+- `str(max=N)`, `str(min=N)` — string LENGTH (int values). Render to JSON
+  Schema `maxLength` / `minLength`, Pydantic `Field(max_length=N, min_length=N)`.
+- `int(min=N, max=N)` — integer VALUE, inclusive. JSON Schema `minimum` /
+  `maximum`, Pydantic `Field(ge=N, le=N)`.
+- `float(min=N, max=N)` — numeric VALUE, inclusive. Float values allowed
+  (e.g. `0.0`). Same JSON Schema / Pydantic keywords as `int`.
+- `float(precision=N)` — exactly N decimal places. Renders to JSON Schema
+  `multipleOf: 10**-N` (e.g. `precision=2` → `multipleOf: 0.01`), Pydantic
+  `Field(multiple_of=10**-N)`. Portable across validators; semantically
+  "the value must be a multiple of `10**-N`".
+- `bool` accepts no constraint.
+
+Constraint values are integers everywhere except `float(min/max)` which
+accepts a float. `precision` is always an int (decimal-place count).
 
 ### Domain types
 

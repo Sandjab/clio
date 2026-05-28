@@ -355,16 +355,33 @@ def _shape_from_schema(schema: dict) -> list[tuple[str, dict]]:
 def _field_from_schema(name: str, schema: dict) -> str:
     py_name = _to_field_name(name)
     py_type = _json_type_to_python(schema)
-    # Build a list of Field(...) kwargs so we can compose alias + max_length
-    # uniformly. Pydantic v2 needs `alias=` (and `validation_alias=`) so the
-    # original CLIO field name still parses from JSON input when py_name was
-    # renamed to avoid a Python-keyword collision.
+    # Build a list of Field(...) kwargs. Pydantic v2 needs `alias=` (and
+    # `validation_alias=`) so the original CLIO field name still parses
+    # from JSON input when py_name was renamed to avoid a Python-keyword
+    # collision. The constraint kwargs translate CLIO's JSON Schema output
+    # into Pydantic v2 Field params:
+    #   maxLength  → max_length    (str(max=N))
+    #   minLength  → min_length    (str(min=N))
+    #   minimum    → ge             (int/float(min=N), inclusive)
+    #   maximum    → le             (int/float(max=N), inclusive)
+    #   multipleOf → multiple_of   (float(precision=N) → 10**-N)
     field_kwargs: list[str] = []
     if py_name != name:
         field_kwargs.append(f"alias={name!r}")
         field_kwargs.append(f"validation_alias={name!r}")
-    if schema.get("type") == "string" and "maxLength" in schema:
-        field_kwargs.append(f"max_length={schema['maxLength']}")
+    t = schema.get("type")
+    if t == "string":
+        if "maxLength" in schema:
+            field_kwargs.append(f"max_length={schema['maxLength']}")
+        if "minLength" in schema:
+            field_kwargs.append(f"min_length={schema['minLength']}")
+    if t in {"integer", "number"}:
+        if "minimum" in schema:
+            field_kwargs.append(f"ge={schema['minimum']!r}")
+        if "maximum" in schema:
+            field_kwargs.append(f"le={schema['maximum']!r}")
+        if "multipleOf" in schema:
+            field_kwargs.append(f"multiple_of={schema['multipleOf']!r}")
     if field_kwargs:
         return f"{py_name}: {py_type} = Field({', '.join(field_kwargs)})"
     return f"{py_name}: {py_type}"
