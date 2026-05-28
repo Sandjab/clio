@@ -41,6 +41,7 @@ from clio.ir.graph import (
 )
 from clio.parser.ast_nodes import (
     ContractRef,
+    DictType,
     ListType,
     PrimitiveType,
     RecordType,
@@ -70,6 +71,12 @@ def _gives_validator_expr(gives) -> str:
     if isinstance(t, ListType) and isinstance(t.inner, ContractRef):
         cls = _to_class_name(t.inner.name)
         return f"(lambda raw: [contracts.{cls}.model_validate(item) for item in raw])"
+    if isinstance(t, DictType) and isinstance(t.value, ContractRef):
+        cls = _to_class_name(t.value.name)
+        return (
+            f"(lambda raw: {{k: contracts.{cls}.model_validate(v) "
+            "for k, v in raw.items()})"
+        )
     return "(lambda raw: raw)"
 
 

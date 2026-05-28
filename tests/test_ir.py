@@ -68,6 +68,40 @@ def test_enum_to_json_schema():
     assert schema == {"enum": ["low", "mid", "high"]}
 
 
+def test_dict_str_to_primitive_to_json_schema():
+    from clio.parser.ast_nodes import DictType, PrimitiveType
+    t = DictType(key=PrimitiveType("str"), value=PrimitiveType("int"))
+    assert type_to_json_schema(t) == {
+        "type": "object",
+        "additionalProperties": {"type": "integer"},
+    }
+
+
+def test_dict_str_to_contract_ref_to_json_schema():
+    src = (
+        "CONTRACT r\n"
+        "  SHAPE: {x: int}\n"
+        "STEP s\n"
+        "  GIVES: out: Dict<str, r>\n"
+        "  MODE:  judgment\n"
+    )
+    graph = build_ir(parse(src))
+    step = graph.steps[0]
+    assert step.gives.type.__class__.__name__ == "DictType"
+
+
+def test_build_ir_dict_unresolved_ref_raises():
+    import pytest
+    src = (
+        "STEP s\n"
+        "  GIVES: out: Dict<str, missing>\n"
+        "  MODE:  judgment\n"
+    )
+    with pytest.raises(ValueError) as exc:
+        build_ir(parse(src))
+    assert "missing" in str(exc.value)
+
+
 def test_build_ir_with_contract_and_ref():
     src = (
         "CONTRACT r\n"

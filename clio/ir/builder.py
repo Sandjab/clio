@@ -63,6 +63,7 @@ from clio.parser.ast_nodes import (
     ContractDecl,
     ContractRef,
     DatabaseSpec,
+    DictType,
     EnumType,
     ErrorAccessExpr,
     ExprNode,
@@ -505,6 +506,8 @@ def _rename_decl(
             return ContractRef(name=resolve_name(t.name), line=t.line, col=t.col)
         if isinstance(t, ListType):
             return ListType(inner=rename_type(t.inner))
+        if isinstance(t, DictType):
+            return DictType(key=rename_type(t.key), value=rename_type(t.value))
         if isinstance(t, RecordType):
             return RecordType(
                 fields=tuple(
@@ -1967,6 +1970,9 @@ def _check_refs(t: TypeExpr, contracts: dict[str, ContractIR], line: int, col: i
             )
     elif isinstance(t, ListType):
         _check_refs(t.inner, contracts, line, col)
+    elif isinstance(t, DictType):
+        _check_refs(t.key, contracts, line, col)
+        _check_refs(t.value, contracts, line, col)
     elif isinstance(t, RecordType):
         for _, ty in t.fields:
             _check_refs(ty, contracts, line, col)
@@ -2189,6 +2195,8 @@ def _render(t: TypeExpr) -> str:
         return t.name
     if isinstance(t, ListType):
         return f"List<{_render(t.inner)}>"
+    if isinstance(t, DictType):
+        return f"Dict<{_render(t.key)}, {_render(t.value)}>"
     if isinstance(t, RecordType):
         return "{" + ", ".join(f"{n}: {_render(ty)}" for n, ty in t.fields) + "}"
     if isinstance(t, EnumType):
@@ -2230,6 +2238,15 @@ def _literal_matches_type(value: object, t: TypeExpr) -> bool:
         if not isinstance(value, list):
             return False
         return all(_literal_matches_type(item, t.inner) for item in value)
+    if isinstance(t, DictType):
+        # v0.21: keys are always str at the type level. Accept any dict whose
+        # keys are strings and values match the declared value type.
+        if not isinstance(value, dict):
+            return False
+        return all(
+            isinstance(k, str) and _literal_matches_type(v, t.value)
+            for k, v in value.items()
+        )
     if isinstance(t, RecordType):
         if not isinstance(value, dict):
             return False

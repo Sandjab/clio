@@ -1,6 +1,7 @@
 from clio.parser.ast_nodes import (
     ConstrainedType,
     ContractRef,
+    DictType,
     EnumType,
     ListType,
     PrimitiveType,
@@ -20,6 +21,11 @@ def types_equal(a: TypeExpr, b: TypeExpr, contracts: dict) -> bool:
         return a.name == b.name
     if isinstance(a, ListType) and isinstance(b, ListType):
         return types_equal(a.inner, b.inner, contracts)
+    if isinstance(a, DictType) and isinstance(b, DictType):
+        return (
+            types_equal(a.key, b.key, contracts)
+            and types_equal(a.value, b.value, contracts)
+        )
     if isinstance(a, RecordType) and isinstance(b, RecordType):
         if len(a.fields) != len(b.fields):
             return False

@@ -18,6 +18,19 @@ class ListType(TypeExpr):
 
 
 @dataclass(frozen=True)
+class DictType(TypeExpr):
+    """`Dict<K, V>` — homogeneous map.
+
+    v0.21 constraint: `key` is always `PrimitiveType("str")` (JSON object keys
+    are strings and Go's `encoding/json` only natively supports string-keyed
+    maps without extra plumbing). The parser rejects non-`str` keys with a
+    clear error. Iterating a Dict via `FOR EACH` is also rejected — transform
+    to `List<{key: str, val: V}>` upstream if iteration is needed."""
+    key: TypeExpr
+    value: TypeExpr
+
+
+@dataclass(frozen=True)
 class RecordType(TypeExpr):
     fields: tuple[tuple[str, TypeExpr], ...]   # ((name, type), ...)
 

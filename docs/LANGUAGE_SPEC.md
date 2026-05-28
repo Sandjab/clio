@@ -1306,6 +1306,17 @@ claude-cli deferred to v2.
 
 `List<T>`, `Dict<K, V>`, `Optional<T>`, `Set<T>`
 
+#### `Dict<K, V>` constraints (v0.21)
+
+- **`K` must be `str`.** `Dict<int, V>`, `Dict<enum(...), V>`, etc. are rejected
+  at parse time. Rationale: JSON object keys are always strings, and Go's
+  `encoding/json` only natively supports string-keyed maps. Future versions
+  may relax this for `enum`-typed keys.
+- **`FOR EACH` over a `Dict` is forbidden.** If you need iteration, model the
+  data as `List<{key: str, val: V}>` upstream.
+- Nested generics inside `V` are supported: `Dict<str, List<int>>`,
+  `Dict<str, {a: int, b: str}>`.
+
 ### Records
 
 `{field_name: type, field_name: type}`

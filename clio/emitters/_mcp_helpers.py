@@ -26,7 +26,7 @@ from clio.ir.graph import (
     StepIR,
     WhileBlockIR,
 )
-from clio.parser.ast_nodes import ContractRef, ListType
+from clio.parser.ast_nodes import ContractRef, DictType, ListType
 
 # ---------------------------------------------------------------------------
 # Shared async-chain walker (issue #29, item 1).
@@ -436,6 +436,10 @@ def _declared_field_schema(t, contracts_by_name: dict) -> dict | None:
         contract = contracts_by_name.get(t.inner.name)
         if contract is not None:
             return {"type": "array", "items": contract.json_schema}
+    if isinstance(t, DictType) and isinstance(t.value, ContractRef):
+        contract = contracts_by_name.get(t.value.name)
+        if contract is not None:
+            return {"type": "object", "additionalProperties": contract.json_schema}
     try:
         return type_to_json_schema(t)
     except (NotImplementedError, Exception):
@@ -466,20 +470,25 @@ def _output_schema_for_flow(graph: FlowGraph, flow: FlowIR | None = None) -> dic
     if last is None or last.gives is None:
         return None
     t = last.gives.type
+    by_name = {c.name: c for c in graph.contracts}
     # ContractRef → expand the contract's JSON schema inline
     if isinstance(t, ContractRef):
-        by_name = {c.name: c for c in graph.contracts}
         contract = by_name.get(t.name)
         if contract is None:
             return None
         return contract.json_schema
     # List<ContractRef> → inline items schema; never emit a $ref (clients can't resolve it)
     if isinstance(t, ListType) and isinstance(t.inner, ContractRef):
-        by_name = {c.name: c for c in graph.contracts}
         contract = by_name.get(t.inner.name)
         if contract is None:
             return None
         return {"type": "array", "items": contract.json_schema}
+    # Dict<str, ContractRef> → inline additionalProperties schema
+    if isinstance(t, DictType) and isinstance(t.value, ContractRef):
+        contract = by_name.get(t.value.name)
+        if contract is None:
+            return None
+        return {"type": "object", "additionalProperties": contract.json_schema}
     try:
         return type_to_json_schema(t)
     except (NotImplementedError, Exception):
@@ -1031,7 +1040,7 @@ def emit_judgment_step_via_sampling(
     session.create_message(...). No anthropic/openai SDK in the emitted code."""
     from clio.emitters._claude_cli_helpers import _inline_schema, _render_prompt
     from clio.emitters._python_helpers import _step_signature, _to_class_name, _type_to_python
-    from clio.parser.ast_nodes import ContractRef, ListType
+    from clio.parser.ast_nodes import ContractRef, DictType, ListType
 
     params = _step_signature(step, contracts_by_name)
     # Append _session keyword argument to the existing kwargs-only signature.
@@ -1076,6 +1085,12 @@ def emit_judgment_step_via_sampling(
             validate_block = (
                 f"    return [contracts.{cls}.model_validate(item) "
                 f"for item in json.loads(cleaned)]"
+            )
+        elif isinstance(t, DictType) and isinstance(t.value, ContractRef):
+            cls = _to_class_name(t.value.name)
+            validate_block = (
+                f"    return {{k: contracts.{cls}.model_validate(v) "
+                f"for k, v in json.loads(cleaned).items()}}"
             )
         else:
             validate_block = "    return json.loads(cleaned)"

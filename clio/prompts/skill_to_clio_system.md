@@ -121,11 +121,16 @@ Key points to copy:
   No `int(min=N)`, `int(max=N)`, `float(precision=N)` — the parser rejects
   any constraint on numeric types. Use `ASSERT: x >= 0` for numeric bounds.
   Other type forms: `enum(a|b|c)`, `List<T>`, `Dict<K, V>`.
-- **No `Optional<T>`, no nested generics.** The parser rejects `Optional<T>`
-  entirely, plus any nested generic like `Dict<str, List<int>>`. For
+- **`Dict<K, V>` constraints (v0.21+):** the key type `K` MUST be `str`
+  (`Dict<int, V>`, `Dict<enum(...), V>`, etc. are rejected at parse time —
+  JSON object keys are strings, Go's `encoding/json` only natively supports
+  string-keyed maps). Iterating a Dict with `FOR EACH` is also forbidden;
+  if you need iteration, model the data as `List<{key: str, val: V}>`
+  upstream. Nested generics inside Dict values are fine:
+  `Dict<str, List<int>>`, `Dict<str, {a: int, b: str}>` both parse.
+- **No `Optional<T>`.** The parser rejects `Optional<T>` entirely. For
   optional fields, just make the field required and document the convention
   in `DESCRIPTION` (e.g. accept empty string / empty list as "absent").
-  Nested records inside `List<>` are fine: `List<{k: str, v: int}>` parses.
 - **`FOR EACH <var> IN <coll> PARALLEL AS <out>:`** introduces a body
   block that is indented one more level under the `:` line.
 - **`IF` condition shape**: `IF <contract_field>.<sub_field> <op> <literal>:`,

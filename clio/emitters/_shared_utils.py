@@ -23,6 +23,7 @@ from clio.ir.graph import (
 from clio.parser.ast_nodes import (
     ConstrainedType,
     ContractRef,
+    DictType,
     EnumType,
     ListType,
     PrimitiveType,
@@ -144,6 +145,8 @@ def _uses_contract_refs(step: StepIR) -> bool:
             return True
         if isinstance(t, ListType):
             return walk(t.inner)
+        if isinstance(t, DictType):
+            return walk(t.key) or walk(t.value)
         if isinstance(t, RecordType):
             return any(walk(ty) for _, ty in t.fields)
         if isinstance(t, ConstrainedType):
@@ -161,6 +164,8 @@ def _render_type_short(t: TypeExpr) -> str:
         return t.name
     if isinstance(t, ListType):
         return f"List<{_render_type_short(t.inner)}>"
+    if isinstance(t, DictType):
+        return f"Dict<{_render_type_short(t.key)}, {_render_type_short(t.value)}>"
     if isinstance(t, EnumType):
         return f"enum({'|'.join(t.values)})"
     if isinstance(t, ConstrainedType):
@@ -178,6 +183,11 @@ def _type_to_python(t: TypeExpr, contracts: dict[str, ContractIR]) -> str:
         return _PYTHON_PRIMITIVES[t.name]
     if isinstance(t, ListType):
         return f"list[{_type_to_python(t.inner, contracts)}]"
+    if isinstance(t, DictType):
+        return (
+            f"dict[{_type_to_python(t.key, contracts)}, "
+            f"{_type_to_python(t.value, contracts)}]"
+        )
     if isinstance(t, EnumType):
         values = ", ".join(repr(v) for v in t.values)
         return f"Literal[{values}]"
@@ -222,6 +232,11 @@ def _json_type_to_go(schema: dict) -> str:
     if t == "array":
         return f"[]{_json_type_to_go(schema.get('items', {}))}"
     if t == "object":
+        # Dict<str, V> shapes carry a typed `additionalProperties` subschema;
+        # recurse so Go gets `map[string]<V>` instead of `map[string]any`.
+        ap = schema.get("additionalProperties")
+        if isinstance(ap, dict):
+            return f"map[string]{_json_type_to_go(ap)}"
         return "map[string]any"
     return "any"
 
@@ -239,6 +254,9 @@ def _collect_contract_refs(step: StepIR) -> set[str]:
             refs.add(t.name)
         elif isinstance(t, ListType):
             walk(t.inner)
+        elif isinstance(t, DictType):
+            walk(t.key)
+            walk(t.value)
         elif isinstance(t, RecordType):
             for _, ty in t.fields:
                 walk(ty)
@@ -272,6 +290,11 @@ def _json_type_to_python(schema: dict) -> str:
     if t == "array":
         return f"list[{_json_type_to_python(schema.get('items', {}))}]"
     if t == "object":
+        # Dict<str, V> shapes carry a typed `additionalProperties` subschema;
+        # recurse so Pydantic gets `dict[str, V]` instead of bare `dict`.
+        ap = schema.get("additionalProperties")
+        if isinstance(ap, dict):
+            return f"dict[str, {_json_type_to_python(ap)}]"
         return "dict"
     return "object"
 
@@ -479,6 +502,14 @@ def _type_to_go(
         return "string"
     if isinstance(t, ListType):
         return f"[]{_type_to_go(t.inner, contracts, qualifier=qualifier)}"
+    if isinstance(t, DictType):
+        # v0.21: Dict keys are always `str` (enforced by the parser), so the
+        # Go type is `map[string]<V>`. Re-render the key for forward-compat
+        # in case future versions relax the constraint.
+        return (
+            f"map[{_type_to_go(t.key, contracts, qualifier=qualifier)}]"
+            f"{_type_to_go(t.value, contracts, qualifier=qualifier)}"
+        )
     if isinstance(t, RecordType):
         fields = "; ".join(
             f'{_to_go_field_name(fname)} {_type_to_go(ftype, contracts, qualifier=qualifier)} '

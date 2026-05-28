@@ -370,12 +370,14 @@ def _collect_contract_refs(flow_decl: object) -> set[str]:
 
 def _walk_type_for_refs(t: object) -> set[str]:
     """Recursively collect ContractRef names from a TypeExpr."""
-    from clio.parser.ast_nodes import ContractRef, ListType, RecordType
+    from clio.parser.ast_nodes import ContractRef, DictType, ListType, RecordType
 
     if isinstance(t, ContractRef):
         return {t.name}
     if isinstance(t, ListType):
         return _walk_type_for_refs(t.inner)
+    if isinstance(t, DictType):
+        return _walk_type_for_refs(t.key) | _walk_type_for_refs(t.value)
     if isinstance(t, RecordType):
         out: set[str] = set()
         for _name, field_type in t.fields:
