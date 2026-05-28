@@ -35,6 +35,7 @@ from clio.parser.ast_nodes import (
     DictType,
     EnumType,
     ListType,
+    OptionalType,
     PrimitiveType,
     RecordType,
     TypeExpr,
@@ -259,6 +260,8 @@ def _type_to_str(t: TypeExpr) -> str:
         return f"List<{_type_to_str(t.inner)}>"
     if isinstance(t, DictType):
         return f"Dict<{_type_to_str(t.key)}, {_type_to_str(t.value)}>"
+    if isinstance(t, OptionalType):
+        return f"Optional<{_type_to_str(t.inner)}>"
     if isinstance(t, RecordType):
         return "{" + ", ".join(f"{n}: {_type_to_str(ty)}" for n, ty in t.fields) + "}"
     if isinstance(t, EnumType):
@@ -284,6 +287,8 @@ def _collect_contract_refs(t: TypeExpr) -> list[str]:
         elif isinstance(node, DictType):
             walk(node.key)
             walk(node.value)
+        elif isinstance(node, OptionalType):
+            walk(node.inner)
         elif isinstance(node, RecordType):
             for _, ty in node.fields:
                 walk(ty)

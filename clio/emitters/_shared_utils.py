@@ -26,6 +26,7 @@ from clio.parser.ast_nodes import (
     DictType,
     EnumType,
     ListType,
+    OptionalType,
     PrimitiveType,
     RecordType,
     TypeExpr,
@@ -147,6 +148,8 @@ def _uses_contract_refs(step: StepIR) -> bool:
             return walk(t.inner)
         if isinstance(t, DictType):
             return walk(t.key) or walk(t.value)
+        if isinstance(t, OptionalType):
+            return walk(t.inner)
         if isinstance(t, RecordType):
             return any(walk(ty) for _, ty in t.fields)
         if isinstance(t, ConstrainedType):
@@ -166,6 +169,8 @@ def _render_type_short(t: TypeExpr) -> str:
         return f"List<{_render_type_short(t.inner)}>"
     if isinstance(t, DictType):
         return f"Dict<{_render_type_short(t.key)}, {_render_type_short(t.value)}>"
+    if isinstance(t, OptionalType):
+        return f"Optional<{_render_type_short(t.inner)}>"
     if isinstance(t, EnumType):
         return f"enum({'|'.join(t.values)})"
     if isinstance(t, ConstrainedType):
@@ -188,6 +193,9 @@ def _type_to_python(t: TypeExpr, contracts: dict[str, ContractIR]) -> str:
             f"dict[{_type_to_python(t.key, contracts)}, "
             f"{_type_to_python(t.value, contracts)}]"
         )
+    if isinstance(t, OptionalType):
+        # v0.21: Pydantic-friendly nullable form `<T> | None` (PEP 604).
+        return f"{_type_to_python(t.inner, contracts)} | None"
     if isinstance(t, EnumType):
         values = ", ".join(repr(v) for v in t.values)
         return f"Literal[{values}]"
@@ -220,6 +228,11 @@ def _json_type_to_go(schema: dict) -> str:
         return _to_class_name(name)
     if "enum" in schema:
         return "string"
+    # Optional<T> renders to {"anyOf": [<inner>, {"type": "null"}]}: produce
+    # `*<inner-go-type>` so the Go field is nilable.
+    inner = _anyof_optional_inner(schema)
+    if inner is not None:
+        return f"*{_json_type_to_go(inner)}"
     t = schema.get("type")
     if t == "string":
         return "string"
@@ -241,6 +254,26 @@ def _json_type_to_go(schema: dict) -> str:
     return "any"
 
 
+def _anyof_optional_inner(schema: dict) -> dict | None:
+    """If `schema` is the exact `{"anyOf": [<inner>, {"type": "null"}]}`
+    shape emitted by `type_to_json_schema(OptionalType(inner))`, return the
+    inner subschema. Otherwise return None.
+
+    Symmetric helper shared by `_json_type_to_python` and `_json_type_to_go`
+    so the two walkers stay in sync. Tolerant to the order of the two
+    branches inside `anyOf` (jsonschema validators accept both)."""
+    branches = schema.get("anyOf")
+    if not (isinstance(branches, list) and len(branches) == 2):
+        return None
+    null_branch = {"type": "null"}
+    a, b = branches
+    if a == null_branch and isinstance(b, dict):
+        return b
+    if b == null_branch and isinstance(a, dict):
+        return a
+    return None
+
+
 def _collect_contract_refs(step: StepIR) -> set[str]:
     """Return the set of CONTRACT names referenced in step's TAKES or GIVES.
 
@@ -257,6 +290,8 @@ def _collect_contract_refs(step: StepIR) -> set[str]:
         elif isinstance(t, DictType):
             walk(t.key)
             walk(t.value)
+        elif isinstance(t, OptionalType):
+            walk(t.inner)
         elif isinstance(t, RecordType):
             for _, ty in t.fields:
                 walk(ty)
@@ -278,6 +313,11 @@ def _json_type_to_python(schema: dict) -> str:
     if "enum" in schema:
         values = ", ".join(repr(v) for v in schema["enum"])
         return f"Literal[{values}]"
+    # Optional<T> renders to {"anyOf": [<inner>, {"type": "null"}]}: produce
+    # `<inner-py-type> | None` so Pydantic accepts both branches.
+    inner = _anyof_optional_inner(schema)
+    if inner is not None:
+        return f"{_json_type_to_python(inner)} | None"
     t = schema.get("type")
     if t == "string":
         return "str"
@@ -510,6 +550,11 @@ def _type_to_go(
             f"map[{_type_to_go(t.key, contracts, qualifier=qualifier)}]"
             f"{_type_to_go(t.value, contracts, qualifier=qualifier)}"
         )
+    if isinstance(t, OptionalType):
+        # v0.21: nullable T renders as `*T` (Go pointer). For nested arrays /
+        # maps the pointer wraps the whole inner expression, matching Go's
+        # convention that `*[]T` (pointer to slice) is a nil-able slice.
+        return f"*{_type_to_go(t.inner, contracts, qualifier=qualifier)}"
     if isinstance(t, RecordType):
         fields = "; ".join(
             f'{_to_go_field_name(fname)} {_type_to_go(ftype, contracts, qualifier=qualifier)} '

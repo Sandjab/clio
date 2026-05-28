@@ -201,6 +201,70 @@ def test_parse_dict_enum_key_raises():
         parse(src)
 
 
+def test_parse_optional_primitive():
+    src = (
+        "STEP load\n"
+        "  GIVES: maybe_id: Optional<int>\n"
+        "  MODE: exact\n"
+    )
+    program = parse(src)
+    t = program.decls[0].gives.type
+    assert t.__class__.__name__ == "OptionalType"
+    assert t.inner.__class__.__name__ == "PrimitiveType"
+    assert t.inner.name == "int"
+
+
+def test_parse_optional_contract_ref():
+    src = (
+        "CONTRACT r\n"
+        "  SHAPE: {x: int}\n"
+        "STEP s\n"
+        "  GIVES: out: Optional<r>\n"
+        "  MODE: judgment\n"
+    )
+    program = parse(src)
+    step = next(d for d in program.decls if d.__class__.__name__ == "StepDecl")
+    t = step.gives.type
+    assert t.__class__.__name__ == "OptionalType"
+    assert t.inner.__class__.__name__ == "ContractRef"
+
+
+def test_parse_optional_list_nested():
+    src = (
+        "STEP load\n"
+        "  GIVES: maybe_rows: Optional<List<int>>\n"
+        "  MODE: exact\n"
+    )
+    program = parse(src)
+    t = program.decls[0].gives.type
+    assert t.__class__.__name__ == "OptionalType"
+    assert t.inner.__class__.__name__ == "ListType"
+
+
+def test_parse_list_of_optional():
+    src = (
+        "STEP load\n"
+        "  GIVES: items: List<Optional<int>>\n"
+        "  MODE: exact\n"
+    )
+    program = parse(src)
+    t = program.decls[0].gives.type
+    assert t.__class__.__name__ == "ListType"
+    assert t.inner.__class__.__name__ == "OptionalType"
+
+
+def test_parse_dict_optional_value():
+    src = (
+        "STEP load\n"
+        "  GIVES: m: Dict<str, Optional<int>>\n"
+        "  MODE: exact\n"
+    )
+    program = parse(src)
+    t = program.decls[0].gives.type
+    assert t.__class__.__name__ == "DictType"
+    assert t.value.__class__.__name__ == "OptionalType"
+
+
 def test_parse_unbalanced_brace_raises():
     src = "STEP foo\n  GIVES: x: {name: str\n  MODE: exact\n"
     with pytest.raises(ParseError):

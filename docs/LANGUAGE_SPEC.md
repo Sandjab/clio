@@ -1317,6 +1317,22 @@ claude-cli deferred to v2.
 - Nested generics inside `V` are supported: `Dict<str, List<int>>`,
   `Dict<str, {a: int, b: str}>`.
 
+#### `Optional<T>` semantics (v0.21)
+
+- **Nullable, not missing.** `Optional<T>` means "value of type T or null".
+  The field is REQUIRED at the schema level: it must be present in the
+  record, just possibly null. Pydantic v2 calls this `T | None` (not
+  `T = None`, which is "missing-allowed with a default").
+- **Target rendering**:
+  - Pydantic (python / mcp-server / langgraph / claude-skill): `T | None`
+  - Go: `*T` (pointer; `nil` represents null)
+  - JSON Schema: `{"anyOf": [<T-schema>, {"type": "null"}]}` — `anyOf`
+    works uniformly across primitives, `$ref`s, arrays, records, and enums
+    (the multi-type-array form `{"type": ["X", "null"]}` cannot express
+    nullable `$ref`).
+- **Nesting**: any inner type is allowed — `Optional<List<int>>`,
+  `Optional<{a: int}>`, `List<Optional<int>>`, `Dict<str, Optional<int>>`.
+
 ### Records
 
 `{field_name: type, field_name: type}`

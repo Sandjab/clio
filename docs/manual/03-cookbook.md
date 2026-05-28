@@ -1054,6 +1054,28 @@ input.
 - **Nested generics in the value are supported**: `Dict<str, List<int>>`,
   `Dict<str, {a: int, b: str}>`, `Dict<str, customer_risk>` (CONTRACT ref).
 
+## 26. Nullable fields with `Optional<T>` (v0.21)
+
+Use `Optional<T>` when a CONTRACT field can be present with a value OR
+present with `null` — e.g. a user record with an optional nickname, an
+extracted entity with an optional confidence score.
+
+```
+CONTRACT user_profile
+  SHAPE: {id: int, nickname: Optional<str>, confidence: Optional<float>}
+```
+
+The compiler renders `Optional<T>` as `T | None` (Pydantic), `*T` (Go
+pointer), and JSON Schema `{"anyOf": [<T>, {"type": "null"}]}`. The field
+is still REQUIRED at the schema level — it must be present, just possibly
+null. If you want "missing-allowed" semantics (the field can be absent
+from the record entirely), there is no current syntax; default at the
+runtime layer instead.
+
+**Nesting is fine**: `Optional<List<int>>`, `Dict<str, Optional<int>>`,
+`List<Optional<r>>` all parse. The natural read order matches Python:
+`Optional<X>` = `X | None`.
+
 ## What's not in the cookbook (yet)
 
 - **Multi-field ASSERT** — accept `a > b` between two fields. Specced, planned.

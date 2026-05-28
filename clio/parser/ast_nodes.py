@@ -31,6 +31,21 @@ class DictType(TypeExpr):
 
 
 @dataclass(frozen=True)
+class OptionalType(TypeExpr):
+    """`Optional<T>` — nullable T.
+
+    v0.21 semantics: an `Optional<T>` field accepts either a value matching
+    `T` or `null`. Renders to `T | None` (Pydantic), `*T` (Go pointer), and
+    JSON Schema `{"type": [<T-form>, "null"]}` (or a `oneOf` for complex
+    inner types). The field itself is still REQUIRED at the schema level
+    (it must be present, just possibly null) — for missing-allowed fields,
+    use a record with the field omitted; this matches Pydantic v2's
+    distinction between `T | None` (must be present, can be None) and a
+    field with a default."""
+    inner: TypeExpr
+
+
+@dataclass(frozen=True)
 class RecordType(TypeExpr):
     fields: tuple[tuple[str, TypeExpr], ...]   # ((name, type), ...)
 

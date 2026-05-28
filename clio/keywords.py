@@ -15,6 +15,7 @@ class Keyword(StrEnum):
     BOOL = "bool"
     LIST = "List"
     DICT = "Dict"
+    OPTIONAL = "Optional"
     ENUM = "enum"
     CONTRACT = "CONTRACT"
     SHAPE = "SHAPE"

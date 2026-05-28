@@ -30,6 +30,7 @@ from clio.parser.ast_nodes import (
     DictType,
     EnumType,
     ListType,
+    OptionalType,
     PrimitiveType,
     RecordType,
     TypeExpr,
@@ -54,6 +55,13 @@ def _inline_schema(t: TypeExpr, contracts_by_name: dict[str, ContractIR]) -> dic
         return {
             "type": "object",
             "additionalProperties": _inline_schema(t.value, contracts_by_name),
+        }
+    if isinstance(t, OptionalType):
+        # v0.21: nullable T → anyOf[<inner-schema>, null]. Inline the inner
+        # so the resulting subschema has no $ref (claude-cli embeds schemas
+        # in prompts where $ref resolution is unavailable).
+        return {
+            "anyOf": [_inline_schema(t.inner, contracts_by_name), {"type": "null"}],
         }
     if isinstance(t, RecordType):
         return {

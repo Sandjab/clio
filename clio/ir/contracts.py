@@ -4,6 +4,7 @@ from clio.parser.ast_nodes import (
     DictType,
     EnumType,
     ListType,
+    OptionalType,
     PrimitiveType,
     RecordType,
     TypeExpr,
@@ -37,6 +38,12 @@ def type_to_json_schema(t: TypeExpr) -> dict:
         # JSON Schema represents homogeneous string-keyed maps as
         # `{"type": "object", "additionalProperties": <V-schema>}`.
         return {"type": "object", "additionalProperties": type_to_json_schema(t.value)}
+    if isinstance(t, OptionalType):
+        # v0.21: `Optional<T>` means "value matching T or null". `anyOf` works
+        # uniformly across primitives, contracts ($ref), arrays, records, and
+        # enums — JSON Schema's multi-type-array form (`{"type": ["X", "null"]}`)
+        # can't express $ref-or-null. Pydantic v2 round-trips this form.
+        return {"anyOf": [type_to_json_schema(t.inner), {"type": "null"}]}
     if isinstance(t, RecordType):
         return {
             "type": "object",
