@@ -12,6 +12,7 @@ from clio.parser.ast_nodes import (
     ContractDecl,
     ContractRef,
     DatabaseSpec,
+    DictType,
     EnumType,
     ErrorAccessExpr,
     Field,
@@ -2047,6 +2048,8 @@ class _Parser:
             return PrimitiveType(name="str")    # v0.1 domain-alias: CSV ≡ str
         if t.type == TokenType.KEYWORD and t.value == "List":
             return self.parse_list_type()
+        if t.type == TokenType.KEYWORD and t.value == "Dict":
+            return self.parse_dict_type()
         if t.type == TokenType.KEYWORD and t.value == "enum":
             return self.parse_enum_type()
         if t.type == TokenType.LBRACE:
@@ -2099,6 +2102,22 @@ class _Parser:
         inner = self.parse_type_expr()
         self.expect(TokenType.RANGLE)
         return ListType(inner=inner)
+
+    def parse_dict_type(self) -> DictType:
+        kw = self.expect(TokenType.KEYWORD, "Dict")
+        self.expect(TokenType.LANGLE)
+        key = self.parse_type_expr()
+        if not (isinstance(key, PrimitiveType) and key.name == "str"):
+            raise ParseError(
+                "Dict<K, V> key must be `str` in v0.21 "
+                "(JSON object keys are strings; iterate via "
+                "`List<{key: str, val: V}>` if you need non-string keys)",
+                kw.line, kw.col,
+            )
+        self.expect(TokenType.COMMA)
+        value = self.parse_type_expr()
+        self.expect(TokenType.RANGLE)
+        return DictType(key=key, value=value)
 
     def parse_record_type(self) -> RecordType:
         self.expect(TokenType.LBRACE)

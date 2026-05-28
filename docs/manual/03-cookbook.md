@@ -1023,6 +1023,37 @@ judgment responses.
 deferred). When it lands in v0.20.x, the build will still work on every
 platform without a C toolchain because `modernc.org/sqlite` is pure Go.
 
+## 25. Counting / aggregating with `Dict<str, V>` (v0.21)
+
+Use `Dict<str, V>` for homogeneous string-keyed maps — counts, scores by
+category, sub-totals — without inventing a record type for each new key.
+
+```
+CONTRACT word_stats
+  SHAPE: {totals: Dict<str, int>, ratios: Dict<str, float>}
+
+STEP tally
+  TAKES: text: str
+  GIVES: stats: word_stats
+  MODE:  judgment
+  invoke: { mode: api, protocol: anthropic, model: haiku }
+```
+
+The compiler renders `Dict<str, int>` as `dict[str, int]` (Pydantic) or
+`map[string]int64` (Go) — both serialize to/from a JSON object with string
+keys, so `target: python` and `target: go` are interchangeable on the same
+input.
+
+**v0.21 constraints**:
+
+- **Keys must be `str`.** `Dict<int, V>` and `Dict<enum(...), V>` are
+  rejected at parse time; JSON object keys are always strings.
+- **No `FOR EACH` over a `Dict`.** If you need to iterate, model the data
+  as `List<{key: str, val: V}>` upstream — the conversion is one judgment
+  step (or one exact step if the source is structured).
+- **Nested generics in the value are supported**: `Dict<str, List<int>>`,
+  `Dict<str, {a: int, b: str}>`, `Dict<str, customer_risk>` (CONTRACT ref).
+
 ## What's not in the cookbook (yet)
 
 - **Multi-field ASSERT** — accept `a > b` between two fields. Specced, planned.

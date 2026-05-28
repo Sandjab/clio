@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased]
+
+First half of the v0.21 push to align `docs/LANGUAGE_SPEC.md` with what the parser actually accepts. The spec has documented `Dict<K, V>`, `Optional<T>`, and numeric/string constraints (`int(min, max)`, `float(precision)`, `str(min)`) since v0.1 but the parser rejected every one. This release ships `Dict<K, V>`; `Optional<T>` and the extended constraints land in subsequent PRs (v0.21.0 will not cut until all three are in).
+
+### Added
+
+- **`Dict<K, V>` — homogeneous string-keyed map type.** Parser accepts `Dict<str, V>` in CONTRACTs, STEP TAKES / GIVES, and FLOW TAKES / GIVES. Renders to: `dict[str, V]` (Pydantic — python/mcp-server/langgraph/claude-skill targets), `map[string]V` (Go target), `{"type": "object", "additionalProperties": V}` (JSON Schema — claude-cli and claude-skill schemas, MCP tool inputSchema/outputSchema). v0.21 constraints (enforced at parse time with clear errors): (1) `K` must be `str` — `Dict<int, V>`, `Dict<enum(...), V>`, etc. are rejected (JSON object keys are strings; Go's `encoding/json` only natively supports string-keyed maps); (2) `FOR EACH` over a `Dict` is forbidden — model as `List<{key: str, val: V}>` upstream if iteration is needed. Nested generics inside the value are supported: `Dict<str, List<int>>`, `Dict<str, {a: int, b: str}>`, `Dict<str, ContractRef>`. Documented as cookbook recipe #25.
+
+### Fixed
+
+- **`_json_type_to_go` and `_json_type_to_python` (`clio/emitters/_shared_utils.py`) now descend into `additionalProperties`.** Both walkers, used to render Go struct fields and Python type annotations from a CONTRACT's `json_schema` dict, returned the generic `map[string]any` / `dict` for any object-typed subschema. With `Dict<K, V>` introduced this turns into a typed `map[string]<V>` / `dict[str, V]` whenever the subschema carries `additionalProperties: {...}`. Pre-`Dict` this code path was unreachable (no producer emitted typed `additionalProperties`), so the fix is forward-compatible only.
+
+### Tests
+
+- 6 new parser tests in `tests/test_parser.py` exercising `Dict<str, primitive>`, `Dict<str, ContractRef>`, `Dict<str, List<int>>` (nested), plus the two parse-time rejection cases (`Dict<int, int>`, `Dict<enum(...), int>`).
+- 3 new IR tests in `tests/test_ir.py` covering `type_to_json_schema` for `Dict<str, primitive>` and `Dict<str, ContractRef>`, plus IR-build rejection of `Dict<str, missing>` (unknown contract ref).
+- 6 new cross-target smoke tests in `tests/test_emitters/test_dict_type.py` — one per emitter, asserting Dict renders correctly in the emitted contract / schema / Go struct. Net `1136 → 1150` (+14).
+
 ## [0.20.1] — 2026-05-28
 
 Patch release consolidating `clio import` after dogfooding the LLM-assisted path against three hand-written third-party skills (`math-olympiad`, `agent-development`, `hook-development`), plus a catch-up bump of the in-package `__version__` that was missed in the v0.20.0 release-admin PR.

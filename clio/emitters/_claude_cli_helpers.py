@@ -27,6 +27,7 @@ from clio.ir.graph import (
 from clio.parser.ast_nodes import (
     ConstrainedType,
     ContractRef,
+    DictType,
     EnumType,
     ListType,
     PrimitiveType,
@@ -47,6 +48,13 @@ def _inline_schema(t: TypeExpr, contracts_by_name: dict[str, ContractIR]) -> dic
         return schema
     if isinstance(t, ListType):
         return {"type": "array", "items": _inline_schema(t.inner, contracts_by_name)}
+    if isinstance(t, DictType):
+        # v0.21: keys are always `str`. The JSON Schema is a string-keyed
+        # object whose value schema is the inlined V type.
+        return {
+            "type": "object",
+            "additionalProperties": _inline_schema(t.value, contracts_by_name),
+        }
     if isinstance(t, RecordType):
         return {
             "type": "object",

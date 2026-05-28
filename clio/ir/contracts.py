@@ -1,6 +1,7 @@
 from clio.parser.ast_nodes import (
     ConstrainedType,
     ContractRef,
+    DictType,
     EnumType,
     ListType,
     PrimitiveType,
@@ -31,6 +32,11 @@ def type_to_json_schema(t: TypeExpr) -> dict:
         return {"type": _PRIMITIVE_JSON_TYPES[t.name]}
     if isinstance(t, ListType):
         return {"type": "array", "items": type_to_json_schema(t.inner)}
+    if isinstance(t, DictType):
+        # v0.21: key is always PrimitiveType("str") (enforced by the parser).
+        # JSON Schema represents homogeneous string-keyed maps as
+        # `{"type": "object", "additionalProperties": <V-schema>}`.
+        return {"type": "object", "additionalProperties": type_to_json_schema(t.value)}
     if isinstance(t, RecordType):
         return {
             "type": "object",

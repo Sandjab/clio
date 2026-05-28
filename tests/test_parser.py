@@ -137,6 +137,70 @@ def test_parse_enum_type():
     assert t.values == ("low", "mid", "high")
 
 
+def test_parse_dict_of_primitives():
+    src = (
+        "STEP load\n"
+        "  GIVES: counts: Dict<str, int>\n"
+        "  MODE: exact\n"
+    )
+    program = parse(src)
+    t = program.decls[0].gives.type
+    assert t.__class__.__name__ == "DictType"
+    assert t.key.__class__.__name__ == "PrimitiveType"
+    assert t.key.name == "str"
+    assert t.value.__class__.__name__ == "PrimitiveType"
+    assert t.value.name == "int"
+
+
+def test_parse_dict_of_contract_ref():
+    src = (
+        "CONTRACT r\n"
+        "  SHAPE: {x: int}\n"
+        "STEP s\n"
+        "  GIVES: out: Dict<str, r>\n"
+        "  MODE: judgment\n"
+    )
+    program = parse(src)
+    step = next(d for d in program.decls if d.__class__.__name__ == "StepDecl")
+    t = step.gives.type
+    assert t.__class__.__name__ == "DictType"
+    assert t.value.__class__.__name__ == "ContractRef"
+    assert t.value.name == "r"
+
+
+def test_parse_dict_nested_list_value():
+    src = (
+        "STEP load\n"
+        "  GIVES: index: Dict<str, List<int>>\n"
+        "  MODE: exact\n"
+    )
+    program = parse(src)
+    t = program.decls[0].gives.type
+    assert t.__class__.__name__ == "DictType"
+    assert t.value.__class__.__name__ == "ListType"
+    assert t.value.inner.__class__.__name__ == "PrimitiveType"
+
+
+def test_parse_dict_non_str_key_raises():
+    src = (
+        "STEP load\n"
+        "  GIVES: counts: Dict<int, int>\n"
+        "  MODE: exact\n"
+    )
+    with pytest.raises(ParseError, match="Dict.*key.*must be `str`"):
+        parse(src)
+
+
+def test_parse_dict_enum_key_raises():
+    src = (
+        "STEP load\n"
+        "  GIVES: counts: Dict<enum(a|b), int>\n"
+        "  MODE: exact\n"
+    )
+    with pytest.raises(ParseError, match="Dict.*key.*must be `str`"):
+        parse(src)
+
+
 def test_parse_unbalanced_brace_raises():
     src = "STEP foo\n  GIVES: x: {name: str\n  MODE: exact\n"
     with pytest.raises(ParseError):

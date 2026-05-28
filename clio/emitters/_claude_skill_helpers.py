@@ -30,6 +30,7 @@ from clio.ir.graph import (
 from clio.parser.ast_nodes import (
     ConstrainedType,
     ContractRef,
+    DictType,
     EnumType,
     ListType,
     PrimitiveType,
@@ -47,6 +48,8 @@ def _type_to_display(t: TypeExpr) -> str:
         return f"{_type_to_display(t.base)}({constraints})"
     if isinstance(t, ListType):
         return f"List<{_type_to_display(t.inner)}>"
+    if isinstance(t, DictType):
+        return f"Dict<{_type_to_display(t.key)}, {_type_to_display(t.value)}>"
     if isinstance(t, RecordType):
         fields = ", ".join(f"{n}: {_type_to_display(ty)}" for n, ty in t.fields)
         return "{" + fields + "}"

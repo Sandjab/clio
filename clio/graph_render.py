@@ -32,6 +32,7 @@ from clio.ir.graph import (
 from clio.parser.ast_nodes import (
     ConstrainedType,
     ContractRef,
+    DictType,
     EnumType,
     ListType,
     PrimitiveType,
@@ -256,6 +257,8 @@ def _type_to_str(t: TypeExpr) -> str:
         return t.name
     if isinstance(t, ListType):
         return f"List<{_type_to_str(t.inner)}>"
+    if isinstance(t, DictType):
+        return f"Dict<{_type_to_str(t.key)}, {_type_to_str(t.value)}>"
     if isinstance(t, RecordType):
         return "{" + ", ".join(f"{n}: {_type_to_str(ty)}" for n, ty in t.fields) + "}"
     if isinstance(t, EnumType):
@@ -278,6 +281,9 @@ def _collect_contract_refs(t: TypeExpr) -> list[str]:
                 seen.append(node.name)
         elif isinstance(node, ListType):
             walk(node.inner)
+        elif isinstance(node, DictType):
+            walk(node.key)
+            walk(node.value)
         elif isinstance(node, RecordType):
             for _, ty in node.fields:
                 walk(ty)
