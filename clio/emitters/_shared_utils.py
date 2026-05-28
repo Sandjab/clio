@@ -229,10 +229,16 @@ def _json_type_to_go(schema: dict) -> str:
     if "enum" in schema:
         return "string"
     # Optional<T> renders to {"anyOf": [<inner>, {"type": "null"}]}: produce
-    # `*<inner-go-type>` so the Go field is nilable.
+    # `*<inner-go-type>` so the Go field is nilable. Slices (`[]T`) and maps
+    # (`map[K]V`) are already nilable in Go (their zero value is `nil`), so
+    # skip the pointer wrapper — `*[]T` and `*map[K]V` are unidiomatic and
+    # add a pointless extra indirection. PR-B Gemini #3317227632.
     inner = _anyof_optional_inner(schema)
     if inner is not None:
-        return f"*{_json_type_to_go(inner)}"
+        go_type = _json_type_to_go(inner)
+        if go_type.startswith("[]") or go_type.startswith("map["):
+            return go_type
+        return f"*{go_type}"
     t = schema.get("type")
     if t == "string":
         return "string"
@@ -255,21 +261,23 @@ def _json_type_to_go(schema: dict) -> str:
 
 
 def _anyof_optional_inner(schema: dict) -> dict | None:
-    """If `schema` is the exact `{"anyOf": [<inner>, {"type": "null"}]}`
-    shape emitted by `type_to_json_schema(OptionalType(inner))`, return the
-    inner subschema. Otherwise return None.
+    """If `schema` is the `{"anyOf": [<inner>, {"type": "null"}]}` shape
+    emitted by `type_to_json_schema(OptionalType(inner))`, return the inner
+    subschema. Otherwise return None.
 
     Symmetric helper shared by `_json_type_to_python` and `_json_type_to_go`
     so the two walkers stay in sync. Tolerant to the order of the two
-    branches inside `anyOf` (jsonschema validators accept both)."""
+    branches and to extra metadata keys on the null branch (`description`,
+    `title`, custom extensions) — checks `branch.get("type") == "null"`
+    rather than strict-equality against `{"type": "null"}`. PR-B Gemini
+    #3317227658 (robustness)."""
     branches = schema.get("anyOf")
     if not (isinstance(branches, list) and len(branches) == 2):
         return None
-    null_branch = {"type": "null"}
     a, b = branches
-    if a == null_branch and isinstance(b, dict):
+    if isinstance(a, dict) and a.get("type") == "null" and isinstance(b, dict):
         return b
-    if b == null_branch and isinstance(a, dict):
+    if isinstance(b, dict) and b.get("type") == "null" and isinstance(a, dict):
         return a
     return None
 
@@ -551,10 +559,14 @@ def _type_to_go(
             f"{_type_to_go(t.value, contracts, qualifier=qualifier)}"
         )
     if isinstance(t, OptionalType):
-        # v0.21: nullable T renders as `*T` (Go pointer). For nested arrays /
-        # maps the pointer wraps the whole inner expression, matching Go's
-        # convention that `*[]T` (pointer to slice) is a nil-able slice.
-        return f"*{_type_to_go(t.inner, contracts, qualifier=qualifier)}"
+        # v0.21: nullable T renders as `*T` (Go pointer). Slices (`[]T`) and
+        # maps (`map[K]V`) are already nilable in Go — their zero value is
+        # `nil` — so skip the pointer wrapper for those. PR-B Gemini
+        # #3317227648 (idiomatic Go).
+        inner_go = _type_to_go(t.inner, contracts, qualifier=qualifier)
+        if inner_go.startswith("[]") or inner_go.startswith("map["):
+            return inner_go
+        return f"*{inner_go}"
     if isinstance(t, RecordType):
         fields = "; ".join(
             f'{_to_go_field_name(fname)} {_type_to_go(ftype, contracts, qualifier=qualifier)} '

@@ -114,3 +114,33 @@ def test_go_target_renders_optional_as_pointer(tmp_path):
     GoEmitter().emit(build_ir(parse(src)), tmp_path)
     contracts_go = _find(_tree(tmp_path), "contracts.go")
     assert "*string" in contracts_go, contracts_go
+
+
+def test_go_target_optional_slice_is_bare_slice(tmp_path):
+    """Optional<List<int>> → `[]int64` (NOT `*[]int64`).
+
+    Slices and maps are already nilable in Go; wrapping in a pointer is
+    unidiomatic. Mirrors PR-B Gemini #3317227648 (idiomatic Go)."""
+    src = (
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+        "\n"
+        "CONTRACT data\n"
+        "  SHAPE: {ids: Optional<List<int>>, counts: Optional<Dict<str, int>>}\n"
+        "\n"
+        "STEP load\n"
+        "  TAKES: raw: str\n"
+        "  GIVES: out: data\n"
+        "  MODE: exact\n"
+        "  LANG: go\n"
+        "\n"
+        "FLOW main\n"
+        '  load(raw="x")\n'
+    )
+    GoEmitter().emit(build_ir(parse(src)), tmp_path)
+    contracts_go = _find(_tree(tmp_path), "contracts.go")
+    assert "*[]" not in contracts_go, "Optional<List<T>> must NOT wrap *[]T"
+    assert "*map[" not in contracts_go, "Optional<Dict<K, V>> must NOT wrap *map[K]V"
+    assert "[]int64" in contracts_go
+    assert "map[string]int64" in contracts_go

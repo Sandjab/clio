@@ -35,13 +35,14 @@ class OptionalType(TypeExpr):
     """`Optional<T>` — nullable T.
 
     v0.21 semantics: an `Optional<T>` field accepts either a value matching
-    `T` or `null`. Renders to `T | None` (Pydantic), `*T` (Go pointer), and
-    JSON Schema `{"type": [<T-form>, "null"]}` (or a `oneOf` for complex
-    inner types). The field itself is still REQUIRED at the schema level
-    (it must be present, just possibly null) — for missing-allowed fields,
-    use a record with the field omitted; this matches Pydantic v2's
-    distinction between `T | None` (must be present, can be None) and a
-    field with a default."""
+    `T` or `null`. Renders to `T | None` (Pydantic), `*T` (Go pointer; bare
+    `[]T` / `map[K]V` for slices/maps which are already nilable in Go), and
+    JSON Schema `{"anyOf": [<T-schema>, {"type": "null"}]}` (uniform across
+    primitives, contracts, arrays, records, enums — the multi-type-array
+    form cannot express nullable `$ref`). The field itself is still REQUIRED
+    at the schema level — it must be present, just possibly null. This
+    matches Pydantic v2's distinction between `T | None` (must be present,
+    can be None) and a field with a default."""
     inner: TypeExpr
 
 
