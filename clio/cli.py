@@ -421,6 +421,13 @@ def _recover_from_sidecar(
         return 2
 
     out_dir = Path(output)
+    if out_dir.exists() and not out_dir.is_dir():
+        print(
+            f"clio import: multi-file skill — --output must be a directory, "
+            f"but {out_dir} is an existing file.",
+            file=sys.stderr,
+        )
+        return 2
     sources_dir = sk_path / ".clio" / "sources"
     for rel in sorted(sources):
         src = sources_dir / rel

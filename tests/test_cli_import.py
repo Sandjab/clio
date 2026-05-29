@@ -320,3 +320,15 @@ def test_import_multi_file_auto_with_missing_stored_source_exits_2(tmp_path: Pat
     rc = main(["import", str(skill), "--output", str(tmp_path / "recovered")])
     assert rc == 2
     assert "schemas.clio" in capsys.readouterr().err
+
+
+def test_import_multi_file_output_is_existing_file_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from clio.cli import _cmd_compile, main
+
+    skill = tmp_path / "skill"
+    assert _cmd_compile(str(_MULTI_FILE_MAIN), "claude-skill", str(skill), None) == 0
+    out_file = tmp_path / "out.clio"
+    out_file.write_text("placeholder\n")  # existing FILE, not a directory
+    rc = main(["import", str(skill), "--output", str(out_file)])
+    assert rc == 2
+    assert "directory" in capsys.readouterr().err.lower()
