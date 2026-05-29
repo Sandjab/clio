@@ -66,21 +66,36 @@ def _iter_skill_files(skill_dir: Path) -> Iterator[Path]:
         yield path
 
 
-def build_manifest(source_bytes: bytes, skill_dir: Path, *, clio_version: str) -> dict[str, Any]:
+def build_manifest(
+    source_bytes: bytes,
+    skill_dir: Path,
+    *,
+    clio_version: str,
+    sources_map: dict[str, str] | None = None,
+    entry: str | None = None,
+) -> dict[str, Any]:
     """Build the manifest dict from already-read source bytes. Caller is
     responsible for serializing to JSON. Accepting bytes (not Path) lets
     write_sidecar guarantee the stored source.clio and the recorded
-    source_hash agree by reading the file only once."""
+    source_hash agree by reading the file only once.
+
+    `sources_map` / `entry` are recorded only for multi-file projects (the
+    full source tree + the entry's relpath); single-file manifests omit both
+    keys, keeping v0.21 output byte-identical."""
     file_hashes: dict[str, str] = {}
     for f in _iter_skill_files(skill_dir):
         rel = f.relative_to(skill_dir).as_posix()
         file_hashes[rel] = compute_file_hash(f)
-    return {
+    manifest: dict[str, Any] = {
         "clio_version": clio_version,
         "emitted_at": _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "source_hash": compute_source_hash(source_bytes),
         "file_hashes": file_hashes,
     }
+    if sources_map is not None:
+        manifest["entry"] = entry
+        manifest["sources"] = sources_map
+    return manifest
 
 
 def write_sidecar(source_path: Path, skill_dir: Path, *, clio_version: str) -> None:

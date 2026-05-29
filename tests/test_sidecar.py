@@ -194,3 +194,35 @@ def test_check_drift_raises_when_manifest_missing(tmp_path):
     skill_dir.mkdir()
     with pytest.raises(FileNotFoundError):
         check_drift(skill_dir, skill_dir / ".clio" / "manifest.json")
+
+
+def test_build_manifest_adds_sources_and_entry_when_provided(tmp_path):
+    from clio.emitters._sidecar import build_manifest
+
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("# skill\n")
+    src = tmp_path / "main.clio"
+    src.write_text("STEP s\n  MODE: exact\n")
+    m = build_manifest(
+        src.read_bytes(),
+        skill,
+        clio_version="0.22.0",
+        sources_map={"main.clio": "sha256:aaa", "lib.clio": "sha256:bbb"},
+        entry="main.clio",
+    )
+    assert m["entry"] == "main.clio"
+    assert m["sources"] == {"main.clio": "sha256:aaa", "lib.clio": "sha256:bbb"}
+
+
+def test_build_manifest_omits_sources_when_not_provided(tmp_path):
+    from clio.emitters._sidecar import build_manifest
+
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("# skill\n")
+    src = tmp_path / "main.clio"
+    src.write_text("STEP s\n  MODE: exact\n")
+    m = build_manifest(src.read_bytes(), skill, clio_version="0.22.0")
+    assert "sources" not in m
+    assert "entry" not in m
