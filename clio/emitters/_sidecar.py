@@ -152,6 +152,35 @@ def write_sidecar(
     )
 
 
+def check_source_drift(skill_dir: Path, manifest_path: Path) -> list[str] | None:
+    """Compare the manifest's `sources` hashes to the actual `.clio/sources/`
+    tree.
+
+    Returns None when the manifest has no `sources` map (single-file skill) or
+    when every recorded source matches. Returns a sorted list of drifted
+    relpaths (modified or missing) otherwise.
+
+    This is separate from `check_drift`: stored sources live under `.clio/`,
+    which `_iter_skill_files` deliberately excludes from `file_hashes`.
+
+    Raises FileNotFoundError if the manifest is missing."""
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"manifest not found: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    recorded: dict[str, str] = manifest.get("sources", {})
+    if not recorded:
+        return None
+    sources_dir = skill_dir / ".clio" / "sources"
+    drifted: set[str] = set()
+    for rel, h in recorded.items():
+        f = sources_dir / rel
+        if not f.exists():
+            drifted.add(rel)
+        elif compute_source_hash(f.read_bytes()) != h:
+            drifted.add(rel)
+    return sorted(drifted) if drifted else None
+
+
 def check_drift(skill_dir: Path, manifest_path: Path) -> list[str] | None:
     """Compare recorded `file_hashes` to current state of `skill_dir`.
 
