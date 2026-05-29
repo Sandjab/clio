@@ -139,7 +139,14 @@ def _predicate_expr(field: str, pred) -> str:
 
 
 class PythonEmitter(BaseEmitter):
-    def emit(self, graph: FlowGraph, output_dir: Path, *, source_path: Path | None = None) -> None:
+    def emit(
+        self,
+        graph: FlowGraph,
+        output_dir: Path,
+        *,
+        source_path: Path | None = None,
+        sources: tuple[Path, ...] | None = None,
+    ) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
         pkg_name = self._package_name(graph)
         pkg_dir = output_dir / pkg_name

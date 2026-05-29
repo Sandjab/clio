@@ -2,6 +2,8 @@ from pathlib import Path
 
 import pytest
 
+_MULTI_FILE_MAIN = Path(__file__).resolve().parents[1] / "examples" / "multi_file" / "main.clio"
+
 _TINY_SOURCE = (
     "STEP foo\n  MODE: exact\n  LANG: python\n"
     "FLOW pipe\n  foo()\n"
@@ -244,3 +246,18 @@ def test_import_auto_with_corrupted_manifest_falls_back_to_llm(tmp_path, monkeyp
     rc = main(["import", str(skill)])
     assert rc == 0
     assert capsys.readouterr().out == expected
+
+
+def test_compile_multi_file_skill_writes_source_tree(tmp_path: Path) -> None:
+    from clio.cli import _cmd_compile
+
+    skill = tmp_path / "skill"
+    rc = _cmd_compile(str(_MULTI_FILE_MAIN), "claude-skill", str(skill), None)
+    assert rc == 0
+    assert (skill / ".clio" / "sources" / "main.clio").exists()
+    assert (skill / ".clio" / "sources" / "schemas.clio").exists()
+    assert (skill / ".clio" / "sources" / "nlp" / "nlp.clio").exists()
+    import json
+    manifest = json.loads((skill / ".clio" / "manifest.json").read_text())
+    assert manifest["entry"] == "main.clio"
+    assert set(manifest["sources"]) == {"main.clio", "schemas.clio", "nlp/nlp.clio"}

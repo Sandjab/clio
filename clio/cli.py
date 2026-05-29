@@ -144,7 +144,7 @@ def _cmd_compile(source: str, target: str, output: str, flow: str | None = None)
         LangGraphEmitter().emit(graph, out_path, source_path=src_resolved)
     elif target == "claude-skill":
         from clio.emitters.claude_skill import ClaudeSkillEmitter
-        ClaudeSkillEmitter().emit(graph, out_path, source_path=src_resolved)
+        ClaudeSkillEmitter().emit(graph, out_path, source_path=src_resolved, sources=tuple(parsed))
     elif target == "go":
         from clio.emitters.go import GoEmitter
         GoEmitter().emit(graph, out_path, source_path=src_resolved)

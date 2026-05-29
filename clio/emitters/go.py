@@ -42,6 +42,7 @@ class GoEmitter(BaseEmitter):
         output_dir: Path,
         *,
         source_path: Path | None = None,
+        sources: tuple[Path, ...] | None = None,
     ) -> None:
         """Emit a Go module under `output_dir`.
 

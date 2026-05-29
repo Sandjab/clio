@@ -104,7 +104,14 @@ class ClaudeCLIEmitter(BaseEmitter):
                     f"--target mcp-server"
                 )
 
-    def emit(self, graph: FlowGraph, output_dir: Path, *, source_path: Path | None = None) -> None:
+    def emit(
+        self,
+        graph: FlowGraph,
+        output_dir: Path,
+        *,
+        source_path: Path | None = None,
+        sources: tuple[Path, ...] | None = None,
+    ) -> None:
         self._check_no_subflow_calls(graph)
         self._reject_parallel(graph)
         self._reject_rescue(graph)

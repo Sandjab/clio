@@ -79,7 +79,14 @@ class ClaudeSkillEmitter(BaseEmitter):
                         f"structure to the main FLOW, or split the sub-flow."
                     )
 
-    def emit(self, graph: FlowGraph, output_dir: Path, *, source_path: Path | None = None) -> None:
+    def emit(
+        self,
+        graph: FlowGraph,
+        output_dir: Path,
+        *,
+        source_path: Path | None = None,
+        sources: tuple[Path, ...] | None = None,
+    ) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "scripts").mkdir(exist_ok=True)
         (output_dir / "scripts" / "_validate.py").write_text(render_bundled_validate_script())
@@ -127,7 +134,7 @@ class ClaudeSkillEmitter(BaseEmitter):
         if source_path is not None:
             from clio import __version__ as _clio_version
             try:
-                write_sidecar(source_path, output_dir, clio_version=_clio_version)
+                write_sidecar(source_path, output_dir, clio_version=_clio_version, sources=sources)
             except (OSError, FileNotFoundError) as e:
                 print(
                     f"claude-skill warning: failed to write .clio/ sidecar ({e}); "
