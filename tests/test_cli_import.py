@@ -332,3 +332,22 @@ def test_import_multi_file_output_is_existing_file_exits_2(tmp_path: Path, capsy
     rc = main(["import", str(skill), "--output", str(out_file)])
     assert rc == 2
     assert "directory" in capsys.readouterr().err.lower()
+
+
+def test_import_multi_file_rejects_path_traversal_in_manifest(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    import json
+
+    from clio.cli import _cmd_compile, main
+
+    skill = tmp_path / "skill"
+    assert _cmd_compile(str(_MULTI_FILE_MAIN), "claude-skill", str(skill), None) == 0
+    # A maliciously crafted manifest points a source relpath outside
+    # .clio/sources/; reconstruction must reject it, not write outside --output.
+    mf = skill / ".clio" / "manifest.json"
+    m = json.loads(mf.read_text())
+    m["sources"] = {"../../escaped.clio": "sha256:deadbeef"}
+    mf.write_text(json.dumps(m))
+    rc = main(["import", str(skill), "--output", str(tmp_path / "recovered")])
+    assert rc == 2
+    assert "traversal" in capsys.readouterr().err.lower()
+    assert not (tmp_path / "escaped.clio").exists()

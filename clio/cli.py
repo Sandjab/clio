@@ -420,7 +420,7 @@ def _recover_from_sidecar(
         )
         return 2
 
-    out_dir = Path(output)
+    out_dir = Path(output).resolve()
     if out_dir.exists() and not out_dir.is_dir():
         print(
             f"clio import: multi-file skill — --output must be a directory, "
@@ -428,9 +428,18 @@ def _recover_from_sidecar(
             file=sys.stderr,
         )
         return 2
-    sources_dir = sk_path / ".clio" / "sources"
+    sources_dir = (sk_path / ".clio" / "sources").resolve()
     for rel in sorted(sources):
-        src = sources_dir / rel
+        # `rel` comes from a potentially untrusted manifest; reject any path
+        # that would escape its base dir (path-traversal hardening).
+        src = (sources_dir / rel).resolve()
+        dst = (out_dir / rel).resolve()
+        if not src.is_relative_to(sources_dir) or not dst.is_relative_to(out_dir):
+            print(
+                f"clio import: path traversal detected in source path: {rel}",
+                file=sys.stderr,
+            )
+            return 2
         if not src.exists():
             print(
                 f"clio import: stored source missing: {src} "
@@ -439,7 +448,6 @@ def _recover_from_sidecar(
                 file=sys.stderr,
             )
             return 2
-        dst = out_dir / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_bytes(src.read_bytes())
     entry = manifest.get("entry")

@@ -170,10 +170,15 @@ def check_source_drift(skill_dir: Path, manifest_path: Path) -> list[str] | None
     recorded: dict[str, str] = manifest.get("sources", {})
     if not recorded:
         return None
-    sources_dir = skill_dir / ".clio" / "sources"
+    sources_dir = (skill_dir / ".clio" / "sources").resolve()
     drifted: set[str] = set()
     for rel, h in recorded.items():
-        f = sources_dir / rel
+        # `rel` comes from a potentially untrusted manifest; a path that would
+        # escape `sources_dir` is treated as drift, never read.
+        f = (sources_dir / rel).resolve()
+        if not f.is_relative_to(sources_dir):
+            drifted.add(rel)
+            continue
         if not f.exists():
             drifted.add(rel)
         elif compute_source_hash(f.read_bytes()) != h:

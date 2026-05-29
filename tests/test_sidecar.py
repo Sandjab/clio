@@ -356,3 +356,28 @@ def test_check_source_drift_raises_when_manifest_missing(tmp_path):
     skill.mkdir()
     with pytest.raises(FileNotFoundError):
         check_source_drift(skill, skill / ".clio" / "manifest.json")
+
+
+def test_check_source_drift_rejects_path_traversal(tmp_path):
+    import json
+
+    from clio.emitters._sidecar import check_source_drift, write_sidecar
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    entry = root / "main.clio"
+    entry.write_bytes(b"A\n")
+    lib = root / "lib.clio"
+    lib.write_bytes(b"B\n")
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("# skill\n")
+    write_sidecar(entry, skill, clio_version="0.22.0", sources=(entry, lib))
+
+    # A manifest whose source relpath escapes .clio/sources/ must be flagged as
+    # drift (never read off-tree), not silently hashed.
+    mf = skill / ".clio" / "manifest.json"
+    m = json.loads(mf.read_text())
+    m["sources"] = {"../escaped.clio": "sha256:deadbeef"}
+    mf.write_text(json.dumps(m))
+    assert check_source_drift(skill, mf) == ["../escaped.clio"]
