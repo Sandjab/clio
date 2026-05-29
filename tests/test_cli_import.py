@@ -261,3 +261,62 @@ def test_compile_multi_file_skill_writes_source_tree(tmp_path: Path) -> None:
     manifest = json.loads((skill / ".clio" / "manifest.json").read_text())
     assert manifest["entry"] == "main.clio"
     assert set(manifest["sources"]) == {"main.clio", "schemas.clio", "nlp/nlp.clio"}
+
+
+def test_import_multi_file_round_trip_recompiles(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from clio.cli import _cmd_check, _cmd_compile, main
+
+    skill = tmp_path / "skill"
+    assert _cmd_compile(str(_MULTI_FILE_MAIN), "claude-skill", str(skill), None) == 0
+
+    recovered = tmp_path / "recovered"
+    rc = main(["import", str(skill), "--output", str(recovered)])
+    assert rc == 0
+
+    # verbatim recovery of the whole tree
+    base = _MULTI_FILE_MAIN.parent
+    assert (recovered / "main.clio").read_bytes() == (base / "main.clio").read_bytes()
+    assert (recovered / "schemas.clio").read_bytes() == (base / "schemas.clio").read_bytes()
+    assert (recovered / "nlp" / "nlp.clio").read_bytes() == (base / "nlp" / "nlp.clio").read_bytes()
+
+    # the recovered entry recompiles — the bug was: imports could not be found
+    assert _cmd_check(str(recovered / "main.clio")) == 0
+
+
+def test_import_multi_file_without_output_dir_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from clio.cli import _cmd_compile, main
+
+    skill = tmp_path / "skill"
+    assert _cmd_compile(str(_MULTI_FILE_MAIN), "claude-skill", str(skill), None) == 0
+    rc = main(["import", str(skill)])  # no --output → would be stdout
+    assert rc == 2
+    assert "multi-file" in capsys.readouterr().err.lower()
+
+
+def test_import_multi_file_strict_detects_source_tampering(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from clio.cli import _cmd_compile, main
+
+    skill = tmp_path / "skill"
+    assert _cmd_compile(str(_MULTI_FILE_MAIN), "claude-skill", str(skill), None) == 0
+    # tamper a stored source (excluded from file_hashes, so only check_source_drift catches it)
+    (skill / ".clio" / "sources" / "schemas.clio").write_text("CONTRACT Tampered\n  SHAPE: {x: str}\n")
+    recovered = tmp_path / "recovered"
+    rc = main(["import", str(skill), "--mode", "strict", "--output", str(recovered)])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "drift" in err.lower()
+    assert "schemas.clio" in err
+
+
+def test_import_multi_file_auto_with_missing_stored_source_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from clio.cli import _cmd_compile, main
+
+    skill = tmp_path / "skill"
+    assert _cmd_compile(str(_MULTI_FILE_MAIN), "claude-skill", str(skill), None) == 0
+    # partial sidecar: a stored source is gone. Auto mode does NOT run
+    # check_source_drift, and .clio/ is excluded from check_drift, so this
+    # reaches the reconstruction loop — which must fail loud, not crash.
+    (skill / ".clio" / "sources" / "schemas.clio").unlink()
+    rc = main(["import", str(skill), "--output", str(tmp_path / "recovered")])
+    assert rc == 2
+    assert "schemas.clio" in capsys.readouterr().err

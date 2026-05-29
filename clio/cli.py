@@ -335,7 +335,7 @@ def _cmd_import(*, skill_dir: str, output: str | None, model: str, mode: str) ->
             )
             _print_drift_list(drift)
             return 2
-        return _emit_imported_source(source_file.read_text(), output)
+        return _recover_from_sidecar(sk_path, manifest_file, source_file, output, strict=True)
 
     if mode == "infer":
         return _import_via_llm(sk_path, model=model, output=output)
@@ -360,7 +360,7 @@ def _cmd_import(*, skill_dir: str, output: str | None, model: str, mode: str) ->
             # treat as drift — fall through to LLM
         else:
             if drift is None:
-                return _emit_imported_source(source_file.read_text(), output)
+                return _recover_from_sidecar(sk_path, manifest_file, source_file, output, strict=False)
             # Drift detected → warn and fall through to LLM
             emitted_at = _read_emitted_at(manifest_file)
             print(
@@ -379,6 +379,68 @@ def _emit_imported_source(source_text: str, output: str | None) -> int:
         sys.stdout.write(source_text)
     else:
         Path(output).write_text(source_text)
+    return 0
+
+
+def _recover_from_sidecar(
+    sk_path: Path,
+    manifest_file: Path,
+    source_file: Path,
+    output: str | None,
+    *,
+    strict: bool,
+) -> int:
+    """Recover the source from a CLIO sidecar. Single-file → emit the entry
+    (stdout or file). Multi-file (`sources` present) → reconstruct the tree
+    under the output directory."""
+    import json as _json
+
+    manifest = _json.loads(manifest_file.read_text(encoding="utf-8"))
+    sources = manifest.get("sources")
+    if not sources:
+        return _emit_imported_source(source_file.read_text(), output)
+
+    if strict:
+        from clio.emitters._sidecar import check_source_drift
+
+        src_drift = check_source_drift(sk_path, manifest_file)
+        if src_drift:
+            print(
+                "clio import: --mode strict and stored sources drifted.",
+                file=sys.stderr,
+            )
+            _print_drift_list(src_drift)
+            return 2
+
+    if output is None:
+        print(
+            "clio import: multi-file skill — pass --output <dir> to reconstruct "
+            "the source tree.",
+            file=sys.stderr,
+        )
+        return 2
+
+    out_dir = Path(output)
+    sources_dir = sk_path / ".clio" / "sources"
+    for rel in sorted(sources):
+        src = sources_dir / rel
+        if not src.exists():
+            print(
+                f"clio import: stored source missing: {src} "
+                "(incomplete sidecar; restore it or use --mode infer for "
+                "best-effort single-file recovery).",
+                file=sys.stderr,
+            )
+            return 2
+        dst = out_dir / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(src.read_bytes())
+    entry = manifest.get("entry")
+    print(
+        f"clio import: recovered {len(sources)} source files to {out_dir} "
+        f"(entry: {entry}).",
+        file=sys.stderr,
+    )
     return 0
 
 
