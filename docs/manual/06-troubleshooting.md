@@ -638,6 +638,22 @@ The path does not exist on disk relative to the importing file.
 **Fix:** check the path spelling and make sure the file exists. The resolver
 reports the absolute resolved path in the error to avoid guessing.
 
+### Recovering a multi-file skill (`clio import`, v0.22)
+
+A `claude-skill` compiled from a cross-file project (`FROM … IMPORT`) stores
+every imported source verbatim under `.clio/sources/`. To recover it, `clio
+import` **requires a directory** so it can rebuild the tree:
+
+```bash
+clio import ./skill-out --output ./recovered   # writes recovered/main.clio, recovered/schemas.clio, …
+clio compile ./recovered/main.clio --target python --output ./py-out   # recompiles cleanly
+```
+
+Importing a multi-file skill without `--output <dir>` exits non-zero: a source
+tree cannot be written to stdout. `--mode strict` additionally verifies every
+stored source against its recorded hash (exit 2 on tampering). Single-file
+skills are unaffected — they still recover to stdout or a single file.
+
 ### E_RES_003 — `ResolveError: 'Article' is not exposed by "./lib.clio"`
 
 The symbol exists in `lib.clio` but is not marked `EXPOSE`. Only `EXPOSE`d
@@ -800,15 +816,19 @@ directory or an interrupted prior emission. The cleanest fix is to re-run
 `clio compile --target claude-skill` to regenerate the sidecar; alternatively
 delete the `.clio/` directory to force a clean LLM import.
 
-### `clio import` recovers a `.clio` that doesn't compile (cross-file imports)
+### `clio import` recovers a `.clio` that doesn't compile (cross-file imports, pre-v0.22 skills)
 
-The v0.19 sidecar stores only the **entry** `.clio` file. If the original
-source used `FROM "lib.clio" IMPORT ...`, the recovered `source.clio`
-references files not present in the sidecar. Two workarounds: (1) keep the
-imported `.clio` files next to the recovered entry file before running
-`clio check`; (2) use `--mode infer` so the LLM produces a single inlined
-`.clio` with all flows merged. Multi-file sidecar recovery is tracked as
-[#67](https://github.com/Sandjab/clio/issues/67) for v0.20.
+Skills emitted **before v0.22** stored only the **entry** `.clio` file in the
+sidecar. If the original source used `FROM "lib.clio" IMPORT ...`, the recovered
+`source.clio` references files not present in the sidecar. Two workarounds for
+such older skills: (1) keep the imported `.clio` files next to the recovered
+entry file before running `clio check`; (2) use `--mode infer` so the LLM
+produces a single inlined `.clio` with all flows merged.
+
+Skills emitted by **v0.22 and later** store the full source tree under
+`.clio/sources/`, and `clio import --output <dir>` reconstructs it so the
+recovered project recompiles cleanly — see the *Recovering a multi-file skill*
+recipe in the "Cross-file imports" section above.
 
 ## When the docs and code diverge
 

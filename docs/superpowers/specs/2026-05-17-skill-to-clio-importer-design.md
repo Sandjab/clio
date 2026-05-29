@@ -393,7 +393,7 @@ Sections (final text written during implementation):
 - Emit-side label localization (`labels.<lang>.toml` per supported language; replace the binary FR/EN switch in `_claude_skill_helpers.py`).
 - Multi-stage chain-of-thought import for very large skills (> 100k tokens).
 - Recovery of CACHE / VALIDATE / STRATEGIES / RESCUE — requires finer heuristics, separate scope.
-- Multi-file import: a CLIO-emitted skill whose source used IMPORT / EXPOSE (v0.18) produces a single skill directory; v0.19 imports it back as a single `.clio` file with all flows inline. Multi-file output requires inferring file boundaries from the skill, which has no signal.
+- ~~Multi-file import~~ **(resolved in v0.22, sidecar path only)**: a CLIO-emitted skill whose source used IMPORT / EXPOSE (v0.18) now stores the full source tree under `.clio/sources/`, and `clio import --output <dir>` reconstructs it verbatim (see `docs/superpowers/specs/2026-05-29-multi-file-sidecar-recovery-design.md`). The LLM-recovery path (hand-written skills, no sidecar) still produces a single inline `.clio` file.
 
 **Never:**
 - Bit-identical round-trip on hand-written skills — impossible by construction.
