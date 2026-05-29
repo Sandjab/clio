@@ -16,6 +16,7 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
+import os
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -98,16 +99,53 @@ def build_manifest(
     return manifest
 
 
-def write_sidecar(source_path: Path, skill_dir: Path, *, clio_version: str) -> None:
-    """Write `.clio/source.clio` (verbatim copy) and `.clio/manifest.json`.
+def write_sidecar(
+    source_path: Path,
+    skill_dir: Path,
+    *,
+    clio_version: str,
+    sources: tuple[Path, ...] | None = None,
+) -> None:
+    """Write `.clio/source.clio` (verbatim entry copy) and `.clio/manifest.json`.
 
-    Reads source_path exactly once so the stored copy and the manifest's
-    source_hash are guaranteed to refer to the same bytes."""
+    For a multi-file project (`sources` holds more than one resolved path),
+    also write the full source tree under `.clio/sources/`, rooted at the
+    common ancestor of all sources so a `FROM "../x.clio"` import keeps its
+    relative offset, and record the `sources` hash map + `entry` relpath in the
+    manifest. Single-file projects (`sources` None or length 1) write neither —
+    output stays byte-identical to v0.21.
+
+    Each file is read exactly once; its stored copy and recorded hash refer to
+    the same bytes."""
     source_bytes = source_path.read_bytes()
     sidecar = skill_dir / ".clio"
     sidecar.mkdir(parents=True, exist_ok=True)
     (sidecar / "source.clio").write_bytes(source_bytes)
-    manifest = build_manifest(source_bytes, skill_dir, clio_version=clio_version)
+
+    sources_map: dict[str, str] | None = None
+    entry_rel: str | None = None
+    if sources is not None and len(sources) > 1:
+        resolved = [p.resolve() for p in sources]
+        root = Path(os.path.commonpath([str(p) for p in resolved]))
+        sources_map = {}
+        for p in resolved:
+            # relative_to raises if p escapes root; commonpath guarantees it
+            # cannot, so this doubles as a fail-loud backstop.
+            rel = p.relative_to(root).as_posix()
+            dst = sidecar / "sources" / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            raw = p.read_bytes()
+            dst.write_bytes(raw)
+            sources_map[rel] = compute_source_hash(raw)
+        entry_rel = source_path.resolve().relative_to(root).as_posix()
+
+    manifest = build_manifest(
+        source_bytes,
+        skill_dir,
+        clio_version=clio_version,
+        sources_map=sources_map,
+        entry=entry_rel,
+    )
     (sidecar / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

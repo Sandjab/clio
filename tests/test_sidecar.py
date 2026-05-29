@@ -226,3 +226,54 @@ def test_build_manifest_omits_sources_when_not_provided(tmp_path):
     m = build_manifest(src.read_bytes(), skill, clio_version="0.22.0")
     assert "sources" not in m
     assert "entry" not in m
+
+
+def test_write_sidecar_multi_file_stores_source_tree(tmp_path):
+    from clio.emitters._sidecar import compute_source_hash, write_sidecar
+
+    # Tree with a nested file whose import escapes its own dir (../schemas.clio),
+    # exactly the shape commonpath rooting must handle.
+    root = tmp_path / "proj"
+    (root / "nlp").mkdir(parents=True)
+    entry = root / "main.clio"
+    entry.write_bytes(b'FROM "./schemas.clio" IMPORT X\nSTEP s\n  MODE: exact\n')
+    schemas = root / "schemas.clio"
+    schemas.write_bytes(b"CONTRACT X\n  SHAPE: {a: str}\n")
+    nested = root / "nlp" / "nlp.clio"
+    nested.write_bytes(b'FROM "../schemas.clio" IMPORT X\nSTEP t\n  MODE: exact\n')
+
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("# skill\n")
+
+    write_sidecar(entry, skill, clio_version="0.22.0", sources=(entry, schemas, nested))
+
+    srcdir = skill / ".clio" / "sources"
+    assert srcdir.joinpath("main.clio").read_bytes() == entry.read_bytes()
+    assert srcdir.joinpath("schemas.clio").read_bytes() == schemas.read_bytes()
+    assert srcdir.joinpath("nlp", "nlp.clio").read_bytes() == nested.read_bytes()
+
+    manifest = json.loads((skill / ".clio" / "manifest.json").read_text())
+    assert manifest["entry"] == "main.clio"
+    assert set(manifest["sources"]) == {"main.clio", "schemas.clio", "nlp/nlp.clio"}
+    assert manifest["sources"]["schemas.clio"] == compute_source_hash(schemas.read_bytes())
+    # source.clio is still the verbatim entry (back-compat path unchanged)
+    assert (skill / ".clio" / "source.clio").read_bytes() == entry.read_bytes()
+
+
+def test_write_sidecar_single_file_omits_sources(tmp_path):
+    from clio.emitters._sidecar import write_sidecar
+
+    entry = tmp_path / "solo.clio"
+    entry.write_bytes(b"STEP s\n  MODE: exact\n")
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("# skill\n")
+
+    # A 1-tuple (no imports) must behave exactly like single-file: no tree, no keys.
+    write_sidecar(entry, skill, clio_version="0.22.0", sources=(entry,))
+
+    assert not (skill / ".clio" / "sources").exists()
+    manifest = json.loads((skill / ".clio" / "manifest.json").read_text())
+    assert "sources" not in manifest
+    assert "entry" not in manifest
