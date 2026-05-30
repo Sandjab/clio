@@ -73,11 +73,21 @@ def lex(source: str) -> list[Token]:
                 continue
             if ch == '"':
                 j = i + 1
+                buf: list[str] = []
                 while j < len(stripped) and stripped[j] != '"':
+                    if (
+                        stripped[j] == "\\"
+                        and j + 1 < len(stripped)
+                        and stripped[j + 1] in ('"', "\\")
+                    ):
+                        buf.append(stripped[j + 1])
+                        j += 2
+                        continue
+                    buf.append(stripped[j])
                     j += 1
                 if j >= len(stripped):
                     raise LexError("unterminated string literal", lineno, col)
-                tokens.append(Token(TokenType.STRING, stripped[i + 1:j], lineno, col))
+                tokens.append(Token(TokenType.STRING, "".join(buf), lineno, col))
                 col += (j - i) + 1
                 i = j + 1
                 continue
