@@ -947,3 +947,16 @@ def test_E_GO_012_test_block(tmp_path: Path) -> None:
         "  models: [haiku]\n"
     )
     _compile_expecting_error(src, tmp_path / "out", "E_GO_012")
+
+
+def test_render_clio_runtime_substitute_shape():
+    from clio.emitters._go_runtime_templates import render_clio_runtime_substitute
+
+    src = render_clio_runtime_substitute()
+    assert src.startswith("package substitute\n")
+    assert "func Apply(token string, takes map[string]any) (string, error)" in src
+    assert "os.LookupEnv" in src
+    assert "regexp.MustCompile(`\\$\\{([a-zA-Z_][a-zA-Z0-9_]*)\\}`)" in src
+    assert "not found in TAKES" in src
+    assert "is not set" in src
+    assert render_clio_runtime_substitute() == src
