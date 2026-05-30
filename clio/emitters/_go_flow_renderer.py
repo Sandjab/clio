@@ -104,21 +104,25 @@ def _go_kwarg_value(
     contracts: dict[str, ContractIR],
     state_field_to_step: dict[str, StepIR],
     scope_local: set[str] | None = None,
+    take_types: dict[str, str] | None = None,
 ) -> str:
     """Render one CallIR kwarg value as a Go expression.
 
-    Two cases, mirroring the python emitter's logic in python.py:
-    - Reference ``@<field>`` — the field name is the GIVES name of some prior
-      step.  We emit a state-based type assertion:
-          state["<field>"].(steps.<StepCls>Out).<GoField>
-      When <field> is in `scope_local` (a FOR EACH loop variable), we render
-      it as the bare identifier instead: just `<field>` (no state lookup).
-      This is the same pattern used by `_go_condition_expr` for IF conditions,
-      so the two readers are consistent with the writer.
+    Three cases, mirroring the python emitter's logic in python.py:
+    - Reference ``@<field>`` — resolved in precedence order:
+        1. loop variable (scope_local) -> bare identifier `<field>`
+        2. step producer (state_field_to_step) ->
+           `state["<field>"].(steps.<StepCls>Out).<GoField>`
+        3. flow TAKE (take_types) -> direct value assertion
+           `state["<field>"].(<go-type>)` (scalar or `contracts.<Cls>`)
+        4. unknown -> untyped fallback `state["<field>"]`
+      This is the same precedence used by `_go_condition_expr`, so the
+      readers stay consistent with the writer.
     - Literal (str / int / float / bool) — rendered as a Go literal.
       Plain strings that do not start with ``@`` are string literals.
     """
     _scope = scope_local or set()
+    _takes = take_types or {}
     if isinstance(value, str) and value.startswith("@"):
         ref = value[1:]  # the state-dict key (= the prior step's GIVES name)
         if ref in _scope:
@@ -129,6 +133,10 @@ def _go_kwarg_value(
             cls = _to_class_name(step.name)
             gf = _to_go_field_name(ref)
             return f'state["{ref}"].(steps.{cls}Out).{gf}'
+        if ref in _takes:
+            # Flow TAKE — produced by no step; seeded into state by Run /
+            # run<Name>.  Assert directly to its declared Go type.
+            return f'state["{ref}"].({_takes[ref]})'
         # Unknown ref — fall back to untyped any access (should not happen
         # after IR validation, but guards against future call-site bugs).
         return f'state["{ref}"]'
@@ -149,14 +157,17 @@ def _kwargs_to_step_input(
     contracts: dict[str, ContractIR],
     state_field_to_step: dict[str, StepIR],
     scope_local: set[str] | None = None,
+    take_types: dict[str, str] | None = None,
 ) -> str:
     """Render the ``steps.<Step>In{...}`` initialisation from CallIR.kwargs.
 
     Each kwarg pair binds a TAKES field name to either a literal value or a
-    reference into a prior step's typed output (``@<field>`` syntax).
+    reference into a prior step's typed output (``@<field>`` syntax) or a flow
+    TAKE (``take_types``).
 
-    `scope_local` is forwarded to `_go_kwarg_value` so that FOR EACH loop
-    variables are rendered as bare identifiers rather than state lookups.
+    `scope_local` and `take_types` are forwarded to `_go_kwarg_value` so that
+    FOR EACH loop variables render as bare identifiers and flow TAKES render
+    as direct value assertions.
 
     Iterates ``call.kwargs`` directly — no assumptions about GIVES/TAKES field
     name alignment between adjacent steps.  Mirrors the python emitter's
@@ -166,7 +177,9 @@ def _kwargs_to_step_input(
     parts: list[str] = []
     for name, value in call.kwargs:
         gf = _to_go_field_name(name)
-        rendered = _go_kwarg_value(value, contracts, state_field_to_step, scope_local)
+        rendered = _go_kwarg_value(
+            value, contracts, state_field_to_step, scope_local, take_types,
+        )
         parts.append(f"{gf}: {rendered}")
     return f"steps.{cls}In{{ {', '.join(parts)} }}"
 

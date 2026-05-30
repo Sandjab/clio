@@ -1674,3 +1674,37 @@ def test_build_take_field_to_gotype_maps_scalar_and_contract_takes() -> None:
     m = _build_take_field_to_gotype(graph.flow, contracts)
 
     assert m == {"url": "string", "who": "contracts.Customer"}
+
+
+def test_go_kwarg_value_emits_direct_assertion_for_take_refs() -> None:
+    """When a `@ref` names a flow TAKE (in take_types, not a producer, not a
+    loop var), _go_kwarg_value emits a direct value assertion instead of the
+    untyped `state["x"]` fallback.
+
+    Intent: the untyped fallback `state["url"]` is `any`; assigning it to a
+    typed steps.<Cls>In field does not compile in Go.  This test fails the
+    moment the take_types branch is dropped — a grep-only test could not,
+    because the untyped string IS a valid Go expression (just ill-typed).
+    Precedence is also pinned: scope_local wins over take_types (loop var),
+    and a producer (state_field_to_step) wins over take_types.
+    """
+    from clio.emitters._go_flow_renderer import _go_kwarg_value
+
+    # Scalar TAKE -> direct scalar assertion.
+    out = _go_kwarg_value(
+        "@url", {}, {}, scope_local=None, take_types={"url": "string"},
+    )
+    assert out == 'state["url"].(string)'
+
+    # Contract TAKE -> the type-string is the whole assertion target; readers
+    # that need a field append `.<Field>` themselves (kwarg passes the struct).
+    out_c = _go_kwarg_value(
+        "@who", {}, {}, scope_local=None, take_types={"who": "contracts.Customer"},
+    )
+    assert out_c == 'state["who"].(contracts.Customer)'
+
+    # Precedence: a loop variable still wins over take_types.
+    out_scope = _go_kwarg_value(
+        "@url", {}, {}, scope_local={"url"}, take_types={"url": "string"},
+    )
+    assert out_scope == "url"
