@@ -1238,3 +1238,29 @@ def test_render_shell_step_go_parse_json_unmarshals_stdout() -> None:
     assert '"encoding/json"' in body
     assert "json.Unmarshal(stdout, &out)" in body
     assert "return out, nil" in body
+
+
+def test_render_shell_step_go_parse_none_assigns_stdout_to_str_field() -> None:
+    src = (
+        "STEP load_corpus\n"
+        "  TAKES: file: str\n"
+        "  GIVES: contents: str\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode: shell\n"
+        "    cmd:  \"cat ${file}\"\n"
+        "FLOW shell_pipe\n"
+        "  load_corpus(file=\"data.txt\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    step, contracts, graph = _shell_step_and_graph(src)
+    body = render_shell_step_go(step, contracts, graph)
+    # parse defaults to none -> no json import, no Unmarshal
+    assert '"encoding/json"' not in body
+    assert "json.Unmarshal" not in body
+    # single str GIVES field = stdout verbatim
+    assert "out.Contents = string(stdout)" in body
+    assert 'Contents string `json:"contents"`' in body
+    assert "return out, nil" in body
