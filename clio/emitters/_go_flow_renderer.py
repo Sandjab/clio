@@ -205,6 +205,8 @@ def _render_chain_item(
     scope_local: set[str],
     rescues_by_step: dict[str, RescueBlockIR] | None = None,
     suppress_state_write: bool = False,
+    take_types: dict[str, str] | None = None,
+    flows_by_name: dict[str, FlowIR] | None = None,
 ) -> tuple[list[str], str]:
     """Render one chain item.  Returns (rendered_lines, new_prev_var).
 
@@ -228,6 +230,7 @@ def _render_chain_item(
     `rescues_by_step` contains the step.
     """
     _rescues = rescues_by_step or {}
+    _takes = take_types or {}
     if isinstance(item, CallIR):
         step = steps_by_name.get(item.step_name)
         if step is None or step.mode not in ("exact", "judgment"):
@@ -240,6 +243,7 @@ def _render_chain_item(
             contracts_by_name,
             state_field_to_step,
             scope_local,
+            _takes,
         )
         out_var = f"{step.name}Out"
 
@@ -278,7 +282,8 @@ def _render_chain_item(
                         continue
                     sub_cls = _to_class_name(sub_step.name)
                     sub_input = _kwargs_to_step_input(
-                        sub, sub_step, contracts_by_name, state_field_to_step, scope_local,
+                        sub, sub_step, contracts_by_name, state_field_to_step,
+                        scope_local, _takes,
                     )
                     sub_out_var = f"{sub.step_name}Out"
                     defer_lines.append(
@@ -340,7 +345,9 @@ def _render_chain_item(
         return rendered, out_var
 
     if isinstance(item, IfBlockIR):
-        cond = _go_condition_expr(item.condition, scope_local, state_field_to_step)
+        cond = _go_condition_expr(
+            item.condition, scope_local, state_field_to_step, _takes,
+        )
         lines: list[str] = [f"{indent}if {cond} {{"]
         inner_indent = indent + "\t"
         # then branch
@@ -353,6 +360,8 @@ def _render_chain_item(
                 contracts_by_name=contracts_by_name,
                 scope_local=scope_local,
                 rescues_by_step=_rescues,
+                take_types=_takes,
+                flows_by_name=flows_by_name,
             )
             lines.extend(sub_lines)
         # else branch
@@ -367,6 +376,8 @@ def _render_chain_item(
                     contracts_by_name=contracts_by_name,
                     scope_local=scope_local,
                     rescues_by_step=_rescues,
+                    take_types=_takes,
+                    flows_by_name=flows_by_name,
                 )
                 lines.extend(sub_lines)
         lines.append(f"{indent}}}")
@@ -380,15 +391,19 @@ def _render_chain_item(
         # pattern used by _go_condition_expr for IF conditions.
         state_field = item.state_field
         step = state_field_to_step.get(state_field)
-        if step is not None:
-            cls = _to_class_name(step.name)
-            type_assert = f"(steps.{cls}Out)"
-        else:
-            type_assert = "(any)"
         if state_field in scope_local:
-            base = f"{state_field}.{type_assert}"
+            if step is not None:
+                cls = _to_class_name(step.name)
+                base = f"{state_field}.(steps.{cls}Out)"
+            else:
+                base = f"{state_field}.(any)"
+        elif step is not None:
+            cls = _to_class_name(step.name)
+            base = f'state["{state_field}"].(steps.{cls}Out)'
+        elif state_field in _takes:
+            base = f'state["{state_field}"].({_takes[state_field]})'
         else:
-            base = f'state["{state_field}"].{type_assert}'
+            base = f'state["{state_field}"].(any)'
         gf = _to_go_field_name(item.sub_field)
         subject_expr = f"{base}.{gf}"
         match_lines: list[str] = [f"{indent}switch {subject_expr} {{"]
@@ -412,6 +427,8 @@ def _render_chain_item(
                     contracts_by_name=contracts_by_name,
                     scope_local=scope_local,
                     rescues_by_step=_rescues,
+                    take_types=_takes,
+                    flows_by_name=flows_by_name,
                 )
                 match_lines.extend(sub_lines)
         match_lines.append(f"{indent}}}")
@@ -419,7 +436,9 @@ def _render_chain_item(
         return match_lines, prev_var
 
     if isinstance(item, WhileBlockIR):
-        cond = _go_condition_expr(item.condition, scope_local, state_field_to_step)
+        cond = _go_condition_expr(
+            item.condition, scope_local, state_field_to_step, _takes,
+        )
         while_lines: list[str] = [f"{indent}for {cond} {{"]
         inner_indent = indent + "\t"
         cur_while = prev_var
@@ -431,6 +450,8 @@ def _render_chain_item(
                 contracts_by_name=contracts_by_name,
                 scope_local=scope_local,
                 rescues_by_step=_rescues,
+                take_types=_takes,
+                flows_by_name=flows_by_name,
             )
             while_lines.extend(sub_lines)
         while_lines.append(f"{indent}}}")
@@ -449,6 +470,9 @@ def _render_chain_item(
             coll_cls = _to_class_name(coll_step.name)
             coll_gf = _to_go_field_name(coll_name)
             coll_expr = f'state["{coll_name}"].(steps.{coll_cls}Out).{coll_gf}'
+        elif coll_name in _takes:
+            # List-typed flow TAKE — assert directly to its Go slice type.
+            coll_expr = f'state["{coll_name}"].({_takes[coll_name]})'
         else:
             # Unknown collection source — fall back to untyped (should not
             # happen after IR validation).
@@ -466,6 +490,8 @@ def _render_chain_item(
                 contracts_by_name=contracts_by_name,
                 scope_local=inner_scope,
                 rescues_by_step=_rescues,
+                take_types=_takes,
+                flows_by_name=flows_by_name,
             )
             for_lines.extend(sub_lines)
         for_lines.append(f"{indent}}}")
@@ -493,6 +519,8 @@ def _render_chain_item(
             coll_cls = _to_class_name(coll_step.name)
             coll_gf = _to_go_field_name(coll_name)
             coll_expr = f'state["{coll_name}"].(steps.{coll_cls}Out).{coll_gf}'
+        elif coll_name in _takes:
+            coll_expr = f'state["{coll_name}"].({_takes[coll_name]})'
         else:
             coll_expr = f'state["{coll_name}"].([]any)'
         var = item.loop_var
@@ -519,6 +547,8 @@ def _render_chain_item(
                 scope_local=inner_scope,
                 rescues_by_step=_rescues,
                 suppress_state_write=True,
+                take_types=_takes,
+                flows_by_name=flows_by_name,
             )
             par_lines.extend(_rewrite_return_in_goroutine(sub_lines))
         # Store the last step's output into the pre-allocated results slot.

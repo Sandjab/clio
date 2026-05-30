@@ -1737,3 +1737,83 @@ def test_go_condition_expr_resolves_take_ref_as_contract_assertion() -> None:
         take_types={"who": "contracts.Customer"},
     )
     assert out == 'state["who"].(contracts.Customer).Level == "high"'
+
+
+def test_render_chain_item_threads_take_types_to_match_and_foreach() -> None:
+    """take_types reaches all inline reader sites of _render_chain_item:
+    the MATCH scrutinee, the sequential FOR EACH collection, and the parallel
+    FOR EACH collection.  A TAKE used as a MATCH scrutinee (contract) or a
+    FOR EACH collection (list TAKE) must assert to its Go type, not `(any)`
+    or `[]any`.
+
+    Intent: each of these three sites independently builds a type assertion;
+    missing the take_types branch at any one emits an ill-typed read.  This
+    test drives all three through the public renderer so a regression at any
+    single site is caught.
+    """
+    from clio.emitters._go_flow_renderer import _render_chain_item
+    from clio.ir.graph import (
+        ForEachIR,
+        MatchBlockIR,
+        MatchCaseIR,
+    )
+
+    # MATCH on a contract TAKE.
+    match_item = MatchBlockIR(
+        state_field="who",
+        sub_field="level",
+        cases=(MatchCaseIR(value="high", body=(), line=1),),
+        line=1,
+    )
+    lines, _ = _render_chain_item(
+        match_item, "kwargs", "\t",
+        steps_by_name={},
+        state_field_to_step={},
+        contracts_by_name={},
+        scope_local=set(),
+        take_types={"who": "contracts.Customer"},
+    )
+    assert any(
+        'switch state["who"].(contracts.Customer).Level {' in ln for ln in lines
+    ), lines
+
+    # Sequential FOR EACH over a list TAKE.
+    fe_item = ForEachIR(
+        loop_var="u",
+        collection="urls",
+        body=(),
+        line=1,
+        parallel=False,
+    )
+    fe_lines, _ = _render_chain_item(
+        fe_item, "kwargs", "\t",
+        steps_by_name={},
+        state_field_to_step={},
+        contracts_by_name={},
+        scope_local=set(),
+        take_types={"urls": "[]string"},
+    )
+    assert any(
+        'for _, u := range state["urls"].([]string) {' in ln for ln in fe_lines
+    ), fe_lines
+
+    # Parallel FOR EACH over a list TAKE.
+    fep_item = ForEachIR(
+        loop_var="u",
+        collection="urls",
+        body=(),
+        line=1,
+        parallel=True,
+        collector="results",
+    )
+    fep_lines, _ = _render_chain_item(
+        fep_item, "kwargs", "\t",
+        steps_by_name={},
+        state_field_to_step={},
+        contracts_by_name={},
+        scope_local=set(),
+        take_types={"urls": "[]string"},
+    )
+    assert any(
+        '_items := state["urls"].([]string)' in ln for ln in fep_lines
+    ), fep_lines
