@@ -2,6 +2,8 @@ from pathlib import Path
 
 import pytest
 
+_MULTI_FILE_MAIN = Path(__file__).resolve().parents[1] / "examples" / "multi_file" / "main.clio"
+
 _TINY_SOURCE = (
     "STEP foo\n  MODE: exact\n  LANG: python\n"
     "FLOW pipe\n  foo()\n"
@@ -244,3 +246,108 @@ def test_import_auto_with_corrupted_manifest_falls_back_to_llm(tmp_path, monkeyp
     rc = main(["import", str(skill)])
     assert rc == 0
     assert capsys.readouterr().out == expected
+
+
+def test_compile_multi_file_skill_writes_source_tree(tmp_path: Path) -> None:
+    from clio.cli import _cmd_compile
+
+    skill = tmp_path / "skill"
+    rc = _cmd_compile(str(_MULTI_FILE_MAIN), "claude-skill", str(skill), None)
+    assert rc == 0
+    assert (skill / ".clio" / "sources" / "main.clio").exists()
+    assert (skill / ".clio" / "sources" / "schemas.clio").exists()
+    assert (skill / ".clio" / "sources" / "nlp" / "nlp.clio").exists()
+    import json
+    manifest = json.loads((skill / ".clio" / "manifest.json").read_text())
+    assert manifest["entry"] == "main.clio"
+    assert set(manifest["sources"]) == {"main.clio", "schemas.clio", "nlp/nlp.clio"}
+
+
+def test_import_multi_file_round_trip_recompiles(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from clio.cli import _cmd_check, _cmd_compile, main
+
+    skill = tmp_path / "skill"
+    assert _cmd_compile(str(_MULTI_FILE_MAIN), "claude-skill", str(skill), None) == 0
+
+    recovered = tmp_path / "recovered"
+    rc = main(["import", str(skill), "--output", str(recovered)])
+    assert rc == 0
+
+    # verbatim recovery of the whole tree
+    base = _MULTI_FILE_MAIN.parent
+    assert (recovered / "main.clio").read_bytes() == (base / "main.clio").read_bytes()
+    assert (recovered / "schemas.clio").read_bytes() == (base / "schemas.clio").read_bytes()
+    assert (recovered / "nlp" / "nlp.clio").read_bytes() == (base / "nlp" / "nlp.clio").read_bytes()
+
+    # the recovered entry recompiles — the bug was: imports could not be found
+    assert _cmd_check(str(recovered / "main.clio")) == 0
+
+
+def test_import_multi_file_without_output_dir_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from clio.cli import _cmd_compile, main
+
+    skill = tmp_path / "skill"
+    assert _cmd_compile(str(_MULTI_FILE_MAIN), "claude-skill", str(skill), None) == 0
+    rc = main(["import", str(skill)])  # no --output → would be stdout
+    assert rc == 2
+    assert "multi-file" in capsys.readouterr().err.lower()
+
+
+def test_import_multi_file_strict_detects_source_tampering(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from clio.cli import _cmd_compile, main
+
+    skill = tmp_path / "skill"
+    assert _cmd_compile(str(_MULTI_FILE_MAIN), "claude-skill", str(skill), None) == 0
+    # tamper a stored source (excluded from file_hashes, so only check_source_drift catches it)
+    (skill / ".clio" / "sources" / "schemas.clio").write_text("CONTRACT Tampered\n  SHAPE: {x: str}\n")
+    recovered = tmp_path / "recovered"
+    rc = main(["import", str(skill), "--mode", "strict", "--output", str(recovered)])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "drift" in err.lower()
+    assert "schemas.clio" in err
+
+
+def test_import_multi_file_auto_with_missing_stored_source_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from clio.cli import _cmd_compile, main
+
+    skill = tmp_path / "skill"
+    assert _cmd_compile(str(_MULTI_FILE_MAIN), "claude-skill", str(skill), None) == 0
+    # partial sidecar: a stored source is gone. Auto mode does NOT run
+    # check_source_drift, and .clio/ is excluded from check_drift, so this
+    # reaches the reconstruction loop — which must fail loud, not crash.
+    (skill / ".clio" / "sources" / "schemas.clio").unlink()
+    rc = main(["import", str(skill), "--output", str(tmp_path / "recovered")])
+    assert rc == 2
+    assert "schemas.clio" in capsys.readouterr().err
+
+
+def test_import_multi_file_output_is_existing_file_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from clio.cli import _cmd_compile, main
+
+    skill = tmp_path / "skill"
+    assert _cmd_compile(str(_MULTI_FILE_MAIN), "claude-skill", str(skill), None) == 0
+    out_file = tmp_path / "out.clio"
+    out_file.write_text("placeholder\n")  # existing FILE, not a directory
+    rc = main(["import", str(skill), "--output", str(out_file)])
+    assert rc == 2
+    assert "directory" in capsys.readouterr().err.lower()
+
+
+def test_import_multi_file_rejects_path_traversal_in_manifest(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    import json
+
+    from clio.cli import _cmd_compile, main
+
+    skill = tmp_path / "skill"
+    assert _cmd_compile(str(_MULTI_FILE_MAIN), "claude-skill", str(skill), None) == 0
+    # A maliciously crafted manifest points a source relpath outside
+    # .clio/sources/; reconstruction must reject it, not write outside --output.
+    mf = skill / ".clio" / "manifest.json"
+    m = json.loads(mf.read_text())
+    m["sources"] = {"../../escaped.clio": "sha256:deadbeef"}
+    mf.write_text(json.dumps(m))
+    rc = main(["import", str(skill), "--output", str(tmp_path / "recovered")])
+    assert rc == 2
+    assert "traversal" in capsys.readouterr().err.lower()
+    assert not (tmp_path / "escaped.clio").exists()

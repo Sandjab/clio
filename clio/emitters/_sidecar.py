@@ -16,6 +16,7 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
+import os
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -66,37 +67,123 @@ def _iter_skill_files(skill_dir: Path) -> Iterator[Path]:
         yield path
 
 
-def build_manifest(source_bytes: bytes, skill_dir: Path, *, clio_version: str) -> dict[str, Any]:
+def build_manifest(
+    source_bytes: bytes,
+    skill_dir: Path,
+    *,
+    clio_version: str,
+    sources_map: dict[str, str] | None = None,
+    entry: str | None = None,
+) -> dict[str, Any]:
     """Build the manifest dict from already-read source bytes. Caller is
     responsible for serializing to JSON. Accepting bytes (not Path) lets
     write_sidecar guarantee the stored source.clio and the recorded
-    source_hash agree by reading the file only once."""
+    source_hash agree by reading the file only once.
+
+    `sources_map` / `entry` are recorded only for multi-file projects (the
+    full source tree + the entry's relpath); single-file manifests omit both
+    keys, keeping v0.21 output byte-identical."""
     file_hashes: dict[str, str] = {}
     for f in _iter_skill_files(skill_dir):
         rel = f.relative_to(skill_dir).as_posix()
         file_hashes[rel] = compute_file_hash(f)
-    return {
+    manifest: dict[str, Any] = {
         "clio_version": clio_version,
         "emitted_at": _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "source_hash": compute_source_hash(source_bytes),
         "file_hashes": file_hashes,
     }
+    if sources_map is not None:
+        manifest["entry"] = entry
+        manifest["sources"] = sources_map
+    return manifest
 
 
-def write_sidecar(source_path: Path, skill_dir: Path, *, clio_version: str) -> None:
-    """Write `.clio/source.clio` (verbatim copy) and `.clio/manifest.json`.
+def write_sidecar(
+    source_path: Path,
+    skill_dir: Path,
+    *,
+    clio_version: str,
+    sources: tuple[Path, ...] | None = None,
+) -> None:
+    """Write `.clio/source.clio` (verbatim entry copy) and `.clio/manifest.json`.
 
-    Reads source_path exactly once so the stored copy and the manifest's
-    source_hash are guaranteed to refer to the same bytes."""
+    For a multi-file project (`sources` holds more than one resolved path),
+    also write the full source tree under `.clio/sources/`, rooted at the
+    common ancestor of all sources so a `FROM "../x.clio"` import keeps its
+    relative offset, and record the `sources` hash map + `entry` relpath in the
+    manifest. Single-file projects (`sources` None or length 1) write neither —
+    output stays byte-identical to v0.21.
+
+    Each file is read exactly once; its stored copy and recorded hash refer to
+    the same bytes."""
     source_bytes = source_path.read_bytes()
     sidecar = skill_dir / ".clio"
     sidecar.mkdir(parents=True, exist_ok=True)
     (sidecar / "source.clio").write_bytes(source_bytes)
-    manifest = build_manifest(source_bytes, skill_dir, clio_version=clio_version)
+
+    sources_map: dict[str, str] | None = None
+    entry_rel: str | None = None
+    if sources is not None and len(sources) > 1:
+        resolved = [p.resolve() for p in sources]
+        root = Path(os.path.commonpath([str(p) for p in resolved]))
+        sources_map = {}
+        for p in resolved:
+            # relative_to raises if p escapes root; commonpath guarantees it
+            # cannot, so this doubles as a fail-loud backstop.
+            rel = p.relative_to(root).as_posix()
+            dst = sidecar / "sources" / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            raw = p.read_bytes()
+            dst.write_bytes(raw)
+            sources_map[rel] = compute_source_hash(raw)
+        entry_rel = source_path.resolve().relative_to(root).as_posix()
+
+    manifest = build_manifest(
+        source_bytes,
+        skill_dir,
+        clio_version=clio_version,
+        sources_map=sources_map,
+        entry=entry_rel,
+    )
     (sidecar / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def check_source_drift(skill_dir: Path, manifest_path: Path) -> list[str] | None:
+    """Compare the manifest's `sources` hashes to the actual `.clio/sources/`
+    tree.
+
+    Returns None when the manifest has no `sources` map (single-file skill) or
+    when every recorded source matches. Returns a sorted list of drifted
+    relpaths (modified or missing) otherwise.
+
+    This is separate from `check_drift`: stored sources live under `.clio/`,
+    which `_iter_skill_files` deliberately excludes from `file_hashes`.
+
+    Raises FileNotFoundError if the manifest is missing."""
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"manifest not found: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    recorded: dict[str, str] = manifest.get("sources", {})
+    if not recorded:
+        return None
+    sources_dir = (skill_dir / ".clio" / "sources").resolve()
+    drifted: set[str] = set()
+    for rel, h in recorded.items():
+        # `rel` comes from a potentially untrusted manifest; a path that would
+        # escape `sources_dir` is treated as drift, never read.
+        f = (sources_dir / rel).resolve()
+        if not f.is_relative_to(sources_dir):
+            drifted.add(rel)
+            continue
+        if not f.exists():
+            drifted.add(rel)
+        elif compute_source_hash(f.read_bytes()) != h:
+            drifted.add(rel)
+    return sorted(drifted) if drifted else None
 
 
 def check_drift(skill_dir: Path, manifest_path: Path) -> list[str] | None:

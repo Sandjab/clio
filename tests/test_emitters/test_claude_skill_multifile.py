@@ -127,3 +127,71 @@ def test_claude_skill_multifile_reexport(tmp_path: Path) -> None:
     skill_md = (out / "SKILL.md").read_text()
     assert "pipeline" in skill_md
     assert (out / "scripts").is_dir()
+
+
+def test_claude_skill_multifile_commonpath_valueerror_warns(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """A cross-drive ValueError from the sidecar's os.path.commonpath must
+    degrade to a warning, not crash the compiler.
+
+    On Windows, os.path.commonpath raises ValueError when imported sources
+    span different drive letters (C: vs D:); Path.relative_to raises it too.
+    The .clio/ sidecar is best-effort, so emit() must catch it and leave the
+    main skill intact. Regression for the Gemini PR #80 review (medium): the
+    sidecar handler caught only (OSError, FileNotFoundError), and ValueError
+    is not an OSError subclass, so it escaped and crashed emit().
+    """
+    import os
+
+    (tmp_path / "lib.clio").write_text(
+        "EXPOSE CONTRACT Article\n"
+        "  SHAPE: {title: str, body: str}\n"
+        "\n"
+        "STEP score\n"
+        "  MODE: judgment\n"
+        "  TAKES: article: Article\n"
+        "  GIVES: label: str\n"
+        "\n"
+        "EXPOSE FLOW classify\n"
+        "  TAKES: article: Article\n"
+        "  GIVES: label: str\n"
+        "  score(article=article)\n"
+    )
+    (tmp_path / "main.clio").write_text(
+        "RESOURCES\n"
+        "  target: claude-skill\n"
+        "\n"
+        'FROM "./lib.clio" IMPORT Article, classify\n'
+        "\n"
+        "STEP run_pipeline\n"
+        "  MODE: judgment\n"
+        "  TAKES: article: Article\n"
+        "  GIVES: label: str\n"
+        "\n"
+        "EXPOSE FLOW pipeline\n"
+        "  TAKES: article: Article\n"
+        "  GIVES: label: str\n"
+        "  classify(article=article)\n"
+    )
+
+    # commonpath is reached only by the multi-file sidecar branch (the two
+    # imported sources); raise the exact error Windows raises for cross-drive
+    # paths. monkeypatch auto-restores after the test.
+    def _cross_drive(_paths: object) -> str:
+        raise ValueError("Paths don't have the same drive")
+
+    monkeypatch.setattr(os.path, "commonpath", _cross_drive)
+
+    rc = _cmd_compile(
+        str(tmp_path / "main.clio"),
+        target="claude-skill",
+        output=str(tmp_path / "out"),
+        flow="pipeline",
+    )
+
+    # Compile still succeeds; only the .clio/ sidecar source tree is skipped.
+    assert rc == 0
+    out = tmp_path / "out"
+    assert (out / "SKILL.md").exists()
+    assert "failed to write .clio/ sidecar" in capsys.readouterr().err

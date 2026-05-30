@@ -194,3 +194,190 @@ def test_check_drift_raises_when_manifest_missing(tmp_path):
     skill_dir.mkdir()
     with pytest.raises(FileNotFoundError):
         check_drift(skill_dir, skill_dir / ".clio" / "manifest.json")
+
+
+def test_build_manifest_adds_sources_and_entry_when_provided(tmp_path):
+    from clio.emitters._sidecar import build_manifest
+
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("# skill\n")
+    src = tmp_path / "main.clio"
+    src.write_text("STEP s\n  MODE: exact\n")
+    m = build_manifest(
+        src.read_bytes(),
+        skill,
+        clio_version="0.22.0",
+        sources_map={"main.clio": "sha256:aaa", "lib.clio": "sha256:bbb"},
+        entry="main.clio",
+    )
+    assert m["entry"] == "main.clio"
+    assert m["sources"] == {"main.clio": "sha256:aaa", "lib.clio": "sha256:bbb"}
+
+
+def test_build_manifest_omits_sources_when_not_provided(tmp_path):
+    from clio.emitters._sidecar import build_manifest
+
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("# skill\n")
+    src = tmp_path / "main.clio"
+    src.write_text("STEP s\n  MODE: exact\n")
+    m = build_manifest(src.read_bytes(), skill, clio_version="0.22.0")
+    assert "sources" not in m
+    assert "entry" not in m
+
+
+def test_write_sidecar_multi_file_stores_source_tree(tmp_path):
+    from clio.emitters._sidecar import compute_source_hash, write_sidecar
+
+    # Tree with a nested file whose import escapes its own dir (../schemas.clio),
+    # exactly the shape commonpath rooting must handle.
+    root = tmp_path / "proj"
+    (root / "nlp").mkdir(parents=True)
+    entry = root / "main.clio"
+    entry.write_bytes(b'FROM "./schemas.clio" IMPORT X\nSTEP s\n  MODE: exact\n')
+    schemas = root / "schemas.clio"
+    schemas.write_bytes(b"CONTRACT X\n  SHAPE: {a: str}\n")
+    nested = root / "nlp" / "nlp.clio"
+    nested.write_bytes(b'FROM "../schemas.clio" IMPORT X\nSTEP t\n  MODE: exact\n')
+
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("# skill\n")
+
+    write_sidecar(entry, skill, clio_version="0.22.0", sources=(entry, schemas, nested))
+
+    srcdir = skill / ".clio" / "sources"
+    assert srcdir.joinpath("main.clio").read_bytes() == entry.read_bytes()
+    assert srcdir.joinpath("schemas.clio").read_bytes() == schemas.read_bytes()
+    assert srcdir.joinpath("nlp", "nlp.clio").read_bytes() == nested.read_bytes()
+
+    manifest = json.loads((skill / ".clio" / "manifest.json").read_text())
+    assert manifest["entry"] == "main.clio"
+    assert set(manifest["sources"]) == {"main.clio", "schemas.clio", "nlp/nlp.clio"}
+    assert manifest["sources"]["schemas.clio"] == compute_source_hash(schemas.read_bytes())
+    # source.clio is still the verbatim entry (back-compat path unchanged)
+    assert (skill / ".clio" / "source.clio").read_bytes() == entry.read_bytes()
+
+
+def test_write_sidecar_single_file_omits_sources(tmp_path):
+    from clio.emitters._sidecar import write_sidecar
+
+    entry = tmp_path / "solo.clio"
+    entry.write_bytes(b"STEP s\n  MODE: exact\n")
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("# skill\n")
+
+    # A 1-tuple (no imports) must behave exactly like single-file: no tree, no keys.
+    write_sidecar(entry, skill, clio_version="0.22.0", sources=(entry,))
+
+    assert not (skill / ".clio" / "sources").exists()
+    manifest = json.loads((skill / ".clio" / "manifest.json").read_text())
+    assert "sources" not in manifest
+    assert "entry" not in manifest
+
+
+def test_check_source_drift_none_when_sources_match(tmp_path):
+    from clio.emitters._sidecar import check_source_drift, write_sidecar
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    entry = root / "main.clio"
+    entry.write_bytes(b"A\n")
+    lib = root / "lib.clio"
+    lib.write_bytes(b"B\n")
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("# skill\n")
+    write_sidecar(entry, skill, clio_version="0.22.0", sources=(entry, lib))
+
+    assert check_source_drift(skill, skill / ".clio" / "manifest.json") is None
+
+
+def test_check_source_drift_detects_tampered_source(tmp_path):
+    from clio.emitters._sidecar import check_source_drift, write_sidecar
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    entry = root / "main.clio"
+    entry.write_bytes(b"A\n")
+    lib = root / "lib.clio"
+    lib.write_bytes(b"B\n")
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("# skill\n")
+    write_sidecar(entry, skill, clio_version="0.22.0", sources=(entry, lib))
+
+    (skill / ".clio" / "sources" / "lib.clio").write_bytes(b"TAMPERED\n")
+    drift = check_source_drift(skill, skill / ".clio" / "manifest.json")
+    assert drift == ["lib.clio"]
+
+
+def test_check_source_drift_none_for_single_file_manifest(tmp_path):
+    from clio.emitters._sidecar import check_source_drift, write_sidecar
+
+    entry = tmp_path / "solo.clio"
+    entry.write_bytes(b"A\n")
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("# skill\n")
+    write_sidecar(entry, skill, clio_version="0.22.0")  # single-file → no sources map
+
+    assert check_source_drift(skill, skill / ".clio" / "manifest.json") is None
+
+
+def test_check_source_drift_detects_deleted_source(tmp_path):
+    from clio.emitters._sidecar import check_source_drift, write_sidecar
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    entry = root / "main.clio"
+    entry.write_bytes(b"A\n")
+    lib = root / "lib.clio"
+    lib.write_bytes(b"B\n")
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("# skill\n")
+    write_sidecar(entry, skill, clio_version="0.22.0", sources=(entry, lib))
+
+    (skill / ".clio" / "sources" / "lib.clio").unlink()
+    drift = check_source_drift(skill, skill / ".clio" / "manifest.json")
+    assert drift == ["lib.clio"]
+
+
+def test_check_source_drift_raises_when_manifest_missing(tmp_path):
+    import pytest
+
+    from clio.emitters._sidecar import check_source_drift
+
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    with pytest.raises(FileNotFoundError):
+        check_source_drift(skill, skill / ".clio" / "manifest.json")
+
+
+def test_check_source_drift_rejects_path_traversal(tmp_path):
+    import json
+
+    from clio.emitters._sidecar import check_source_drift, write_sidecar
+
+    root = tmp_path / "proj"
+    root.mkdir()
+    entry = root / "main.clio"
+    entry.write_bytes(b"A\n")
+    lib = root / "lib.clio"
+    lib.write_bytes(b"B\n")
+    skill = tmp_path / "skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("# skill\n")
+    write_sidecar(entry, skill, clio_version="0.22.0", sources=(entry, lib))
+
+    # A manifest whose source relpath escapes .clio/sources/ must be flagged as
+    # drift (never read off-tree), not silently hashed.
+    mf = skill / ".clio" / "manifest.json"
+    m = json.loads(mf.read_text())
+    m["sources"] = {"../escaped.clio": "sha256:deadbeef"}
+    mf.write_text(json.dumps(m))
+    assert check_source_drift(skill, mf) == ["../escaped.clio"]
