@@ -286,3 +286,42 @@ def test_go_build_json_body_with_retry_rebuilds_reader(tmp_path: Path, monkeypat
     assert result.returncode == 0, (
         f"go build failed:\n--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
     )
+
+
+def test_go_build_passes_on_entry_takes_flow(tmp_path: Path) -> None:
+    """A flow whose entry FLOW declares a TAKE and reads it via `@take` must
+    compile.  This is the type-assertion guard: if the seed line is missing,
+    `state["url"]` is nil; if the typed read is missing, `any` is assigned to
+    a `string` field — either way `go build` fails.  A string-grep test cannot
+    catch this class of regression, so the build is the real verification.
+    """
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP fetch\n"
+        "  TAKES: url: str\n"
+        "  GIVES: body: str\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "FLOW pipeline\n"
+        "  TAKES: url: str\n"
+        "  GIVES: body: str\n"
+        "  fetch(url=url)\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile(src, out)
+
+    tidy_env = {
+        "GOFLAGS": "-mod=mod",
+        "HOME": str(out / ".gohome"),
+        "PATH": os.environ.get("PATH", "/usr/bin:/usr/local/bin:/bin"),
+    }
+    subprocess.run(
+        ["go", "mod", "tidy"], cwd=out, check=True, capture_output=True, env=tidy_env,
+    )
+    result = _go_build(out)
+    assert result.returncode == 0, (
+        f"go build failed:\n--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+    )
