@@ -1817,3 +1817,22 @@ def test_render_chain_item_threads_take_types_to_match_and_foreach() -> None:
     assert any(
         '_items := state["urls"].([]string)' in ln for ln in fep_lines
     ), fep_lines
+
+
+def test_run_seeds_entry_takes_and_reads_them_typed(tmp_path: Path) -> None:
+    """The entry flow's Run seeds `state["<take>"] = kwargs["<take>"]` for each
+    declared TAKE, and a downstream `@take` reference reads it via a direct
+    value assertion (not the untyped fallback).
+
+    Intent: without the seed line, `state["url"]` is nil at the `fetch` call;
+    without the typed read, `steps.FetchIn{ Url: state["url"] }` assigns `any`
+    to a `string` field and the module fails `go build`.  Both halves of the
+    retrofit are pinned here.
+    """
+    out = tmp_path / "out"
+    _compile(FIXTURES / "go_entry_takes.clio", out)
+    body = (out / "flow" / "flow.go").read_text()
+    # Entry TAKE is seeded from kwargs.
+    assert 'state["url"] = kwargs["url"]' in body
+    # The @url reference reads the seeded value with a typed assertion.
+    assert 'steps.FetchIn{ Url: state["url"].(string) }' in body

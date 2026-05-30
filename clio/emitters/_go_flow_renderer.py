@@ -592,12 +592,12 @@ def render_flow_go(graph: FlowGraph) -> str:
 
     contracts_by_name = {c.name: c for c in graph.contracts}
     steps_by_name = {s.name: s for s in graph.steps if isinstance(s, StepIR)}
-    # Maps each state-dict key (= step's GIVES field name) to the step that
-    # produced it.  Used by _go_condition_expr to derive type assertions.
-    state_field_to_step: dict[str, StepIR] = {}
-    for s in graph.steps:
-        if isinstance(s, StepIR) and s.gives is not None:
-            state_field_to_step[s.gives.name] = s
+    # Per-flow producer map (chain + rescues + nested bodies) for the entry
+    # flow — replaces the old global build so it matches the sub-flow path.
+    state_field_to_step = _build_state_field_to_step(graph.flow, steps_by_name)
+    # Entry-flow TAKES are produced by no step; seed them into state and
+    # register their Go types so `@<take>` reads assert to the right type.
+    take_types = _build_take_field_to_gotype(graph.flow, contracts_by_name)
     # Maps protected step name → RescueBlockIR for RESCUE handlers (T16).
     rescues_by_step: dict[str, RescueBlockIR] = {
         rb.step_name: rb for rb in graph.flow.rescues
@@ -624,6 +624,11 @@ def render_flow_go(graph: FlowGraph) -> str:
         "\tstate := map[string]any{}",
         "",
     ]
+    # Seed entry-flow TAKES from kwargs (name-sorted for deterministic goldens).
+    for f in sorted(graph.flow.takes, key=lambda fld: fld.name):
+        lines.append(f'\tstate["{f.name}"] = kwargs["{f.name}"]')
+    if graph.flow.takes:
+        lines.append("")
     prev_var = "kwargs"
     for elem in graph.flow.chain:
         elem_lines, prev_var = _render_chain_item(
@@ -635,6 +640,7 @@ def render_flow_go(graph: FlowGraph) -> str:
             contracts_by_name=contracts_by_name,
             scope_local=set(),
             rescues_by_step=rescues_by_step,
+            take_types=take_types,
         )
         lines.extend(elem_lines)
     lines.append("\treturn state, nil")

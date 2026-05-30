@@ -1,0 +1,14 @@
+STEP fetch
+  TAKES: url: str
+  GIVES: body: str
+  MODE:  exact
+  LANG:  go
+
+FLOW pipeline
+  TAKES: url: str
+  GIVES: body: str
+  fetch(url=url)
+
+RESOURCES
+  target: go
+  models: [haiku]
