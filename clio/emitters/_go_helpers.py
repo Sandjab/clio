@@ -34,7 +34,6 @@ from clio.ir.graph import (
     McpToolImplIR,
     RescueBlockIR,
     RestImplIR,
-    ShellImplIR,
     SqlImplIR,
     StepIR,
     WhileBlockIR,
