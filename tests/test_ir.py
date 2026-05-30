@@ -481,6 +481,23 @@ def test_build_ir_propagates_parse_json_to_shell_impl():
     assert step.impl.parse == "json"
 
 
+def test_build_ir_shell_cmd_with_escaped_json_quotes():
+    # Issue #88: an inline shell cmd that emits JSON. The \" escapes survive the
+    # lexer, shlex keeps the JSON blob as one argv token.
+    src = (
+        "STEP probe\n"
+        "  GIVES: out: {available: bool}\n"
+        "  MODE: exact\n"
+        "  impl:\n"
+        "    mode: shell\n"
+        "    cmd: \"echo '{\\\"available\\\": true}'\"\n"
+        "    parse: json\n"
+    )
+    step = build_ir(parse(src)).steps[0]
+    assert isinstance(step.impl, ShellImplIR)
+    assert step.impl.argv == ("echo", '{"available": true}')
+
+
 def test_build_ir_default_parse_is_none():
     src = (
         "STEP extract_pdf\n"

@@ -1,0 +1,10 @@
+STEP probe
+  GIVES: out: {available: bool}
+  MODE: exact
+  impl:
+    mode: shell
+    cmd: "echo '{\"available\": true}'"
+    parse: json
+
+FLOW check_probe
+  probe()
