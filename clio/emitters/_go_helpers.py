@@ -92,6 +92,17 @@ def _flow_uses_cache(graph: FlowGraph) -> bool:
     return False
 
 
+def _flow_uses_rest(graph: FlowGraph) -> bool:
+    """True if any step in the source is an impl.mode: rest step.
+
+    Gates emission of clio_runtime/rest + clio_runtime/substitute. Like
+    _flow_uses_cache, graph.steps over-collects; harmless (the extra runtime
+    is only ever emitted, never wrong-imported)."""
+    return any(
+        isinstance(s, StepIR) and isinstance(s.impl, RestImplIR) for s in graph.steps
+    )
+
+
 def render_cmd_main_go(graph: FlowGraph) -> str:
     """Render `cmd/<pkg>/main.go` — the CLI entry point for the emitted module.
 

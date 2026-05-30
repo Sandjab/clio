@@ -1109,3 +1109,73 @@ def test_render_rest_step_go_no_gives_side_effect():
     # No contracts import (no contract refs); no retry block (no impl.retry).
     assert "/contracts" not in out
     assert "for _i := 0; _i <" not in out
+
+
+def test_go_emits_rest_runtimes_and_dispatches_rest_step(tmp_path, monkeypatch):
+    from clio.emitters import go as _go
+    from clio.emitters._go_helpers import _flow_uses_rest
+    from clio.emitters.go import GoEmitter
+    from clio.parser.parser import parse
+    from clio.ir.builder import build_ir as build_graph
+
+    src = (
+        "STEP geocode\n"
+        "  TAKES: address: str\n"
+        "  GIVES: lat: float\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:           rest\n"
+        "    method:         GET\n"
+        '    url:            "https://maps.example.com/geocode"\n'
+        '    query:          {address: "${address}"}\n'
+        '    response_path:  "results[0].lat"\n'
+        "FLOW pipeline\n"
+        '  geocode(address="x")\n'
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    graph = build_graph(parse(src))
+    assert _flow_uses_rest(graph) is True
+
+    monkeypatch.setattr(_go, "validate_graph_for_go", lambda g: None)
+    out = tmp_path / "out"
+    GoEmitter().emit(graph, out)
+
+    rest_go = out / "clio_runtime" / "rest" / "rest.go"
+    subst_go = out / "clio_runtime" / "substitute" / "substitute.go"
+    assert rest_go.exists()
+    assert subst_go.exists()
+    assert "pipeline/clio_runtime/substitute" in rest_go.read_text()
+
+    step_file = out / "steps" / "01_geocode.go"
+    assert step_file.exists()
+    text = step_file.read_text()
+    assert 'method := "GET"' in text
+    assert "rest.Subst(" in text
+    assert 'panic("fill me in' not in text
+
+
+def test_go_omits_rest_runtimes_when_no_rest_step(tmp_path):
+    from clio.emitters._go_helpers import _flow_uses_rest
+    from clio.emitters.go import GoEmitter
+    from clio.parser.parser import parse
+    from clio.ir.builder import build_ir as build_graph
+
+    src = (
+        "STEP noop\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "FLOW pipeline\n"
+        '  noop(x="hi")\n'
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    graph = build_graph(parse(src))
+    assert _flow_uses_rest(graph) is False
+    out = tmp_path / "out"
+    GoEmitter().emit(graph, out)
+    assert not (out / "clio_runtime" / "rest").exists()
+    assert not (out / "clio_runtime" / "substitute").exists()

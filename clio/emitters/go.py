@@ -20,6 +20,7 @@ from pathlib import Path
 from clio.emitters._go_flow_renderer import render_flow_go
 from clio.emitters._go_helpers import (
     _flow_uses_cache,
+    _flow_uses_rest,
     _go_module_name,
     render_cmd_main_go,
     render_contracts_go,
@@ -28,11 +29,17 @@ from clio.emitters._go_helpers import (
 )
 from clio.emitters._go_runtime_templates import (
     render_clio_runtime_cache,
+    render_clio_runtime_rest,
+    render_clio_runtime_substitute,
     render_clio_runtime_validate,
 )
-from clio.emitters._go_step_renderers import render_exact_step_go, render_judgment_step_go
+from clio.emitters._go_step_renderers import (
+    render_exact_step_go,
+    render_judgment_step_go,
+    render_rest_step_go,
+)
 from clio.emitters.base import BaseEmitter
-from clio.ir.graph import CallIR, FlowGraph, StepIR
+from clio.ir.graph import CallIR, FlowGraph, RestImplIR, StepIR
 
 
 class GoEmitter(BaseEmitter):
@@ -67,6 +74,13 @@ class GoEmitter(BaseEmitter):
             runtime_cache_dir = output_dir / "clio_runtime" / "cache"
             runtime_cache_dir.mkdir(parents=True, exist_ok=True)
             (runtime_cache_dir / "cache.go").write_text(render_clio_runtime_cache())
+        if _flow_uses_rest(graph):
+            runtime_rest_dir = output_dir / "clio_runtime" / "rest"
+            runtime_rest_dir.mkdir(parents=True, exist_ok=True)
+            (runtime_rest_dir / "rest.go").write_text(render_clio_runtime_rest(pkg))
+            runtime_subst_dir = output_dir / "clio_runtime" / "substitute"
+            runtime_subst_dir.mkdir(parents=True, exist_ok=True)
+            (runtime_subst_dir / "substitute.go").write_text(render_clio_runtime_substitute())
 
         # Emit step stubs under steps/NN_<name>.go (exact and judgment).
         # Use step_idx (not enumerate) so control-flow elements that are
@@ -90,7 +104,10 @@ class GoEmitter(BaseEmitter):
                     steps_dir.mkdir(parents=True, exist_ok=True)
                 filename = f"{step_idx:02d}_{step.name}.go"
                 if step.mode == "exact":
-                    src = render_exact_step_go(step, contracts_by_name, graph)
+                    if isinstance(step.impl, RestImplIR):
+                        src = render_rest_step_go(step, contracts_by_name, graph)
+                    else:
+                        src = render_exact_step_go(step, contracts_by_name, graph)
                 else:
                     src = render_judgment_step_go(step, graph)
                 (steps_dir / filename).write_text(src)
