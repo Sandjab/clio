@@ -1179,3 +1179,62 @@ def test_go_omits_rest_runtimes_when_no_rest_step(tmp_path):
     GoEmitter().emit(graph, out)
     assert not (out / "clio_runtime" / "rest").exists()
     assert not (out / "clio_runtime" / "substitute").exists()
+
+
+# ---------------------------------------------------------------------------
+# Shell step renderer tests (Phase 2 — E_GO_008)
+
+from clio.emitters._go_step_renderers import render_shell_step_go  # noqa: E402
+from clio.ir.builder import build_ir as _build_ir_for_shell  # noqa: E402
+from clio.parser.parser import parse as _parse_clio_for_shell  # noqa: E402
+
+
+def _shell_step_and_graph(source: str):
+    """Parse a one-step .clio source, build its graph, return (step, contracts, graph)."""
+    graph = _build_ir_for_shell(_parse_clio_for_shell(source))
+    step = next(s for s in graph.steps if s.name == "load_corpus")
+    contracts = {c.name: c for c in graph.contracts}
+    return step, contracts, graph
+
+
+def _go_pkg(graph):
+    from clio.emitters._go_helpers import _go_module_name
+    return _go_module_name(graph)
+
+
+def test_render_shell_step_go_parse_json_unmarshals_stdout() -> None:
+    src = (
+        "STEP load_corpus\n"
+        "  TAKES: file: str\n"
+        "  GIVES: corpus: List<str>\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:  shell\n"
+        "    cmd:   \"cat ${file}\"\n"
+        "    parse: json\n"
+        "FLOW shell_pipe\n"
+        "  load_corpus(file=\"data.json\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    step, contracts, graph = _shell_step_and_graph(src)
+    body = render_shell_step_go(step, contracts, graph)
+    # package + skeleton reused from _step_in_out_struct
+    assert "package steps" in body
+    assert "func LoadCorpus(ctx context.Context, in LoadCorpusIn) (LoadCorpusOut, error) {" in body
+    assert "type LoadCorpusIn struct {" in body
+    assert 'File string `json:"file"`' in body
+    assert "type LoadCorpusOut struct {" in body
+    assert 'Corpus []string `json:"corpus"`' in body
+    # os/exec invocation, argv built from the shlex-split template
+    assert '"os/exec"' in body
+    assert 'argv := []string{"cat", "${file}"}' in body
+    assert "exec.CommandContext(" in body
+    # per-token ${var} substitution via the Phase-1 substitute helper
+    assert '"' + _go_pkg(graph) + '/clio_runtime/substitute"' in body
+    assert "substitute.Apply(argv[i], takes)" in body
+    # parse: json -> Unmarshal stdout into the typed Out
+    assert '"encoding/json"' in body
+    assert "json.Unmarshal(stdout, &out)" in body
+    assert "return out, nil" in body
