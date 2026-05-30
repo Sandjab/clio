@@ -135,7 +135,7 @@ class ClaudeSkillEmitter(BaseEmitter):
             from clio import __version__ as _clio_version
             try:
                 write_sidecar(source_path, output_dir, clio_version=_clio_version, sources=sources)
-            except (OSError, FileNotFoundError) as e:
+            except (OSError, ValueError) as e:
                 print(
                     f"claude-skill warning: failed to write .clio/ sidecar ({e}); "
                     f"main skill emission unaffected. Future `clio import` calls "
