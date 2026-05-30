@@ -839,23 +839,38 @@ def test_E_GO_007_impl_mode_rest(tmp_path: Path) -> None:
     _compile_expecting_error(src, tmp_path / "out", "E_GO_007")
 
 
-def test_E_GO_008_impl_mode_shell(tmp_path: Path) -> None:
+def test_shell_step_emits_go_file_instead_of_E_GO_008(tmp_path: Path) -> None:
+    """impl.mode: shell is now compiled (not refused). The step file calls
+    os/exec + the substitute runtime, and the substitute runtime package is
+    written under clio_runtime/substitute/."""
     src = tmp_path / "src.clio"
     src.write_text(
-        "STEP grep\n"
+        "STEP load_corpus\n"
         "  TAKES: file: str\n"
-        "  GIVES: lines: List<str>\n"
+        "  GIVES: corpus: List<str>\n"
         "  MODE:  exact\n"
         "  impl:\n"
-        "    mode: shell\n"
-        "    cmd:  \"grep foo ${file}\"\n"
-        "FLOW pipeline\n"
-        "  grep(file=\"x\")\n"
+        "    mode:  shell\n"
+        "    cmd:   \"cat ${file}\"\n"
+        "    parse: json\n"
+        "FLOW shell_pipe\n"
+        "  load_corpus(file=\"data.json\")\n"
         "RESOURCES\n"
         "  target: go\n"
         "  models: [haiku]\n"
     )
-    _compile_expecting_error(src, tmp_path / "out", "E_GO_008")
+    out = tmp_path / "out"
+    _compile(src, out)  # must NOT raise E_GO_008
+    step_file = out / "steps" / "01_load_corpus.go"
+    assert step_file.exists(), "shell step must get its own steps/NN_<name>.go file"
+    body = step_file.read_text()
+    assert "exec.CommandContext(" in body
+    assert "substitute.Apply(argv[i], takes)" in body
+    assert 'panic("fill me in' not in body  # NOT the exact-step stub
+    # substitute runtime package emitted
+    sub = out / "clio_runtime" / "substitute" / "substitute.go"
+    assert sub.exists(), "shell step must trigger clio_runtime/substitute emission"
+    assert "package substitute" in sub.read_text()
 
 
 def test_E_GO_009_impl_mode_sql(tmp_path: Path) -> None:

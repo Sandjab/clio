@@ -266,8 +266,8 @@ _GO_E_007_MSG = (
     "--target python until the v0.20.x REST emitter ships."
 )
 _GO_E_008_MSG = (
-    "E_GO_008: target: go v0.20.0 does not yet support impl.mode: shell. Use "
-    "--target python until the v0.20.x shell emitter ships."
+    "E_GO_008: target: go supports impl.mode: shell via os/exec since v0.23. "
+    "This message is retained for back-reference; the construct is no longer refused."
 )
 _GO_E_009_MSG = (
     "E_GO_009: target: go v0.20.0 does not yet support impl.mode: sql. Use "
@@ -341,8 +341,7 @@ def validate_graph_for_go(graph: FlowGraph) -> None:
         # impl.mode checks
         if isinstance(step.impl, RestImplIR):
             raise ValueError(_GO_E_007_MSG)
-        if isinstance(step.impl, ShellImplIR):
-            raise ValueError(_GO_E_008_MSG)
+        # ShellImplIR is supported since v0.23 — no refusal here
         if isinstance(step.impl, SqlImplIR):
             raise ValueError(_GO_E_009_MSG)
         if isinstance(step.impl, McpToolImplIR):

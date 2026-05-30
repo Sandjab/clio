@@ -37,9 +37,10 @@ from clio.emitters._go_step_renderers import (
     render_exact_step_go,
     render_judgment_step_go,
     render_rest_step_go,
+    render_shell_step_go,
 )
 from clio.emitters.base import BaseEmitter
-from clio.ir.graph import CallIR, FlowGraph, RestImplIR, StepIR
+from clio.ir.graph import CallIR, FlowGraph, RestImplIR, ShellImplIR, StepIR
 
 
 class GoEmitter(BaseEmitter):
@@ -81,6 +82,13 @@ class GoEmitter(BaseEmitter):
             runtime_subst_dir = output_dir / "clio_runtime" / "substitute"
             runtime_subst_dir.mkdir(parents=True, exist_ok=True)
             (runtime_subst_dir / "substitute.go").write_text(render_clio_runtime_substitute())
+        if any(
+            isinstance(s, StepIR) and isinstance(s.impl, ShellImplIR)
+            for s in graph.steps
+        ):
+            runtime_subst_dir = output_dir / "clio_runtime" / "substitute"
+            runtime_subst_dir.mkdir(parents=True, exist_ok=True)
+            (runtime_subst_dir / "substitute.go").write_text(render_clio_runtime_substitute())
 
         # Emit step stubs under steps/NN_<name>.go (exact and judgment).
         # Use step_idx (not enumerate) so control-flow elements that are
@@ -103,11 +111,12 @@ class GoEmitter(BaseEmitter):
                     steps_dir = output_dir / "steps"
                     steps_dir.mkdir(parents=True, exist_ok=True)
                 filename = f"{step_idx:02d}_{step.name}.go"
-                if step.mode == "exact":
-                    if isinstance(step.impl, RestImplIR):
-                        src = render_rest_step_go(step, contracts_by_name, graph)
-                    else:
-                        src = render_exact_step_go(step, contracts_by_name, graph)
+                if step.mode == "exact" and isinstance(step.impl, RestImplIR):
+                    src = render_rest_step_go(step, contracts_by_name, graph)
+                elif step.mode == "exact" and isinstance(step.impl, ShellImplIR):
+                    src = render_shell_step_go(step, contracts_by_name, graph)
+                elif step.mode == "exact":
+                    src = render_exact_step_go(step, contracts_by_name, graph)
                 else:
                     src = render_judgment_step_go(step, graph)
                 (steps_dir / filename).write_text(src)
