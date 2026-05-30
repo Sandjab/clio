@@ -61,9 +61,10 @@ include: `/skill2clio`, `skill2clio`, and French phrasings for "convert/import/r
 ## 4. Workflow the SKILL.md drives
 
 ```
-1. Gather  → Read SKILL.md + scripts/ + prompts/ + schemas/ + process_flow.dot.
-             Ignore: hidden dirs (.clio/, .git/), _validate.py, _cache_key.py, binaries.
-             (mirrors _gather_skill_files; .clio/ anti-cheat is respected)
+1. Gather  → Read ALL text files recursively (incl. references/, examples/, evals/,
+             templates/, README.md) — mirrors _gather_skill_files (rglob the whole tree).
+             process_flow.dot (anywhere) is authoritative for FLOW. Ignore: hidden dirs
+             (.clio/, .git/), _validate.py, _cache_key.py, binaries. (.clio/ anti-cheat respected)
 2. Map     → Read clio/prompts/skill_to_clio_system.md ; apply grammar + mapping table
              + annotation rules + language policy.
 3. Draft   → Write <output>.clio.
