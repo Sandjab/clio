@@ -1457,3 +1457,116 @@ def test_nested_for_each_body_step_emits_its_own_go_file(tmp_path: Path) -> None
     assert files == ["01_load.go", "02_process.go"], files
     body = (out / "steps" / "02_process.go").read_text()
     assert "func Process(ctx context.Context, in ProcessIn) (ProcessOut, error)" in body
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 Task 2 — _flow_uses_parallel scans every flow's chain
+# (pre-existing bug fix). Before: scanned only graph.flow.chain, so a
+# FOR EACH PARALLEL inside a non-entry flow was missed -> errgroup dep
+# omitted from go.mod -> module fails to build once sub-flows ship.
+
+
+def _str_type():  # type: ignore[return]
+    from clio.parser.ast_nodes import PrimitiveType as _PrimitiveType
+
+    return _PrimitiveType(name="str")
+
+
+def test_flow_uses_parallel_detects_parallel_in_non_entry_flow() -> None:
+    """A FOR EACH PARALLEL block in a flow OTHER than graph.flow must still
+    be detected, otherwise the errgroup dependency is dropped from go.mod.
+    Driven on a hand-built graph because multi-flow compile is still refused
+    in this phase (the refusal is lifted in Phase 6)."""
+    from clio.emitters._go_helpers import _flow_uses_parallel
+    from clio.ir.graph import (
+        CallIR,
+        FieldIR,
+        FlowGraph,
+        FlowIR,
+        ForEachIR,
+        StepIR,
+    )
+
+    entry = FlowIR(
+        name="main",
+        chain=(CallIR(step_name="seed", kwargs=(), line=1),),
+        rescues=(),
+        line=1,
+        takes=(FieldIR(name="x", type=_str_type()),),
+        gives=(FieldIR(name="items", type=_str_type()),),
+    )
+    sub = FlowIR(
+        name="worker",
+        chain=(
+            ForEachIR(
+                loop_var="item",
+                collection="items",
+                body=(CallIR(step_name="proc", kwargs=(), line=3),),
+                line=2,
+                parallel=True,
+                collector="results",
+            ),
+        ),
+        rescues=(),
+        line=2,
+        takes=(FieldIR(name="items", type=_str_type()),),
+        gives=(FieldIR(name="results", type=_str_type()),),
+    )
+    seed = StepIR(
+        name="seed",
+        mode="exact",
+        takes=(FieldIR(name="x", type=_str_type()),),
+        gives=FieldIR(name="items", type=_str_type()),
+        cache=None,
+        on_fail=None,
+        lang="go",
+        impl=None,
+        invoke=None,
+        line=1,
+    )
+    proc = StepIR(
+        name="proc",
+        mode="exact",
+        takes=(FieldIR(name="item", type=_str_type()),),
+        gives=FieldIR(name="r", type=_str_type()),
+        cache=None,
+        on_fail=None,
+        lang="go",
+        impl=None,
+        invoke=None,
+        line=3,
+    )
+    graph = FlowGraph(
+        steps=(seed, proc),
+        flow=entry,  # entry flow has NO parallel block
+        flows=(entry, sub),  # the parallel block lives in `sub`
+    )
+    assert _flow_uses_parallel(graph) is True
+
+
+def test_flow_uses_parallel_false_when_no_flow_has_parallel() -> None:
+    """Sanity: with no parallel block in any flow, returns False (errgroup
+    stays out of go.mod)."""
+    from clio.emitters._go_helpers import _flow_uses_parallel
+    from clio.ir.graph import CallIR, FieldIR, FlowGraph, FlowIR, StepIR
+
+    entry = FlowIR(
+        name="main",
+        chain=(CallIR(step_name="seed", kwargs=(), line=1),),
+        rescues=(),
+        line=1,
+    )
+    seed = StepIR(
+        name="seed",
+        mode="exact",
+        takes=(FieldIR(name="x", type=_str_type()),),
+        gives=FieldIR(name="y", type=_str_type()),
+        cache=None,
+        on_fail=None,
+        lang="go",
+        impl=None,
+        invoke=None,
+        line=1,
+    )
+    graph = FlowGraph(steps=(seed,), flow=entry, flows=(entry,))
+    assert _flow_uses_parallel(graph) is False

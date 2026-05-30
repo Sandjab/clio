@@ -67,10 +67,13 @@ def _flow_uses_judgment(graph: FlowGraph) -> bool:
 
 
 def _flow_uses_parallel(graph: FlowGraph) -> bool:
-    """True if the entry flow contains a FOR EACH PARALLEL block."""
-    if graph.flow is None:
-        return False
-    return _has_parallel(graph.flow.chain)
+    """True if ANY flow contains a FOR EACH PARALLEL block.
+
+    Scans every flow's chain (not just graph.flow.chain), so a PARALLEL
+    block reachable only through a sub-flow still pulls golang.org/x/sync
+    (errgroup) into go.mod. (_flow_uses_judgment / _flow_uses_cache already
+    scan all graph.steps, so they stay correct under FLOW composition.)"""
+    return any(_has_parallel(fl.chain) for fl in graph.flows)
 
 
 def _flow_uses_cache(graph: FlowGraph) -> bool:
