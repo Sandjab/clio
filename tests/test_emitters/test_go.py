@@ -1264,3 +1264,36 @@ def test_render_shell_step_go_parse_none_assigns_stdout_to_str_field() -> None:
     assert "out.Contents = string(stdout)" in body
     assert 'Contents string `json:"contents"`' in body
     assert "return out, nil" in body
+
+
+def test_render_shell_step_go_substitutes_each_token_and_honours_timeout() -> None:
+    src = (
+        "STEP load_corpus\n"
+        "  TAKES: file: str, pattern: str\n"
+        "  GIVES: matches: str\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode: shell\n"
+        "    cmd:  \"grep ${pattern} ${file}\"\n"
+        "    timeout: 5s\n"
+        "FLOW shell_pipe\n"
+        "  load_corpus(file=\"a.txt\", pattern=\"x\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    step, contracts, graph = _shell_step_and_graph(src)
+    body = render_shell_step_go(step, contracts, graph)
+    # takes map carries BOTH TAKES so substitute.Apply can resolve either token
+    assert '"file": in.File,' in body
+    assert '"pattern": in.Pattern,' in body
+    # argv template preserves both ${var} tokens (shlex-split: grep / ${pattern} / ${file})
+    assert 'argv := []string{"grep", "${pattern}", "${file}"}' in body
+    # one substitution loop over every token (not per-take, unlike the python target)
+    assert "for i := range argv {" in body
+    assert "substitute.Apply(argv[i], takes)" in body
+    # timeout context
+    assert '"time"' in body
+    assert "context.WithTimeout(ctx, 5*time.Second)" in body
+    assert "defer cancel()" in body
+    assert "exec.CommandContext(cmdCtx, argv[0], argv[1:]...)" in body
