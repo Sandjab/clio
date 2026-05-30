@@ -262,10 +262,6 @@ _GO_E_006_MSG = (
     "E_GO_006: target: go v0.20.0 does not yet support FLOW composition. Use "
     "--target python until the v0.20.x sub-flow emitter ships."
 )
-_GO_E_007_MSG = (
-    "E_GO_007: target: go v0.20.0 does not yet support impl.mode: rest. Use "
-    "--target python until the v0.20.x REST emitter ships."
-)
 _GO_E_009_MSG = (
     "E_GO_009: target: go v0.20.0 does not yet support impl.mode: sql. Use "
     "--target python until the v0.20.x SQL emitter ships."
@@ -351,10 +347,7 @@ def validate_graph_for_go(graph: FlowGraph) -> None:
             if step.invoke.protocol == "openai":
                 raise ValueError(_GO_E_005_MSG)
 
-        # impl.mode checks
-        if isinstance(step.impl, RestImplIR):
-            raise ValueError(_GO_E_007_MSG)
-        # ShellImplIR is supported since v0.23 — no refusal here
+        # impl.mode checks (rest/shell supported since v0.23; sql/mcp_tool deferred)
         if isinstance(step.impl, SqlImplIR):
             raise ValueError(_GO_E_009_MSG)
         if isinstance(step.impl, McpToolImplIR):

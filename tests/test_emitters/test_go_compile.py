@@ -69,11 +69,10 @@ def test_go_build_passes_on_minimal_contract_flow(tmp_path: Path) -> None:
     )
 
 
-def test_go_build_passes_on_rest_flow(tmp_path: Path, monkeypatch) -> None:  # type: ignore[type-arg]
+def test_go_build_passes_on_rest_flow(tmp_path: Path) -> None:
     """Emit a REST flow (GIVES-typed geocode + no-GIVES notify) to Go and
     `go build`. Catches the type-assertion / import / runtime-template class of
     bugs a string-grep can never see."""
-    from clio.emitters import go as _go
     from clio.emitters.go import GoEmitter
     from clio.ir.builder import build_ir
     from clio.parser.parser import parse
@@ -113,9 +112,6 @@ def test_go_build_passes_on_rest_flow(tmp_path: Path, monkeypatch) -> None:  # t
     src.write_text(src_text)
     graph = build_ir(parse(src.read_text()))
 
-    # Phase 6 owns lifting E_GO_007; bypass the refusal so the emitted module —
-    # the thing under test — is what `go build` checks.
-    monkeypatch.setattr(_go, "validate_graph_for_go", lambda g: None)
     out = tmp_path / "out"
     GoEmitter().emit(graph, out)
 
@@ -135,7 +131,7 @@ def test_go_build_passes_on_rest_flow(tmp_path: Path, monkeypatch) -> None:  # t
     assert (out / "clio_runtime" / "substitute" / "substitute.go").exists()
 
 
-def test_go_build_passes_on_rest_bodyless_and_raw(tmp_path: Path, monkeypatch) -> None:  # type: ignore[type-arg]
+def test_go_build_passes_on_rest_bodyless_and_raw(tmp_path: Path) -> None:
     """Emit two REST shapes that exercise the conditional-import edges and
     `go build`:
 
@@ -146,7 +142,6 @@ def test_go_build_passes_on_rest_bodyless_and_raw(tmp_path: Path, monkeypatch) -
       * raw   — POST with a text/plain (RawBodyIR) body, exercising the
         strings.NewReader path (no encoding/json marshal, no GIVES).
     """
-    from clio.emitters import go as _go
     from clio.emitters.go import GoEmitter
     from clio.ir.builder import build_ir
     from clio.parser.parser import parse
@@ -178,7 +173,6 @@ def test_go_build_passes_on_rest_bodyless_and_raw(tmp_path: Path, monkeypatch) -
     src.write_text(src_text)
     graph = build_ir(parse(src.read_text()))
 
-    monkeypatch.setattr(_go, "validate_graph_for_go", lambda g: None)
     out = tmp_path / "out"
     GoEmitter().emit(graph, out)
 
@@ -231,13 +225,12 @@ def test_go_build_passes_on_shell_flow(tmp_path: Path) -> None:
     )
 
 
-def test_go_build_json_body_with_retry_rebuilds_reader(tmp_path: Path, monkeypatch) -> None:  # type: ignore[type-arg]
+def test_go_build_json_body_with_retry_rebuilds_reader(tmp_path: Path) -> None:
     """A JSON-body step that also has impl.retry must rebuild the body reader on
     every attempt: a single bytes.Reader is at EOF after the first send, so
     retries 2+ would silently transmit an empty body. Locks must-fix #2 — the
     `bytes.NewReader(_bodyBytes)` line must live INSIDE the retry `for` loop, and
     the module must `go build`."""
-    from clio.emitters import go as _go
     from clio.emitters.go import GoEmitter
     from clio.ir.builder import build_ir
     from clio.parser.parser import parse
@@ -262,7 +255,6 @@ def test_go_build_json_body_with_retry_rebuilds_reader(tmp_path: Path, monkeypat
     src.write_text(src_text)
     graph = build_ir(parse(src.read_text()))
 
-    monkeypatch.setattr(_go, "validate_graph_for_go", lambda g: None)
     out = tmp_path / "out"
     GoEmitter().emit(graph, out)
 

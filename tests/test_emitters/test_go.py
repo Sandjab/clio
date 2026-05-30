@@ -1062,7 +1062,10 @@ def test_E_GO_006_multi_gives_subflow_parallel_body(tmp_path: Path) -> None:
         _compile_flow(src, tmp_path / "out", "batch")
 
 
-def test_E_GO_007_impl_mode_rest(tmp_path: Path) -> None:
+def test_rest_step_emits_go_file_instead_of_E_GO_007(tmp_path: Path) -> None:
+    """impl.mode: rest is now compiled (not refused). The step file calls the
+    rest runtime helpers, and the rest + substitute runtime packages are
+    written under clio_runtime/. Mirrors the shell positive guard."""
     src = tmp_path / "src.clio"
     src.write_text(
         "STEP fetch\n"
@@ -1079,7 +1082,16 @@ def test_E_GO_007_impl_mode_rest(tmp_path: Path) -> None:
         "  target: go\n"
         "  models: [haiku]\n"
     )
-    _compile_expecting_error(src, tmp_path / "out", "E_GO_007")
+    out = tmp_path / "out"
+    _compile(src, out)  # must NOT raise E_GO_007
+    step_file = out / "steps" / "01_fetch.go"
+    assert step_file.exists(), "rest step must get its own steps/NN_<name>.go file"
+    body = step_file.read_text()
+    assert "rest.Subst(" in body
+    assert 'panic("fill me in' not in body  # NOT the exact-step stub
+    # rest + substitute runtime packages emitted
+    assert (out / "clio_runtime" / "rest" / "rest.go").exists()
+    assert (out / "clio_runtime" / "substitute" / "substitute.go").exists()
 
 
 def test_shell_step_emits_go_file_instead_of_E_GO_008(tmp_path: Path) -> None:
