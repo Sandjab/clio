@@ -288,6 +288,8 @@ STEP extract_pdf
 
 The `cmd` is a quoted string. The compiler `shlex.split`s it at compile time, then templates `${var}` per token at runtime — `subprocess.run([...], shell=False)` runs the resulting argv. No pipes/redirections (wrap a pipeline in a script if needed). Non-zero exit codes raise `subprocess.CalledProcessError`, which `ON_FAIL` will see.
 
+String literals (`"…"`) support two escapes — `\"` for a literal double-quote and `\\` for a literal backslash; any other `\x` is a literal backslash followed by `x`. This makes a `cmd` that emits JSON expressible: `cmd: "echo '{\"ok\": true}'"`. (Multi-line content belongs in a `|` block scalar, not a `"…"` literal.)
+
 **`parse:`** (optional, default `none`) — controls how stdout is returned to the flow:
 
 | Value | Behaviour |
