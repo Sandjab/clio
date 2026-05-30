@@ -290,10 +290,12 @@ def test_go_build_json_body_with_retry_rebuilds_reader(tmp_path: Path, monkeypat
 
 def test_go_build_passes_on_entry_takes_flow(tmp_path: Path) -> None:
     """A flow whose entry FLOW declares a TAKE and reads it via `@take` must
-    compile.  This is the type-assertion guard: if the seed line is missing,
-    `state["url"]` is nil; if the typed read is missing, `any` is assigned to
-    a `string` field — either way `go build` fails.  A string-grep test cannot
-    catch this class of regression, so the build is the real verification.
+    compile.  This is the type-assertion guard: if the typed read is missing,
+    `any` is assigned to a `string` field and `go build` fails.  (A missing
+    seed line is a *runtime* nil-interface panic, not a compile error — that
+    half is pinned by the grep test on the `state["url"] = kwargs["url"]` seed.)
+    A string-grep test cannot catch the type-assertion regression, so the build
+    is the real verification.
     """
     src = tmp_path / "src.clio"
     src.write_text(
