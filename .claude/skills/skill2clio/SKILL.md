@@ -31,13 +31,18 @@ reasoned path must not cheat off the sidecar.
 ## Workflow
 
 ### 1. Gather
-Read the skill's content files:
-- `SKILL.md`
-- everything under `scripts/`, `prompts/`, `schemas/`
-- `process_flow.dot` if present (authoritative for FLOW structure)
+If `<skill-dir>` has no `SKILL.md`, stop and report that it does not look like a skill directory.
 
-Ignore: any hidden file/dir (`.clio/`, `.git/`, `.DS_Store`), `scripts/_validate.py`,
-`scripts/_cache_key.py`, and binary files. (This mirrors `_gather_skill_files`.)
+Read ALL of the skill's text files, recursively — not just a fixed set of subdirectories.
+This mirrors `_gather_skill_files`: walk the whole tree and read every readable text file,
+including content in `references/`, `examples/`, `evals/`, `templates/`, a top-level
+`README.md`, etc. The judgment-step prompt bodies and strategies often live in `references/`,
+so missing them produces a poor conversion.
+
+Treat `process_flow.dot` (if present, anywhere in the tree) as authoritative for FLOW structure.
+
+Ignore (exactly as `_gather_skill_files` does): any hidden file or directory (`.clio/`, `.git/`,
+`.DS_Store`), the basenames `_validate.py` and `_cache_key.py`, and binary files.
 
 ### 2. Load the mapping rules (single source of truth)
 Read `clio/prompts/skill_to_clio_system.md`. Apply its:
