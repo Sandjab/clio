@@ -1297,3 +1297,32 @@ def test_render_shell_step_go_substitutes_each_token_and_honours_timeout() -> No
     assert "context.WithTimeout(ctx, 5*time.Second)" in body
     assert "defer cancel()" in body
     assert "exec.CommandContext(cmdCtx, argv[0], argv[1:]...)" in body
+
+
+def test_render_shell_step_go_no_gives_is_side_effect() -> None:
+    src = (
+        "STEP notify\n"
+        "  TAKES: msg: str\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode: shell\n"
+        "    cmd:  \"logger ${msg}\"\n"
+        "FLOW shell_pipe\n"
+        "  notify(msg=\"hi\")\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    from clio.ir.builder import build_ir as _build_ir_ns
+    from clio.parser.parser import parse as _parse_ns
+    graph = _build_ir_ns(_parse_ns(src))
+    step = next(s for s in graph.steps if s.name == "notify")
+    contracts = {c.name: c for c in graph.contracts}
+    body = render_shell_step_go(step, contracts, graph)
+    # empty Out struct (no GIVES)
+    assert "type NotifyOut struct {\n}" in body
+    # stdout discarded, no Validate, no Unmarshal, no json import
+    assert "_ = stdout" in body
+    assert "Validate(ctx)" not in body
+    assert "json.Unmarshal" not in body
+    assert "return out, nil" in body
