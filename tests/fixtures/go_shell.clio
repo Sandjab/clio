@@ -1,3 +1,10 @@
+STEP stamp
+  GIVES: ts: str
+  MODE:  exact
+  impl:
+    mode: shell
+    cmd:  "date"
+
 STEP read_json
   TAKES: file: str
   GIVES: rows: List<str>
@@ -24,7 +31,8 @@ STEP notify
     timeout: 3s
 
 FLOW shell_pipe
-  read_json(file="data.json")
+  stamp()
+  -> read_json(file="data.json")
   -> read_text(file="data.txt")
   -> notify(contents=contents)
 
