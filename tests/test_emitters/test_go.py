@@ -992,8 +992,8 @@ def test_render_clio_runtime_rest_imports_substitute_package():
 
 
 def _rest_gives_graph():
-    from clio.parser.parser import parse
     from clio.ir.builder import build_ir as build_graph
+    from clio.parser.parser import parse
     src = (
         "CONTRACT geo_point\n"
         "  SHAPE: {lat: float, lng: float}\n"
@@ -1069,8 +1069,8 @@ def test_render_rest_step_go_gives_typed():
 
 def test_render_rest_step_go_no_gives_side_effect():
     from clio.emitters._go_step_renderers import render_rest_step_go
-    from clio.parser.parser import parse
     from clio.ir.builder import build_ir as build_graph
+    from clio.parser.parser import parse
 
     src = (
         "STEP notify\n"
@@ -1115,8 +1115,8 @@ def test_go_emits_rest_runtimes_and_dispatches_rest_step(tmp_path, monkeypatch):
     from clio.emitters import go as _go
     from clio.emitters._go_helpers import _flow_uses_rest
     from clio.emitters.go import GoEmitter
-    from clio.parser.parser import parse
     from clio.ir.builder import build_ir as build_graph
+    from clio.parser.parser import parse
 
     src = (
         "STEP geocode\n"
@@ -1159,8 +1159,8 @@ def test_go_emits_rest_runtimes_and_dispatches_rest_step(tmp_path, monkeypatch):
 def test_go_omits_rest_runtimes_when_no_rest_step(tmp_path):
     from clio.emitters._go_helpers import _flow_uses_rest
     from clio.emitters.go import GoEmitter
-    from clio.parser.parser import parse
     from clio.ir.builder import build_ir as build_graph
+    from clio.parser.parser import parse
 
     src = (
         "STEP noop\n"

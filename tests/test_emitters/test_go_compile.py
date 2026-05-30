@@ -75,8 +75,8 @@ def test_go_build_passes_on_rest_flow(tmp_path: Path, monkeypatch) -> None:  # t
     bugs a string-grep can never see."""
     from clio.emitters import go as _go
     from clio.emitters.go import GoEmitter
-    from clio.parser.parser import parse
     from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
 
     src_text = (
         "CONTRACT geo_point\n"
