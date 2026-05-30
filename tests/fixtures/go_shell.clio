@@ -1,0 +1,41 @@
+STEP stamp
+  GIVES: ts: str
+  MODE:  exact
+  impl:
+    mode: shell
+    cmd:  "date"
+
+STEP read_json
+  TAKES: file: str
+  GIVES: rows: List<str>
+  MODE:  exact
+  impl:
+    mode:  shell
+    cmd:   "cat ${file}"
+    parse: json
+
+STEP read_text
+  TAKES: file: str
+  GIVES: contents: str
+  MODE:  exact
+  impl:
+    mode: shell
+    cmd:  "cat ${file}"
+
+STEP notify
+  TAKES: contents: str
+  MODE:  exact
+  impl:
+    mode: shell
+    cmd:  "logger ${contents}"
+    timeout: 3s
+
+FLOW shell_pipe
+  stamp()
+  -> read_json(file="data.json")
+  -> read_text(file="data.txt")
+  -> notify(contents=contents)
+
+RESOURCES
+  target: go
+  models: [haiku]

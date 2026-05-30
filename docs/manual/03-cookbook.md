@@ -1008,19 +1008,20 @@ go-out/
 `validate.Schema(ctx, ...)` helper checks the output against the
 embedded JSON Schema.
 
-**v0.20.0 scope**: this target covers the most common case. See
-`docs/manual/06-troubleshooting.md` for the list of features deferred
-to v0.20.x (OpenAI, FLOW composition, `impl.mode {rest, sql, mcp_tool,
-shell}`, RESUME, TEST blocks) — each fails at compile time with a
-remediation pointer.
+**Scope (v0.23)**: REST + shell impl bodies and FLOW composition (sub-flow
+calls) are supported. Still deferred — each fails at compile time with a
+remediation pointer: OpenAI judgment (E_GO_005), `impl.mode {sql, mcp_tool}`
+(E_GO_009/010, tracked for v0.24), `--from-step` RESUME (E_GO_011), TEST
+blocks (E_GO_012), and a multi-GIVES sub-flow used as a `FOR EACH PARALLEL`
+body (E_GO_006). See `docs/manual/06-troubleshooting.md` for each.
 
 **Cache compatibility**: the cache layout is byte-identical to
 `target: python`. You can swap targets between runs and reuse cached
 judgment responses.
 
 **Cross-platform Go build**: the SQLite driver dependency
-(`modernc.org/sqlite`) is **not** included in v0.20.0 (impl.mode sql is
-deferred). When it lands in v0.20.x, the build will still work on every
+(`modernc.org/sqlite`) is **not** included yet (impl.mode sql is
+deferred to v0.24). When it lands, the build will still work on every
 platform without a C toolchain because `modernc.org/sqlite` is pure Go.
 
 ## 25. Counting / aggregating with `Dict<str, V>` (v0.21)

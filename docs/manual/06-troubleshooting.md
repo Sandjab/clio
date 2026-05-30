@@ -441,7 +441,7 @@ def my_step(*, input_field: str) -> dict:
 
 Use the bundled `scripts/_validate.py` to check the return value against `schemas/NN_<step_name>.output.json` during development.
 
-## `target: go` errors (v0.20.0+)
+## `target: go` errors (v0.23+)
 
 ### E_GO_001 — `ValueError: target=go only accepts LANG: go or LANG: auto on exact steps`
 
@@ -457,57 +457,45 @@ Use the bundled `scripts/_validate.py` to check the return value against `schema
 
 ### E_GO_003 — `ValueError: target=go does not support invoke.api.bedrock / vertex`
 
-**Cause**: a judgment STEP uses `invoke.api.bedrock` or `invoke.api.vertex`. These are not wired in v0.20.0.
+**Cause**: a judgment STEP uses `invoke.api.bedrock` or `invoke.api.vertex`. These are not wired for the Go target.
 
 **Fix**: use `invoke.api.anthropic` (the default for the Go target), or compile to `--target python` for full protocol coverage.
 
 ### E_GO_005 — `ValueError: target=go does not support invoke.api.openai`
 
-**Cause**: a judgment STEP uses `invoke.api.openai` (OpenAI-compat SDK). OpenAI-compat is not wired in v0.20.0.
+**Cause**: a judgment STEP uses `invoke.api.openai` (OpenAI-compat SDK). OpenAI-compat is not wired for the Go target.
 
-**Fix**: use `--target python`, which supports LiteLLM / OpenRouter / Ollama / vLLM via the OpenAI-compat path. OpenAI support for the Go target is tracked for v0.20.x.
+**Fix**: use `--target python`, which supports LiteLLM / OpenRouter / Ollama / vLLM via the OpenAI-compat path. OpenAI support for the Go target is on the backlog.
 
-### E_GO_006 — `ValueError: target=go does not support FLOW composition (sub-flow calls) in v0.20.0`
+### E_GO_006 — `ValueError: target: go does not support a multi-GIVES sub-flow used as a FOR EACH ... PARALLEL body`
 
-**Cause**: the source contains a `FlowCallIR` site (a signed FLOW called as a step inside another FLOW).
+**Cause**: a sub-flow declaring two or more `GIVES` fields is invoked as a `FOR EACH ... PARALLEL` body. The Go target collects parallel results into a single typed `[]T` slice, which cannot hold multiple typed GIVES fields. (Single-GIVES parallel bodies and all sequential / nested composition are supported in v0.23.)
 
-**Fix**: compile to `--target python` or `--target mcp-server` for full sub-flow support. FLOW composition for the Go target is tracked for v0.20.x. As a workaround, inline the sub-flow's steps directly in the parent FLOW.
+**Fix**: give the sub-flow a single `GIVES` field, run it sequentially, or compile to `--target python` for the multi-GIVES parallel shape.
 
-### E_GO_007 — `ValueError: target=go does not support impl.mode: rest in v0.20.0`
-
-**Cause**: a STEP declares `impl.mode: rest`. HTTP client generation for the Go target is deferred.
-
-**Fix**: compile to `--target python` or `--target mcp-server`. REST support for Go is tracked for v0.20.x.
-
-### E_GO_008 — `ValueError: target=go does not support impl.mode: shell in v0.20.0`
-
-**Cause**: a STEP declares `impl.mode: shell`. Shell subprocess emission for the Go target is deferred.
-
-**Fix**: compile to `--target python` or `--target mcp-server`. Shell support for Go is tracked for v0.20.x.
-
-### E_GO_009 — `ValueError: target=go does not support impl.mode: sql in v0.20.0`
+### E_GO_009 — `ValueError: target=go does not support impl.mode: sql`
 
 **Cause**: a STEP declares `impl.mode: sql`. Database access for the Go target is deferred.
 
-**Fix**: compile to `--target python` or `--target mcp-server`. SQL support for Go is tracked for v0.20.x.
+**Fix**: compile to `--target python` or `--target mcp-server`. SQL support for Go is tracked for v0.24.
 
-### E_GO_010 — `ValueError: target=go does not support impl.mode: mcp_tool in v0.20.0`
+### E_GO_010 — `ValueError: target=go does not support impl.mode: mcp_tool`
 
 **Cause**: a STEP declares `impl.mode: mcp_tool`. MCP tool client generation for the Go target is deferred.
 
-**Fix**: compile to `--target python` or `--target mcp-server`. MCP tool support for Go is tracked for v0.20.x.
+**Fix**: compile to `--target python` or `--target mcp-server`. MCP tool support for Go is tracked for v0.24.
 
-### E_GO_011 — `ValueError: target=go does not support --from-step resume in v0.20.0`
+### E_GO_011 — `ValueError: target=go does not support --from-step resume`
 
 **Cause**: you passed `--from-step N` to the Go binary (or tried to configure resume in the flow). State-file resume for the Go target is deferred.
 
-**Fix**: compile to `--target python` for `--from-step N` resume. Go resume is tracked for v0.20.x.
+**Fix**: compile to `--target python` for `--from-step N` resume. Go resume is on the backlog.
 
-### E_GO_012 — `ValueError: target=go does not support TEST blocks in v0.20.0`
+### E_GO_012 — `ValueError: target=go does not support TEST blocks`
 
 **Cause**: the source contains a `TEST` block. Go test generation is deferred.
 
-**Fix**: compile to `--target python`, which emits pytest files under `<output>/tests/`. Go test generation is tracked for v0.20.x.
+**Fix**: compile to `--target python`, which emits pytest files under `<output>/tests/`. Go test generation is on the backlog.
 
 ### `go: command not found` when running a compiled Go target
 
@@ -523,7 +511,7 @@ The emitted project declares the Anthropic Go SDK as a dependency in `go.mod`. `
 
 ### `cgo: C compiler not found` when building with the default sqlite driver
 
-If the emitted project was compiled from a source using `impl.mode: sql` with `driver: sqlite`, the generated code uses `modernc.org/sqlite` (pure Go, no CGo required). This error should not appear with v0.20.0 scope (sql is deferred — E_GO_009). If you see it with a future version, check your Go module's `go.mod` for the correct driver import.
+If the emitted project was compiled from a source using `impl.mode: sql` with `driver: sqlite`, the generated code uses `modernc.org/sqlite` (pure Go, no CGo required). This error should not appear in the current scope (sql is deferred to v0.24 — E_GO_009). If you see it with a future version, check your Go module's `go.mod` for the correct driver import.
 
 ## At runtime (after `bash run.sh` / `python -m flow_name`)
 

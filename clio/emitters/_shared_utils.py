@@ -466,6 +466,7 @@ def _go_condition_expr(
     condition: ConditionIR | BoolOpIR,
     scope_local: set[str],
     state_field_to_step: dict[str, StepIR],
+    take_types: dict[str, str] | None = None,
 ) -> str:
     """Render a CLIO IF/WHILE condition as a Go boolean expression.
 
@@ -491,27 +492,37 @@ def _go_condition_expr(
     `BoolOpIR` nodes render as `(<left>) &&/|| (<right>)` — unconditional
     parens preserve IR precedence regardless of nesting depth."""
     if isinstance(condition, BoolOpIR):
-        left = _go_condition_expr(condition.left, scope_local, state_field_to_step)
-        right = _go_condition_expr(condition.right, scope_local, state_field_to_step)
+        left = _go_condition_expr(
+            condition.left, scope_local, state_field_to_step, take_types,
+        )
+        right = _go_condition_expr(
+            condition.right, scope_local, state_field_to_step, take_types,
+        )
         go_op = "&&" if condition.op == "and" else "||"
         return f"({left}) {go_op} ({right})"
 
     # Leaf: ConditionIR
     # condition.step_name is the state-dict key (GIVES field name of the
     # step that produced it), not the step's own name.
+    _takes = take_types or {}
     state_field = condition.step_name
     step = state_field_to_step.get(state_field)
-    if step is not None:
+    if state_field in scope_local:
+        # Loop variable — `range` over a typed slice already binds it to a
+        # concrete element type, so a Go type assertion (`v.(T)`) would be a
+        # compile error ("non-interface type on left").  Access the field
+        # directly via the bare identifier.
+        base = state_field
+    elif step is not None:
         cls = _to_class_name(step.name)
-        type_assert = f"(steps.{cls}Out)"
+        base = f'state["{state_field}"].(steps.{cls}Out)'
+    elif state_field in _takes:
+        # Flow TAKE (contract) — direct value assertion to its Go type.
+        base = f'state["{state_field}"].({_takes[state_field]})'
     else:
         # Fallback: unknown state field — use `any`.  Should not happen after
         # IR validation, but guards against future call-site bugs.
-        type_assert = "(any)"
-    if state_field in scope_local:
-        base = f"{state_field}.{type_assert}"
-    else:
-        base = f'state["{state_field}"].{type_assert}'
+        base = f'state["{state_field}"].(any)'
     access = f"{base}.{_to_go_field_name(condition.field)}"
 
     # Render the RHS literal in Go syntax.

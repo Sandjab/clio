@@ -1,0 +1,20 @@
+STEP fetch
+  TAKES: url: str
+  GIVES: summary: str
+  MODE:  exact
+  LANG:  go
+
+FLOW enrich
+  TAKES: url: str
+  GIVES: summary: str
+  fetch(url=url)
+
+FLOW batch
+  TAKES: urls: List<str>
+  GIVES: results: List<str>
+  FOR EACH u IN urls PARALLEL AS results:
+    enrich(url=u)
+
+RESOURCES
+  target: go
+  models: [haiku]

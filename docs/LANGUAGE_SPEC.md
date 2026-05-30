@@ -239,6 +239,8 @@ Five forms, hybrid syntax:
 
 It is a parse error to combine forms (e.g. `body: {form: ..., multipart: ...}`).
 
+> **`target: go` limitation.** The Go emitter supports the **JSON** and **Raw** body forms only. **File**, **Form**, and **Multipart** bodies are refused at compile time with `E_GO_013` — use `--target python` for those. (The other targets support all five forms.)
+
 ##### `retry`
 
 Optional. Mandatory object form — the bare scalar `retries: N` is rejected at parse time (use `retry: {attempts: N}` for the same intent with the documented defaults).
@@ -651,7 +653,13 @@ declares a single GIVES field, the collector publishes a
 `List<<gives.type>>` cleanly. When the sub-flow declares multiple
 GIVES fields, the collector holds a list of dicts and the parent's
 declared `List<T>` annotation will not match — track this as a
-limitation pending a follow-up release.
+limitation pending a follow-up release. On `target: go` this exact shape
+(a multi-GIVES sub-flow read through a typed `FOR EACH PARALLEL`
+collector) is refused at compile time with `E_GO_006`; single-GIVES
+parallel and all sequential composition compile cleanly. The single-GIVES
+go collector is **terminal-only**: it is produced, but typed downstream
+consumption (`aggregate(xs=results)` or `FOR EACH x IN results`) fails the
+`go build` and is deferred to v0.24.
 
 ### Target support for sub-flow composition
 
@@ -661,6 +669,7 @@ limitation pending a follow-up release.
 | `mcp-server`    | yes (sub-flow → function; uncalled FLOWs become tools)               |
 | `claude-skill`  | yes (sub-flow → standalone script invoked from main)                  |
 | `langgraph`     | yes (sub-flow → compiled sub-`StateGraph`)                            |
+| `go`            | yes (sub-flow → `run<Name>()` func; single-GIVES parallel bodies are terminal-only — typed downstream consumption deferred to v0.24; multi-GIVES PARALLEL refused — E_GO_006) |
 | `claude-cli`    | **no** — compile-time error (deferred to a later release)             |
 
 ### IMPORT and EXPOSE (v0.18)

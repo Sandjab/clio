@@ -30,8 +30,10 @@ from clio.ir.graph import (
     FlowGraph,
     ForEachIR,
     IfBlockIR,
+    JsonBodyIR,
     MatchBlockIR,
     McpToolImplIR,
+    RawBodyIR,
     RescueBlockIR,
     RestImplIR,
     ShellImplIR,
@@ -62,34 +64,62 @@ def _go_module_name(graph: FlowGraph, default: str = "flow") -> str:
 def _flow_uses_judgment(graph: FlowGraph) -> bool:
     """True if any step in the source is judgment mode.
 
-    v0.20.0 refuses FLOW composition, so graph.steps contains exactly the
-    steps used by the single entry flow."""
+    Scans graph.steps, which holds every declared step across all flows (entry
+    + sub-flows), so judgment in a sub-flow still pulls the Anthropic SDK."""
     return any(isinstance(s, StepIR) and s.mode == "judgment" for s in graph.steps)
 
 
 def _flow_uses_parallel(graph: FlowGraph) -> bool:
-    """True if the entry flow contains a FOR EACH PARALLEL block."""
-    if graph.flow is None:
-        return False
-    return _has_parallel(graph.flow.chain)
+    """True if ANY flow contains a FOR EACH PARALLEL block.
+
+    Scans every flow's chain (not just graph.flow.chain), so a PARALLEL
+    block reachable only through a sub-flow still pulls golang.org/x/sync
+    (errgroup) into go.mod. (_flow_uses_judgment / _flow_uses_cache already
+    scan all graph.steps, so they stay correct under FLOW composition.)"""
+    return any(_has_parallel(fl.chain) for fl in graph.flows)
 
 
 def _flow_uses_cache(graph: FlowGraph) -> bool:
-    """True if any step in the entry flow declares a CACHE directive.
+    """True if any declared step has a CACHE directive.
 
-    Mirrors the gating logic of _flow_uses_judgment / _flow_uses_parallel.
-    v0.20 refuses FLOW composition, so graph.steps contains exactly the
-    steps used by the single entry flow.
+    Mirrors the gating logic of _flow_uses_judgment / _flow_uses_parallel,
+    scanning graph.steps across the entry flow and every sub-flow.
 
     NOTE: graph.steps over-collects — it includes steps declared but not
-    reached from graph.flow.chain. In v0.20 the practical impact is zero
-    (extra cache runtime emission is harmless); revisit if step-function
-    scoping needs to match the actual chain in a future iteration.
+    reached from any flow's chain. The practical impact is zero (extra cache
+    runtime emission is harmless); revisit if step-function scoping needs to
+    match the actual chain in a future iteration.
     """
     for step in graph.steps:
         if isinstance(step, StepIR) and step.cache is not None and step.cache.mode != "off":
             return True
     return False
+
+
+def _flow_uses_rest(graph: FlowGraph) -> bool:
+    """True if any step in the source is an impl.mode: rest step.
+
+    Gates emission of clio_runtime/rest. graph.steps is tuple[StepIR, ...], so
+    no isinstance(StepIR) guard is needed. Like _flow_uses_cache it over-collects
+    steps declared but not on the entry chain; harmless (the extra runtime is
+    only ever emitted, never wrong-imported)."""
+    return any(isinstance(s.impl, RestImplIR) for s in graph.steps)
+
+
+def _flow_uses_shell(graph: FlowGraph) -> bool:
+    """True if any step in the source is an impl.mode: shell step.
+
+    Same over-collection caveat as _flow_uses_rest (harmless)."""
+    return any(isinstance(s.impl, ShellImplIR) for s in graph.steps)
+
+
+def _flow_uses_substitute(graph: FlowGraph) -> bool:
+    """True if the emitted module needs clio_runtime/substitute.
+
+    Both REST (rest.go imports the substitute package) and shell (the step body
+    calls substitute.Apply) depend on it, so the substitute runtime is written
+    once when either is present."""
+    return _flow_uses_rest(graph) or _flow_uses_shell(graph)
 
 
 def render_cmd_main_go(graph: FlowGraph) -> str:
@@ -167,9 +197,8 @@ def render_contracts_go(graph: FlowGraph) -> str | None:
     # Collect contract names referenced by any step in the graph.
     contracts_used: set[str] = set()
     # NOTE: graph.steps over-collects — it includes steps declared but
-    # not reached from graph.flow.chain. In v0.20 this is harmless (extra
-    # dead struct types); revisit in T9 if step-function scoping needs
-    # to match the actual chain.
+    # not reached from any flow's chain. This is harmless (extra dead struct
+    # types); revisit if step-function scoping needs to match the actual chain.
     for step in graph.steps:
         contracts_used |= _collect_contract_refs(step)
     if not contracts_used:
@@ -229,8 +258,7 @@ _GO_E_001_MSG = (
     "E_GO_001: target: go can only embed exact step bodies in Go (LANG: go or "
     "LANG: auto). For Python/Bash/etc., use --target python (or --target "
     "claude-skill to let the LLM host drive the flow); for shell glue "
-    "specifically, use impl.mode: shell which target: go supports natively "
-    "(currently deferred to v0.20.x — see E_GO_008)."
+    "specifically, use impl.mode: shell (supported natively since v0.23)."
 )
 _GO_E_002_MSG = (
     "E_GO_002: target: go does not subprocess 'claude -p'. Use --target python, "
@@ -244,63 +272,70 @@ _GO_E_004_MSG = (
     "E_GO_004: target: go needs at least one FLOW to emit cmd/<flow>/main.go."
 )
 _GO_E_005_MSG = (
-    "E_GO_005: target: go v0.20.0 does not yet support invoke.protocol: openai. "
-    "Use --target python until the v0.20.x OpenAI emitter ships."
+    "E_GO_005: target: go does not yet support invoke.protocol: openai. "
+    "Use --target python until the Go OpenAI emitter ships."
 )
 _GO_E_006_MSG = (
-    "E_GO_006: target: go v0.20.0 does not yet support FLOW composition. Use "
-    "--target python until the v0.20.x sub-flow emitter ships."
-)
-_GO_E_007_MSG = (
-    "E_GO_007: target: go v0.20.0 does not yet support impl.mode: rest. Use "
-    "--target python until the v0.20.x REST emitter ships."
-)
-_GO_E_008_MSG = (
-    "E_GO_008: target: go v0.20.0 does not yet support impl.mode: shell. Use "
-    "--target python until the v0.20.x shell emitter ships."
+    "E_GO_006: target: go does not support a multi-GIVES sub-flow used as a "
+    "FOR EACH ... PARALLEL body — a single typed slice collector cannot hold "
+    "multiple GIVES fields. Use --target python, or give the sub-flow a single "
+    "GIVES field (single-GIVES parallel and all sequential composition are "
+    "supported)."
 )
 _GO_E_009_MSG = (
-    "E_GO_009: target: go v0.20.0 does not yet support impl.mode: sql. Use "
-    "--target python until the v0.20.x SQL emitter ships."
+    "E_GO_009: target: go does not yet support impl.mode: sql. Use "
+    "--target python until the Go SQL emitter ships (tracked for v0.24)."
 )
 _GO_E_010_MSG = (
-    "E_GO_010: target: go v0.20.0 does not yet support impl.mode: mcp_tool. "
-    "Use --target python until the v0.20.x MCP emitter ships."
+    "E_GO_010: target: go does not yet support impl.mode: mcp_tool. "
+    "Use --target python until the Go MCP emitter ships (tracked for v0.24)."
 )
 _GO_E_012_MSG = (
-    "E_GO_012: target: go v0.20.0 does not yet emit TEST blocks as `go test`. "
-    "Use --target python until the v0.20.x TEST emitter ships."
+    "E_GO_012: target: go does not yet emit TEST blocks as `go test`. "
+    "Use --target python until the Go TEST emitter ships."
+)
+_GO_E_013_MSG = (
+    "E_GO_013: target: go impl.rest supports json and raw bodies only; "
+    "form/file/multipart are not yet supported — use --target python."
 )
 
 _GO_OK_LANGS: frozenset[str | None] = frozenset({"go", "auto", None})
 
 
-def _walk_chain(items: tuple) -> None:  # type: ignore[type-arg]
-    """Recursively walk a FLOW chain and raise on unsupported IR nodes."""
+def _walk_chain(items: tuple, flows_by_name: dict) -> None:  # type: ignore[type-arg]
+    """Recursively walk a FLOW chain and raise on unsupported IR nodes.
+
+    v0.23: FLOW composition is supported, so a bare FlowCallIR no longer
+    raises. The one remaining narrowed refusal: a sub-flow that declares
+    >=2 GIVES used as the body of a `FOR EACH ... PARALLEL` block. The Go
+    collector is a single typed `[]T` slice and cannot hold a multi-field
+    struct (builder.py declines a typed collector for that shape), so this
+    is refused at compile time with `_GO_E_006_MSG`.
+    """
     for it in items:
-        if isinstance(it, FlowCallIR):
-            raise ValueError(_GO_E_006_MSG)
         if isinstance(it, IfBlockIR):
-            _walk_chain(it.then_body)
-            _walk_chain(it.else_body)
+            _walk_chain(it.then_body, flows_by_name)
+            _walk_chain(it.else_body, flows_by_name)
         elif isinstance(it, MatchBlockIR):
             for case in it.cases:
-                _walk_chain(case.body)
+                _walk_chain(case.body, flows_by_name)
         elif isinstance(it, WhileBlockIR):
-            _walk_chain(it.body)
+            _walk_chain(it.body, flows_by_name)
         elif isinstance(it, ForEachIR):
-            _walk_chain(it.body)
+            if it.parallel and len(it.body) == 1:
+                body0 = it.body[0]
+                if isinstance(body0, FlowCallIR):
+                    sub = flows_by_name.get(body0.flow_name)
+                    if sub is not None and len(sub.gives) >= 2:
+                        raise ValueError(_GO_E_006_MSG)
+            _walk_chain(it.body, flows_by_name)
         elif isinstance(it, RescueBlockIR):
-            _walk_chain(it.body)
+            _walk_chain(it.body, flows_by_name)
 
 
 def validate_graph_for_go(graph: FlowGraph) -> None:
     """Raise ValueError with an E_GO_NNN code if the graph uses any feature
-    outside v0.20.0 scope. Runs before any file is written."""
-    # E_GO_006: multiple FLOWs means FLOW composition (entry is ambiguous)
-    if len(graph.flows) > 1:
-        raise ValueError(_GO_E_006_MSG)
-
+    outside the supported go-target scope. Runs before any file is written."""
     # E_GO_004: no FLOW at all
     if len(graph.flows) == 0:
         raise ValueError(_GO_E_004_MSG)
@@ -328,19 +363,24 @@ def validate_graph_for_go(graph: FlowGraph) -> None:
             if step.invoke.protocol == "openai":
                 raise ValueError(_GO_E_005_MSG)
 
-        # impl.mode checks
-        if isinstance(step.impl, RestImplIR):
-            raise ValueError(_GO_E_007_MSG)
-        if isinstance(step.impl, ShellImplIR):
-            raise ValueError(_GO_E_008_MSG)
+        # impl.mode checks (rest/shell supported since v0.23; sql/mcp_tool deferred)
         if isinstance(step.impl, SqlImplIR):
             raise ValueError(_GO_E_009_MSG)
         if isinstance(step.impl, McpToolImplIR):
             raise ValueError(_GO_E_010_MSG)
+        # E_GO_013: the rest renderer only builds a body reader for json/raw
+        # bodies; form/file/multipart silently fall through to a nil reader (the
+        # body is never sent). Refuse them loudly instead of emitting a drop.
+        if isinstance(step.impl, RestImplIR) and step.impl.body is not None and not (
+            isinstance(step.impl.body, (JsonBodyIR, RawBodyIR))
+        ):
+            raise ValueError(_GO_E_013_MSG)
 
-    # Walk chain for nested FlowCallIR (E_GO_006 via composition inside chain)
-    if graph.flow is not None:
-        _walk_chain(graph.flow.chain)
-        for rescue in graph.flow.rescues:
-            _walk_chain(rescue.body)
+    # Walk every flow's chain for the narrowed multi-GIVES PARALLEL refusal
+    # (composition itself is supported since v0.23).
+    flows_by_name = {f.name: f for f in graph.flows}
+    for fl in graph.flows:
+        _walk_chain(fl.chain, flows_by_name)
+        for rescue in fl.rescues:
+            _walk_chain(rescue.body, flows_by_name)
 

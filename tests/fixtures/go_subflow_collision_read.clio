@@ -1,0 +1,36 @@
+STEP make_a
+  TAKES: x: str
+  GIVES: result: int
+  MODE:  exact
+  LANG:  go
+
+STEP make_b
+  TAKES: x: str
+  GIVES: result: str
+  MODE:  exact
+  LANG:  go
+
+STEP sink
+  TAKES: result: str
+  GIVES: done: str
+  MODE:  exact
+  LANG:  go
+
+FLOW flow_a
+  TAKES: x: str
+  GIVES: result: int
+  make_a(x=x)
+
+FLOW flow_b
+  TAKES: x: str
+  GIVES: result: str
+  make_b(x=x)
+
+FLOW pipeline
+  TAKES: x: str
+  GIVES: done: str
+  flow_a(x=x) -> flow_b(x=x) -> sink(result=result)
+
+RESOURCES
+  target: go
+  models: [haiku]
