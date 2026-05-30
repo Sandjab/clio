@@ -207,6 +207,30 @@ def test_go_build_passes_on_rest_bodyless_and_raw(tmp_path: Path, monkeypatch) -
     assert '"encoding/json"' not in raw_src
 
 
+def test_go_build_passes_on_shell_flow(tmp_path: Path) -> None:
+    """A flow with parse:json, parse:none, and a no-GIVES shell step must
+    emit Go that actually compiles (catches import-path / type-assertion bugs
+    a string-grep cannot)."""
+    fixtures = Path(__file__).parent.parent / "fixtures"
+    from tests.test_emitters.test_go import _compile as _go_compile
+
+    out = tmp_path / "out"
+    _go_compile(fixtures / "go_shell.clio", out)
+
+    tidy_env = {
+        "GOFLAGS": "-mod=mod",
+        "HOME": str(out / ".gohome"),
+        "PATH": os.environ.get("PATH", "/usr/bin:/usr/local/bin:/bin"),
+    }
+    subprocess.run(
+        ["go", "mod", "tidy"], cwd=out, check=True, capture_output=True, env=tidy_env
+    )
+    result = _go_build(out)
+    assert result.returncode == 0, (
+        f"go build failed:\n--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+    )
+
+
 def test_go_build_json_body_with_retry_rebuilds_reader(tmp_path: Path, monkeypatch) -> None:  # type: ignore[type-arg]
     """A JSON-body step that also has impl.retry must rebuild the body reader on
     every attempt: a single bytes.Reader is at EOF after the first send, so
