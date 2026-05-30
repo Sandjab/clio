@@ -960,3 +960,32 @@ def test_render_clio_runtime_substitute_shape():
     assert "not found in TAKES" in src
     assert "is not set" in src
     assert render_clio_runtime_substitute() == src
+
+
+def test_render_clio_runtime_rest_shape():
+    from clio.emitters._go_runtime_templates import render_clio_runtime_rest
+
+    src = render_clio_runtime_rest("flow")
+    assert src.startswith("package rest\n")
+    assert "func Subst(template string, takes map[string]any) (string, error)" in src
+    assert "func RenderDict(items map[string]any, takes map[string]any) (map[string]any, error)" in src
+    assert "func IsRetryableStatus(code int, on []string) bool" in src
+    assert "func IsRetryableErr(err error, on []string) bool" in src
+    assert "func ComputeDelay(attempt int, base, cap float64, backoff string) time.Duration" in src
+    assert "func ParseRetryAfter(v string) (time.Duration, bool)" in src
+    assert "code >= 500 && code < 600" in src
+    assert "code == 429" in src
+    assert '"timeout"' in src
+    assert '"network"' in src
+    assert 'backoff == "constant"' in src
+    assert "substitute.Apply(" in src
+    assert render_clio_runtime_rest("flow") == src
+
+
+def test_render_clio_runtime_rest_imports_substitute_package():
+    # Subst must reuse the substitute package, not reimplement ${var}, so the
+    # two runtimes can never drift. (Intent: single source for interpolation.)
+    from clio.emitters._go_runtime_templates import render_clio_runtime_rest
+
+    src = render_clio_runtime_rest("flow")
+    assert "flow/clio_runtime/substitute" in src
