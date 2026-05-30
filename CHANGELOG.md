@@ -32,7 +32,7 @@ Minor release closing **#82 — Go target reaches stdlib feature parity**. The `
 
 ### Tests
 
-- A real `go build` of an emitted sub-flow module is added (a grep-only golden cannot fail when `@take` typing regresses). Refusal-test suite updated: obsolete flow-composition/rest/shell refusal tests removed, replaced by positive emission tests + a narrowed multi-GIVES-parallel `E_GO_006` negative. Suite at `1264 passed / 18 skipped / 1 xfailed`.
+- A real `go build` of an emitted sub-flow module is added (a grep-only golden cannot fail when `@take` typing regresses). Refusal-test suite updated: obsolete flow-composition/rest/shell refusal tests removed, replaced by positive emission tests + a narrowed multi-GIVES-parallel `E_GO_006` negative + form/file/multipart `E_GO_013` negatives with a json/raw positive guard. Suite at `1269 passed / 18 skipped / 1 xfailed`.
 
 ## [0.22.0] — 2026-05-30
 
