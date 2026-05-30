@@ -282,32 +282,48 @@ _GO_E_012_MSG = (
 _GO_OK_LANGS: frozenset[str | None] = frozenset({"go", "auto", None})
 
 
-def _walk_chain(items: tuple) -> None:  # type: ignore[type-arg]
-    """Recursively walk a FLOW chain and raise on unsupported IR nodes."""
+def _walk_chain(items: tuple, flows_by_name: dict) -> None:  # type: ignore[type-arg]
+    """Recursively walk a FLOW chain and raise on unsupported IR nodes.
+
+    v0.23: FLOW composition is supported, so a bare FlowCallIR no longer
+    raises. The one remaining narrowed refusal: a sub-flow that declares
+    >=2 GIVES used as the body of a `FOR EACH ... PARALLEL` block. The Go
+    collector is a single typed `[]T` slice and cannot hold a multi-field
+    struct (builder.py declines a typed collector for that shape), so this
+    is refused at compile time. (Re-narrowing the E_GO_006 message text is
+    Phase 6's job.)
+    """
     for it in items:
-        if isinstance(it, FlowCallIR):
-            raise ValueError(_GO_E_006_MSG)
         if isinstance(it, IfBlockIR):
-            _walk_chain(it.then_body)
-            _walk_chain(it.else_body)
+            _walk_chain(it.then_body, flows_by_name)
+            _walk_chain(it.else_body, flows_by_name)
         elif isinstance(it, MatchBlockIR):
             for case in it.cases:
-                _walk_chain(case.body)
+                _walk_chain(case.body, flows_by_name)
         elif isinstance(it, WhileBlockIR):
-            _walk_chain(it.body)
+            _walk_chain(it.body, flows_by_name)
         elif isinstance(it, ForEachIR):
-            _walk_chain(it.body)
+            if it.parallel and len(it.body) == 1:
+                body0 = it.body[0]
+                if isinstance(body0, FlowCallIR):
+                    sub = flows_by_name.get(body0.flow_name)
+                    if sub is not None and len(sub.gives) >= 2:
+                        raise ValueError(
+                            "E_GO_006: target: go cannot use a multi-GIVES "
+                            f"sub-flow ({body0.flow_name!r}, "
+                            f"{len(sub.gives)} GIVES) as a FOR EACH PARALLEL "
+                            "body — the typed []T collector holds a single "
+                            "field. Split the sub-flow to one GIVES or use a "
+                            "sequential FOR EACH."
+                        )
+            _walk_chain(it.body, flows_by_name)
         elif isinstance(it, RescueBlockIR):
-            _walk_chain(it.body)
+            _walk_chain(it.body, flows_by_name)
 
 
 def validate_graph_for_go(graph: FlowGraph) -> None:
     """Raise ValueError with an E_GO_NNN code if the graph uses any feature
     outside v0.20.0 scope. Runs before any file is written."""
-    # E_GO_006: multiple FLOWs means FLOW composition (entry is ambiguous)
-    if len(graph.flows) > 1:
-        raise ValueError(_GO_E_006_MSG)
-
     # E_GO_004: no FLOW at all
     if len(graph.flows) == 0:
         raise ValueError(_GO_E_004_MSG)
@@ -344,9 +360,11 @@ def validate_graph_for_go(graph: FlowGraph) -> None:
         if isinstance(step.impl, McpToolImplIR):
             raise ValueError(_GO_E_010_MSG)
 
-    # Walk chain for nested FlowCallIR (E_GO_006 via composition inside chain)
-    if graph.flow is not None:
-        _walk_chain(graph.flow.chain)
-        for rescue in graph.flow.rescues:
-            _walk_chain(rescue.body)
+    # Walk every flow's chain for the narrowed multi-GIVES PARALLEL refusal
+    # (composition itself is supported since v0.23).
+    flows_by_name = {f.name: f for f in graph.flows}
+    for fl in graph.flows:
+        _walk_chain(fl.chain, flows_by_name)
+        for rescue in fl.rescues:
+            _walk_chain(rescue.body, flows_by_name)
 

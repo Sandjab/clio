@@ -20,6 +20,13 @@ def _compile(source_path: Path, output_dir: Path) -> None:
     _cmd_compile(str(source_path), "go", str(output_dir), None)
 
 
+def _compile_flow(source_path: Path, output_dir: Path, flow_name: str) -> None:
+    """Run `clio compile <source> --target go --flow <flow_name> --output <out>`
+    in-process. Required for multi-FLOW fixtures (composition tests), where
+    flow=None would leave graph.flow unset."""
+    _cmd_compile(str(source_path), "go", str(output_dir), flow_name)
+
+
 def test_target_go_is_registered_in_cli(tmp_path: Path) -> None:
     src = tmp_path / "trivial.clio"
     src.write_text(
@@ -38,6 +45,37 @@ def test_target_go_is_registered_in_cli(tmp_path: Path) -> None:
     out = tmp_path / "out"
     _compile(src, out)
     assert (out / "go.mod").exists(), "go emitter must write go.mod"
+
+
+def test_compile_flow_helper_selects_named_entry(tmp_path: Path) -> None:
+    """_compile_flow must select a named entry FLOW from a multi-FLOW source,
+    so graph.flow is non-None and flow/flow.go renders a real orchestrator
+    rather than the empty `graph.flow is None` fallback."""
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP a\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "FLOW sub\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  a(x=x)\n"
+        "FLOW pipeline\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  sub(x=x)\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile_flow(src, out, "pipeline")
+    body = (out / "flow" / "flow.go").read_text()
+    # Real orchestrator, not the empty fallback.
+    assert "func Run(ctx context.Context, kwargs map[string]any) (map[string]any, error) {" in body
+    assert "return map[string]any{}, nil" not in body
 
 
 def test_go_mod_uses_safe_package_name(tmp_path: Path) -> None:
@@ -798,25 +836,38 @@ def test_E_GO_005_invoke_protocol_openai(tmp_path: Path) -> None:
     _compile_expecting_error(src, tmp_path / "out", "E_GO_005")
 
 
-def test_E_GO_006_flow_composition(tmp_path: Path) -> None:
+def test_E_GO_006_multi_gives_subflow_parallel_body(tmp_path: Path) -> None:
+    """v0.23: FLOW composition is supported, so the broad E_GO_006 refusal is
+    lifted. The one narrowed refusal that survives: a sub-flow declaring >=2
+    GIVES used as the body of a FOR EACH ... PARALLEL block. A single typed
+    []T collector cannot carry a multi-field struct, so the emitter must
+    refuse it at compile time rather than emit code that won't build."""
     src = tmp_path / "src.clio"
     src.write_text(
-        "STEP a\n"
+        "STEP make_a\n"
         "  TAKES: x: str\n"
-        "  GIVES: y: str\n"
+        "  GIVES: a: str\n"
         "  MODE:  exact\n"
         "  LANG:  go\n"
-        "FLOW sub\n"
+        "STEP make_b\n"
         "  TAKES: x: str\n"
-        "  GIVES: y: str\n"
-        "  a(x)\n"
-        "FLOW pipeline\n"
-        "  sub(x=\"hi\")\n"
+        "  GIVES: b: str\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "FLOW pair\n"
+        "  TAKES: x: str\n"
+        "  GIVES: a: str, b: str\n"
+        "  make_a(x=x) -> make_b(x=x)\n"
+        "FLOW batch\n"
+        "  TAKES: xs: List<str>\n"
+        "  FOR EACH x IN xs PARALLEL AS results:\n"
+        "    pair(x=x)\n"
         "RESOURCES\n"
         "  target: go\n"
         "  models: [haiku]\n"
     )
-    _compile_expecting_error(src, tmp_path / "out", "E_GO_006")
+    with pytest.raises(ValueError, match="E_GO_006"):
+        _compile_flow(src, tmp_path / "out", "batch")
 
 
 def test_E_GO_007_impl_mode_rest(tmp_path: Path) -> None:
