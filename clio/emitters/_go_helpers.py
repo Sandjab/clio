@@ -238,8 +238,7 @@ _GO_E_001_MSG = (
     "E_GO_001: target: go can only embed exact step bodies in Go (LANG: go or "
     "LANG: auto). For Python/Bash/etc., use --target python (or --target "
     "claude-skill to let the LLM host drive the flow); for shell glue "
-    "specifically, use impl.mode: shell which target: go supports natively "
-    "(currently deferred to v0.20.x — see E_GO_008)."
+    "specifically, use impl.mode: shell (supported natively since v0.23)."
 )
 _GO_E_002_MSG = (
     "E_GO_002: target: go does not subprocess 'claude -p'. Use --target python, "
@@ -263,10 +262,6 @@ _GO_E_006_MSG = (
 _GO_E_007_MSG = (
     "E_GO_007: target: go v0.20.0 does not yet support impl.mode: rest. Use "
     "--target python until the v0.20.x REST emitter ships."
-)
-_GO_E_008_MSG = (
-    "E_GO_008: target: go supports impl.mode: shell via os/exec since v0.23. "
-    "This message is retained for back-reference; the construct is no longer refused."
 )
 _GO_E_009_MSG = (
     "E_GO_009: target: go v0.20.0 does not yet support impl.mode: sql. Use "
