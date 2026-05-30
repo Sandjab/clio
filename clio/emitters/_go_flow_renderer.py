@@ -17,6 +17,7 @@ from clio.ir.graph import (
     CallIR,
     ContractIR,
     FlowGraph,
+    FlowIR,
     ForEachIR,
     IfBlockIR,
     MatchBlockIR,
@@ -25,6 +26,53 @@ from clio.ir.graph import (
     StepIR,
     WhileBlockIR,
 )
+
+
+def _build_state_field_to_step(
+    flow: FlowIR,
+    steps_by_name: dict[str, StepIR],
+) -> dict[str, StepIR]:
+    """Map each state-dict key (a step's GIVES field name) to the StepIR that
+    produced it, for ONE flow only.
+
+    Walks the flow's reachable producers: chain + rescue-handler bodies +
+    nested IF / MATCH / WHILE / FOR EACH bodies.  Replaces the single global
+    build that assumed one flow per graph — per-flow maps keep two flows that
+    each GIVE `result` from colliding (each resolves against its own map in
+    its own rendered function).
+
+    Inside one flow the IR already forbids two producers of one field, so each
+    per-flow map is collision-free (last-writer-wins on the rare overwrite,
+    matching builder.py's `available[...]` semantics).
+    """
+    result: dict[str, StepIR] = {}
+
+    def walk(items: tuple) -> None:  # type: ignore[type-arg]
+        for it in items:
+            if isinstance(it, CallIR):
+                step = steps_by_name.get(it.step_name)
+                if step is not None and step.gives is not None:
+                    result[step.gives.name] = step
+            elif isinstance(it, IfBlockIR):
+                walk(it.then_body)
+                walk(it.else_body)
+            elif isinstance(it, MatchBlockIR):
+                for case in it.cases:
+                    walk(case.body)
+            elif isinstance(it, WhileBlockIR):
+                walk(it.body)
+            elif isinstance(it, ForEachIR):
+                walk(it.body)
+            elif isinstance(it, RescueBlockIR):
+                walk(it.body)
+            # FlowCallIR / ResumeIR contribute no StepIR producer here:
+            # FlowCallIR boundary extension is Phase 5; RESUME writes a field
+            # already produced by its fallback step (captured via that CallIR).
+
+    walk(flow.chain)
+    for rb in flow.rescues:
+        walk(rb.body)
+    return result
 
 
 def _go_kwarg_value(

@@ -1570,3 +1570,69 @@ def test_flow_uses_parallel_false_when_no_flow_has_parallel() -> None:
     )
     graph = FlowGraph(steps=(seed,), flow=entry, flows=(entry,))
     assert _flow_uses_parallel(graph) is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 (v0.23) — per-flow typed-state maps + entry-flow TAKES seeding
+
+
+def test_build_state_field_to_step_walks_chain_rescues_and_nested_bodies() -> None:
+    """_build_state_field_to_step maps each GIVES field name -> producing StepIR
+    for ONE flow, descending into IF / FOR EACH bodies AND rescue handlers.
+
+    Intent: a per-flow map (not a global one) is what lets flow A's `result`
+    and flow B's `result` resolve against different producers.  If the walker
+    skipped nested bodies or rescues, a downstream `@field` read inside (or
+    after) those constructs would fall to the untyped fallback and the emitted
+    Go would not type-check.  This test pins the SET of producers the walker
+    must discover, not just one happy-path step.
+    """
+    from clio.emitters._go_flow_renderer import _build_state_field_to_step
+    from clio.ir.builder import build_ir
+    from clio.ir.graph import StepIR
+    from clio.parser.parser import parse
+
+    src = (
+        "CONTRACT gate\n"
+        "  SHAPE: {ok: bool}\n"
+        "STEP load\n"
+        "  TAKES: file: str\n"
+        "  GIVES: rows: str\n"
+        "  MODE:  exact\n"
+        "STEP guard\n"
+        "  TAKES: rows: str\n"
+        "  GIVES: decision: gate\n"
+        "  MODE:  exact\n"
+        "STEP fallback_load\n"
+        "  TAKES: file: str\n"
+        "  GIVES: rows2: str\n"
+        "  MODE:  exact\n"
+        "STEP inner\n"
+        "  TAKES: rows: str\n"
+        "  GIVES: tagged: str\n"
+        "  MODE:  exact\n"
+        "FLOW pipeline\n"
+        "  load(file=\"a.csv\")\n"
+        "  -> guard(rows=rows)\n"
+        "  -> IF decision.ok == true:\n"
+        "       inner(rows=rows)\n"
+        "  RESCUE load:\n"
+        "    -> fallback_load(file=\"a.csv\")\n"
+        "    -> RESUME(fallback_load.rows2)\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    graph = build_ir(parse(src))
+    steps_by_name = {s.name: s for s in graph.steps if isinstance(s, StepIR)}
+    m = _build_state_field_to_step(graph.flow, steps_by_name)
+
+    # Top-level chain producers.
+    assert m["rows"].name == "load"
+    assert m["decision"].name == "guard"
+    # Nested IF-body producer must be discovered.
+    assert m["tagged"].name == "inner"
+    # Rescue-handler producer must be discovered.
+    assert m["rows2"].name == "fallback_load"
+    # Map is collision-free per flow: exactly one StepIR per field name.
+    assert set(m) == {"rows", "decision", "tagged", "rows2"}
