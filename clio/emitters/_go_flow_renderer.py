@@ -455,11 +455,10 @@ def _render_chain_item(
         state_field = item.state_field
         step = state_field_to_step.get(state_field)
         if state_field in scope_local:
-            if step is not None:
-                cls = _to_class_name(step.name)
-                base = f"{state_field}.(steps.{cls}Out)"
-            else:
-                base = f"{state_field}.(any)"
+            # Loop variable — `range` over a typed slice binds it to a concrete
+            # element type, so a Go type assertion (`v.(T)`) would be a compile
+            # error.  Use the bare identifier and access the field directly.
+            base = state_field
         elif step is not None:
             cls = _to_class_name(step.name)
             base = f'state["{state_field}"].(steps.{cls}Out)'

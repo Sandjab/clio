@@ -392,6 +392,34 @@ def test_go_build_passes_on_subflow_composition(
     )
 
 
+def test_go_build_passes_on_loopvar_control_flow(tmp_path: Path) -> None:
+    """A `MATCH`/`IF` whose subject is a FOR EACH loop variable's sub-field must
+    compile. The loop variable already has a concrete element type from `range`,
+    so a Go type assertion on it (`a.(any).Level`) is a compile error — the
+    emitter must use the bare identifier (`a.Level`). Regression for a latent
+    codegen bug: no prior fixture exercised control flow over a loop variable,
+    so `go build` never caught it (a string grep cannot)."""
+    out = tmp_path / "out"
+    _compile_flow(FIXTURES / "go_loopvar_control.clio", out, "pipeline")
+    tidy_env = {
+        "GOFLAGS": "-mod=mod",
+        "HOME": str(out / ".gohome"),
+        "PATH": os.environ.get("PATH", "/usr/bin:/usr/local/bin:/bin"),
+    }
+    subprocess.run(
+        ["go", "mod", "tidy"], cwd=out, check=True, capture_output=True, env=tidy_env,
+    )
+    result = _go_build(out)
+    assert result.returncode == 0, (
+        f"go build failed:\n--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+    )
+    # Pin the bare-identifier access (no type assertion on the concrete loop var).
+    flow_src = (out / "flow" / "flow.go").read_text()
+    assert "switch a.Level {" in flow_src
+    assert "if b.Level ==" in flow_src
+    assert ".(any).Level" not in flow_src
+
+
 @pytest.mark.parametrize(
     "fixture,entry,typed_read",
     [

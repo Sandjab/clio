@@ -1,0 +1,35 @@
+CONTRACT risk_assessment
+  SHAPE: {level: enum(low|mid|high), score: float}
+
+STEP detect_all
+  TAKES: x: str
+  GIVES: assessments: List<risk_assessment>
+  MODE:  exact
+  LANG:  go
+
+STEP archive
+  TAKES: x: str
+  GIVES: archived: bool
+  MODE:  exact
+  LANG:  go
+
+STEP flag
+  TAKES: x: str
+  GIVES: flagged: bool
+  MODE:  exact
+  LANG:  go
+
+FLOW pipeline
+  detect_all(x="incoming")
+  -> FOR EACH a IN assessments:
+       MATCH a.level:
+         CASE low:  archive(x="incoming")
+         CASE mid:  flag(x="incoming")
+         CASE high: flag(x="incoming")
+  -> FOR EACH b IN assessments:
+       IF b.level == high:
+         flag(x="incoming")
+
+RESOURCES
+  target: go
+  models: [haiku]
