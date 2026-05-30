@@ -1341,3 +1341,119 @@ def test_render_shell_step_go_no_gives_is_side_effect() -> None:
     assert "Validate(ctx)" not in body
     assert "json.Unmarshal" not in body
     assert "return out, nil" in body
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 Task 1 — recursive step collector (pre-existing bug fix)
+# Regression: a step reachable ONLY through a nested control-flow body
+# (FOR EACH / IF / MATCH / WHILE) or a RESCUE handler previously got no
+# steps/NN_*.go file, because the stub loop walked only top-level CallIR
+# in graph.flow.chain. The recursive collector walks every flow's chain,
+# nested bodies, and rescues; dedups by name; numbers by first-seen order.
+
+
+def test_collect_reachable_steps_walks_nested_for_each_body() -> None:
+    """A step that appears ONLY inside a FOR EACH body is reachable and must
+    be collected — the stub loop previously skipped it (it walked only
+    top-level CallIR), so its steps/NN_*.go file went missing and the
+    emitted module would not compile if that step had a contract Out."""
+    from clio.emitters.go import _collect_reachable_steps
+    from clio.ir.builder import build_ir as _build_ir_local
+    from clio.parser.parser import parse as _parse_local
+
+    src = (
+        "STEP load\n"
+        "  TAKES: file: str\n"
+        "  GIVES: items: List<str>\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "STEP process\n"
+        "  TAKES: item: str\n"
+        "  GIVES: result: str\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "FLOW pipeline\n"
+        '  load(file="in.csv")\n'
+        "    -> FOR EACH item IN items:\n"
+        "         process(item=item)\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    graph = _build_ir_local(_parse_local(src))
+    collected = _collect_reachable_steps(graph)
+    names = [s.name for s in collected]
+    # first-seen order: load (top-level), then process (inside FOR EACH body)
+    assert names == ["load", "process"], names
+
+
+def test_collect_reachable_steps_dedups_by_name() -> None:
+    """A step called from two reachable sites is collected exactly once,
+    at its first-seen position (stable NN_ numbering)."""
+    from clio.emitters.go import _collect_reachable_steps
+    from clio.ir.builder import build_ir as _build_ir_local
+    from clio.parser.parser import parse as _parse_local
+
+    # detect.GIVES: result (a CONTRACT with `outcome` field) so the IF
+    # condition can reference result.outcome — a scalar gives would have no
+    # sub-field to compare, so a contract is the minimal valid structure.
+    src = (
+        "CONTRACT status\n"
+        "  SHAPE: {outcome: str}\n"
+        "\n"
+        "STEP detect\n"
+        "  TAKES: x: str\n"
+        "  GIVES: result: status\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "STEP audit\n"
+        "  TAKES: x: str\n"
+        "  GIVES: note: str\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "FLOW pipeline\n"
+        '  detect(x="hi")\n'
+        "  -> IF result.outcome == yes:\n"
+        '       audit(x="a")\n'
+        "  ELSE:\n"
+        '       audit(x="b")\n'
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    graph = _build_ir_local(_parse_local(src))
+    collected = _collect_reachable_steps(graph)
+    names = [s.name for s in collected]
+    assert names == ["detect", "audit"], names  # audit appears once, not twice
+
+
+def test_nested_for_each_body_step_emits_its_own_go_file(tmp_path: Path) -> None:
+    """End-to-end regression: a step reachable only through an ENTRY-flow
+    FOR EACH body now gets a steps/NN_*.go file. Before the fix the stub
+    loop produced only 01_load.go and the module would not build."""
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP load\n"
+        "  TAKES: file: str\n"
+        "  GIVES: items: List<str>\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "STEP process\n"
+        "  TAKES: item: str\n"
+        "  GIVES: result: str\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "FLOW pipeline\n"
+        '  load(file="in.csv")\n'
+        "    -> FOR EACH item IN items:\n"
+        "         process(item=item)\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile(src, out)
+    files = sorted(f.name for f in (out / "steps").iterdir())
+    assert files == ["01_load.go", "02_process.go"], files
+    body = (out / "steps" / "02_process.go").read_text()
+    assert "func Process(ctx context.Context, in ProcessIn) (ProcessOut, error)" in body

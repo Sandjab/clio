@@ -40,7 +40,66 @@ from clio.emitters._go_step_renderers import (
     render_shell_step_go,
 )
 from clio.emitters.base import BaseEmitter
-from clio.ir.graph import CallIR, FlowGraph, RestImplIR, ShellImplIR, StepIR
+from clio.ir.graph import (
+    CallIR,
+    FlowGraph,
+    ForEachIR,
+    IfBlockIR,
+    MatchBlockIR,
+    RestImplIR,
+    ShellImplIR,
+    StepIR,
+    WhileBlockIR,
+)
+
+
+def _collect_reachable_steps(graph: FlowGraph) -> list[StepIR]:
+    """Return every StepIR reachable from any flow in the graph.
+
+    Walks each flow's chain plus all nested control-flow bodies
+    (IF / MATCH / WHILE / FOR EACH) and RESCUE handlers, resolving each
+    CallIR.step_name against the graph's steps. Dedups by step name,
+    preserving stable first-seen order so steps/NN_<name>.go numbering is
+    deterministic. FlowCallIR nodes are skipped — they reference a flow,
+    not a step (sub-flow step bodies are reached via their own flow's
+    chain, which this walk covers because it iterates graph.flows).
+
+    Replaces the prior top-level-only loop (go.py:74-96) that walked only
+    graph.flow.chain and only top-level CallIR, so steps nested in a
+    control-flow body or a rescue — or in a sub-flow — got no stub file.
+    """
+    steps_by_name = {s.name: s for s in graph.steps if isinstance(s, StepIR)}
+    seen: set[str] = set()
+    ordered: list[StepIR] = []
+
+    def visit_chain(items: tuple) -> None:  # type: ignore[type-arg]
+        for it in items:
+            if isinstance(it, CallIR):
+                if it.step_name in seen:
+                    continue
+                step = steps_by_name.get(it.step_name)
+                if step is None:
+                    continue
+                seen.add(it.step_name)
+                ordered.append(step)
+            elif isinstance(it, IfBlockIR):
+                visit_chain(it.then_body)
+                visit_chain(it.else_body)
+            elif isinstance(it, MatchBlockIR):
+                for case in it.cases:
+                    visit_chain(case.body)
+            elif isinstance(it, WhileBlockIR):
+                visit_chain(it.body)
+            elif isinstance(it, ForEachIR):
+                visit_chain(it.body)
+            # FlowCallIR and any other node type: skip (no step to collect).
+
+    for fl in graph.flows:
+        visit_chain(fl.chain)
+        for rescue in fl.rescues:
+            visit_chain(rescue.body)
+
+    return ordered
 
 
 class GoEmitter(BaseEmitter):
@@ -91,35 +150,32 @@ class GoEmitter(BaseEmitter):
             (runtime_subst_dir / "substitute.go").write_text(render_clio_runtime_substitute())
 
         # Emit step stubs under steps/NN_<name>.go (exact and judgment).
-        # Use step_idx (not enumerate) so control-flow elements that are
-        # skipped (T12+) don't produce numbering gaps like 01_, 03_, ...
-        if graph.flow is not None:
-            steps_by_name = {
-                s.name: s for s in graph.steps if isinstance(s, StepIR)
-            }
-            contracts_by_name = {c.name: c for c in graph.contracts}
-            steps_dir: Path | None = None
-            step_idx = 0
-            for elem in graph.flow.chain:
-                if not isinstance(elem, CallIR):
-                    continue
-                step = steps_by_name.get(elem.step_name)
-                if step is None or step.mode not in ("exact", "judgment"):
-                    continue
-                step_idx += 1
-                if steps_dir is None:
-                    steps_dir = output_dir / "steps"
-                    steps_dir.mkdir(parents=True, exist_ok=True)
-                filename = f"{step_idx:02d}_{step.name}.go"
-                if step.mode == "exact" and isinstance(step.impl, RestImplIR):
-                    src = render_rest_step_go(step, contracts_by_name, graph)
-                elif step.mode == "exact" and isinstance(step.impl, ShellImplIR):
-                    src = render_shell_step_go(step, contracts_by_name, graph)
-                elif step.mode == "exact":
-                    src = render_exact_step_go(step, contracts_by_name, graph)
-                else:
-                    src = render_judgment_step_go(step, graph)
-                (steps_dir / filename).write_text(src)
+        # _collect_reachable_steps walks every flow's chain, nested control-
+        # flow bodies, and rescues, so a step reachable only through a
+        # FOR EACH / IF / MATCH / WHILE body or a RESCUE handler (or a
+        # sub-flow) still gets its file. Use the collector's first-seen
+        # order so numbering is stable; skip control-flow-only steps that
+        # aren't exact/judgment.
+        contracts_by_name = {c.name: c for c in graph.contracts}
+        steps_dir: Path | None = None
+        step_idx = 0
+        for step in _collect_reachable_steps(graph):
+            if step.mode not in ("exact", "judgment"):
+                continue
+            step_idx += 1
+            if steps_dir is None:
+                steps_dir = output_dir / "steps"
+                steps_dir.mkdir(parents=True, exist_ok=True)
+            filename = f"{step_idx:02d}_{step.name}.go"
+            if step.mode == "exact" and isinstance(step.impl, RestImplIR):
+                src = render_rest_step_go(step, contracts_by_name, graph)
+            elif step.mode == "exact" and isinstance(step.impl, ShellImplIR):
+                src = render_shell_step_go(step, contracts_by_name, graph)
+            elif step.mode == "exact":
+                src = render_exact_step_go(step, contracts_by_name, graph)
+            else:
+                src = render_judgment_step_go(step, graph)
+            (steps_dir / filename).write_text(src)
 
         # Emit flow/flow.go — top-level orchestrator (unconditional).
         flow_dir = output_dir / "flow"
