@@ -222,3 +222,44 @@ def test_lex_pipe_inside_enum_is_not_block_scalar():
     bs_count = sum(1 for t in tokens if t.type == TokenType.BLOCK_SCALAR)
     assert pipe_count == 2
     assert bs_count == 0
+
+
+def _string_value(src):
+    toks = lex(src)
+    return next(t for t in toks if t.type == TokenType.STRING).value
+
+
+def test_lex_string_escaped_quote():
+    # .clio source:  A "say \"hi\""
+    assert _string_value('A "say \\"hi\\""\n') == 'say "hi"'
+
+
+def test_lex_string_escaped_backslash():
+    # .clio source:  "a\\b"  -> value  a\b
+    assert _string_value('"a\\\\b"\n') == 'a\\b'
+
+
+def test_lex_string_lone_backslash_preserved():
+    # .clio source:  "C:\foo"  (\ not before " or \)  -> value unchanged  C:\foo
+    assert _string_value('"C:\\foo"\n') == 'C:\\foo'
+
+
+def test_lex_string_json_cmd_value():
+    # the issue #88 motivating case, as it appears in a cmd: line
+    assert _string_value('cmd: "echo \'{\\"available\\": true}\'"\n') == 'echo \'{"available": true}\''
+
+
+def test_lex_string_unterminated_after_trailing_escaped_quote():
+    import pytest
+
+    from clio.parser.lexer import LexError
+    # .clio source:  "foo\"   -> the \" escapes the quote, so the literal is unterminated
+    with pytest.raises(LexError) as exc:
+        lex('"foo\\"\n')
+    assert "unterminated string literal" in str(exc.value)
+
+
+def test_lex_string_escaped_quote_then_hash_not_treated_as_comment():
+    # _strip_comment must be escape-aware: a # inside a string, reached after an
+    # escaped quote, is NOT a comment.  .clio source:  "a \"#b\" c"
+    assert _string_value('"a \\"#b\\" c"\n') == 'a "#b" c'
