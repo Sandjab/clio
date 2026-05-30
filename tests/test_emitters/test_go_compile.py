@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_emitters.test_go import _compile
+from tests.test_emitters.test_go import FIXTURES, _compile, _compile_flow
 
 pytestmark = pytest.mark.skipif(
     shutil.which("go") is None,
@@ -326,4 +326,37 @@ def test_go_build_passes_on_entry_takes_flow(tmp_path: Path) -> None:
     result = _go_build(out)
     assert result.returncode == 0, (
         f"go build failed:\n--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+    )
+
+
+@pytest.mark.parametrize(
+    "fixture,entry",
+    [
+        ("go_subflow_seq.clio", "pipeline"),
+        ("go_subflow_parallel.clio", "batch"),
+        ("go_subflow_collision.clio", "pipeline"),
+        ("go_subflow_abc.clio", "pipeline"),
+    ],
+)
+def test_go_build_passes_on_subflow_composition(
+    tmp_path: Path, fixture: str, entry: str
+) -> None:
+    """Emit a sub-flow composition fixture, `go mod tidy`, then `go build ./...`.
+    A real build is the only check that catches a wrong @take/boundary type
+    assertion — a string grep cannot. Covers sequential, parallel single-GIVES
+    collector, sibling collision (last-writer-wins), and A->B->C nesting."""
+    out = tmp_path / "out"
+    _compile_flow(FIXTURES / fixture, out, entry)
+    tidy_env = {
+        "GOFLAGS": "-mod=mod",
+        "HOME": str(out / ".gohome"),
+        "PATH": os.environ.get("PATH", "/usr/bin:/usr/local/bin:/bin"),
+    }
+    subprocess.run(
+        ["go", "mod", "tidy"], cwd=out, check=True, capture_output=True, env=tidy_env,
+    )
+    result = _go_build(out)
+    assert result.returncode == 0, (
+        f"go build failed for {fixture}:\n--- stdout ---\n{result.stdout}\n"
+        f"--- stderr ---\n{result.stderr}"
     )

@@ -1,0 +1,25 @@
+STEP fetch
+  TAKES: url: str
+  GIVES: article: str
+  MODE:  exact
+  LANG:  go
+
+STEP shout
+  TAKES: article: str
+  GIVES: loud: str
+  MODE:  exact
+  LANG:  go
+
+FLOW enrich
+  TAKES: url:  str
+  GIVES: article: str
+  fetch(url=url)
+
+FLOW pipeline
+  TAKES: url:  str
+  GIVES: loud: str
+  enrich(url=url) -> shout(article=article)
+
+RESOURCES
+  target: go
+  models: [haiku]

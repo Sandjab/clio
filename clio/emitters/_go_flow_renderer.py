@@ -77,6 +77,68 @@ def _build_state_field_to_step(
     return result
 
 
+def _resolve_give_producer(
+    flow: FlowIR,
+    field: str,
+    steps_by_name: dict[str, StepIR],
+    flows_by_name: dict[str, FlowIR],
+    _seen: frozenset[str] = frozenset(),
+) -> StepIR | None:
+    """Resolve a flow's GIVES `field` to the ultimate producing StepIR,
+    following nested sub-flow (FlowCallIR) boundaries transitively.
+
+    A sub-flow may publish a GIVES field that is itself produced by a deeper
+    sub-flow (A->B->C). The boundary extension needs the *concrete* step whose
+    `Out` struct carries the value, so a downstream typed read in the parent
+    asserts `state["<g>"].(steps.<Cls>Out)` against the right struct.
+
+    1. If a direct STEP in this flow produces `field`, return it.
+    2. Otherwise, find a FlowCallIR in this flow's chain whose called sub-flow
+       declares `field` in its GIVES, and recurse into that sub-flow.
+
+    `_seen` guards against the (IR-rejected, but defensive) flow cycle. Returns
+    None when no producer is found (caller raises a clear emitter error).
+    """
+    direct = _build_state_field_to_step(flow, steps_by_name).get(field)
+    if direct is not None:
+        return direct
+    if flow.name in _seen:
+        return None
+    seen = _seen | {flow.name}
+
+    def search(items: tuple) -> StepIR | None:  # type: ignore[type-arg]
+        # Walk in source order so last-writer-wins matches the rendered
+        # boundary-extension order. A later producer overrides an earlier one.
+        found: StepIR | None = None
+        for it in items:
+            if isinstance(it, FlowCallIR):
+                sub = flows_by_name.get(it.flow_name)
+                if sub is not None and any(g.name == field for g in sub.gives):
+                    candidate = _resolve_give_producer(
+                        sub, field, steps_by_name, flows_by_name, seen,
+                    )
+                    if candidate is not None:
+                        found = candidate
+            elif isinstance(it, IfBlockIR):
+                found = search(it.then_body) or found
+                found = search(it.else_body) or found
+            elif isinstance(it, MatchBlockIR):
+                for case in it.cases:
+                    found = search(case.body) or found
+            elif isinstance(it, WhileBlockIR):
+                found = search(it.body) or found
+            elif isinstance(it, ForEachIR):
+                found = search(it.body) or found
+            elif isinstance(it, RescueBlockIR):
+                found = search(it.body) or found
+        return found
+
+    result = search(flow.chain)
+    for rb in flow.rescues:
+        result = search(rb.body) or result
+    return result
+
+
 def _build_take_field_to_gotype(
     flow: FlowIR,
     contracts: dict[str, ContractIR],
@@ -540,8 +602,8 @@ def _render_chain_item(
         ):
             _sf = flows_by_name.get(item.body[0].flow_name)
             if _sf is not None and len(_sf.gives) == 1:
-                _prod = _build_state_field_to_step(_sf, steps_by_name).get(
-                    _sf.gives[0].name
+                _prod = _resolve_give_producer(
+                    _sf, _sf.gives[0].name, steps_by_name, flows_by_name,
                 )
                 if _prod is not None:
                     results_type = f"steps.{_to_class_name(_prod.name)}Out"
@@ -618,6 +680,7 @@ def _render_chain_item(
             return _render_subflow_parallel_body(
                 item, sub_flow, args, indent,
                 steps_by_name=steps_by_name,
+                flows_by_name=_flows,
             )
 
         if scope_local:
@@ -648,11 +711,13 @@ def _render_chain_item(
         # Boundary extension: the sub-flow publishes each GIVES field carrying
         # its inner producer's concrete steps.<Cls>Out value verbatim. Register
         # those producers in THIS flow's running map so downstream typed reads
-        # of @<g> assert to the right struct. Last-writer-wins on collision
-        # (parity with python's state.update + builder available[g] overwrite).
-        sub_producers = _build_state_field_to_step(sub_flow, steps_by_name)
+        # of @<g> assert to the right struct. The producer may sit behind nested
+        # sub-flow calls (A->B->C), so resolve it transitively. Last-writer-wins
+        # on collision (parity with python's state.update + available[g] overwrite).
         for g in sub_flow.gives:
-            producer = sub_producers.get(g.name)
+            producer = _resolve_give_producer(
+                sub_flow, g.name, steps_by_name, _flows,
+            )
             if producer is None:
                 raise ValueError(
                     f"internal go emitter error: sub-flow {sub_flow.name!r} "
@@ -673,6 +738,7 @@ def _render_subflow_parallel_body(
     indent: str,
     *,
     steps_by_name: dict[str, StepIR],
+    flows_by_name: dict[str, FlowIR],
 ) -> tuple[list[str], str]:
     """Single-GIVES sub-flow as a FOR EACH PARALLEL body.
 
@@ -692,7 +758,7 @@ def _render_subflow_parallel_body(
     sub_cls = _to_class_name(item.flow_name)
     sub_var = f"_sub{sub_cls}"
     g0 = sub_flow.gives[0].name
-    producer = _build_state_field_to_step(sub_flow, steps_by_name).get(g0)
+    producer = _resolve_give_producer(sub_flow, g0, steps_by_name, flows_by_name)
     if producer is None:
         raise ValueError(
             f"internal go emitter error: sub-flow {sub_flow.name!r} GIVES "
