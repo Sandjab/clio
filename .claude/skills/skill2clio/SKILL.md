@@ -74,10 +74,15 @@ Run: `python -m clio check <output.clio>`
 ### 5. Loop
 If `check` reports an error:
 - Read the line/col and message.
-- Fix the `.clio`. Common pitfalls (all detailed in the prompt): reserved keywords used as
+- Fix the `.clio`. Common pitfalls (most detailed in the prompt): reserved keywords used as
   identifiers, multi-line `SHAPE`, `IF`/`MATCH` on a bare `str`/`int` param (must be a dotted
   CONTRACT field), step-arg type mismatches, `FLOW.GIVES` field-NAME mismatches, `CACHE`/
   `ON_FAIL` on an exact step (judgment-only), `LANG`/`impl` on a judgment step (exact-only).
+  Two more the grammar does not forgive: (1) an exact step's inline shell `cmd:` string cannot
+  contain `"` or `\` (the lexer has no escape handling) — if the script emits JSON, map it as
+  `impl: mode: code` and keep the logic in the shipped script file rather than inlining a
+  `cmd:`; (2) a `WHILE` condition referencing a CONTRACT field needs that field produced by a
+  step BEFORE the loop — run the producer once before `WHILE`, then again inside it.
 - Re-run `check`.
 
 Repeat until `check` passes. **Brake:** if 4 successive fixes do not reach a clean check, STOP.
