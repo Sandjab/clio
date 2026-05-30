@@ -78,6 +78,128 @@ def test_compile_flow_helper_selects_named_entry(tmp_path: Path) -> None:
     assert "return map[string]any{}, nil" not in body
 
 
+def test_render_flow_body_drives_run(tmp_path: Path) -> None:
+    """Run's chain body is produced by the shared _render_flow_body helper.
+    A single-FLOW exact pipeline still emits the seed + step call + state
+    write + return through the shared body path (no regression)."""
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP load\n"
+        "  TAKES: file: str\n"
+        "  GIVES: rows: List<str>\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "FLOW pipeline\n"
+        "  TAKES: file: str\n"
+        "  GIVES: rows: List<str>\n"
+        "  load(file=file)\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile(src, out)
+    body = (out / "flow" / "flow.go").read_text()
+    # Entry TAKES seeding (Phase 4 retrofit, exercised through shared body).
+    assert 'state["file"] = kwargs["file"]' in body
+    # @file read resolves via take_types -> direct scalar assertion.
+    assert 'steps.Load(ctx, steps.LoadIn{ File: state["file"].(string) })' in body
+    assert 'state["rows"] = loadOut' in body
+    assert "return state, nil" in body
+
+
+def test_subflow_funcs_emitted_name_sorted(tmp_path: Path) -> None:
+    """Each callable sub-flow (TAKES + GIVES, != entry) emits an unexported
+    run<Name>(ctx, <takes...>) (map[string]any, error). Order is name-sorted
+    for deterministic goldens. The entry flow is NOT re-emitted as run<Name>."""
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP fetch\n"
+        "  TAKES: url: str\n"
+        "  GIVES: article: str\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "STEP sumz\n"
+        "  TAKES: article: str\n"
+        "  GIVES: summary: str\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "FLOW zeta\n"
+        "  TAKES: url: str\n"
+        "  GIVES: summary: str\n"
+        "  fetch(url=url) -> sumz(article=article)\n"
+        "FLOW alpha\n"
+        "  TAKES: url: str\n"
+        "  GIVES: article: str\n"
+        "  fetch(url=url)\n"
+        "FLOW pipeline\n"
+        "  TAKES: url: str\n"
+        "  GIVES: summary: str\n"
+        "  zeta(url=url)\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile_flow(src, out, "pipeline")
+    body = (out / "flow" / "flow.go").read_text()
+    # Both sub-flows emitted, entry (pipeline) not re-emitted as a func.
+    assert "func runAlpha(ctx context.Context, url string) (map[string]any, error) {" in body
+    assert "func runZeta(ctx context.Context, url string) (map[string]any, error) {" in body
+    assert "func runPipeline(" not in body
+    # Name-sorted: alpha before zeta.
+    assert body.index("func runAlpha(") < body.index("func runZeta(")
+    # GIVES-subset return for each.
+    assert 'return map[string]any{"article": state["article"]}, nil' in body
+    assert 'return map[string]any{"summary": state["summary"]}, nil' in body
+    # TAKES seeded from the param (not kwargs) inside a run<Name>.
+    assert 'state["url"] = url' in body
+
+
+def test_subflow_call_site_flat_merge(tmp_path: Path) -> None:
+    """A top-level sub-flow call emits run<Name>(...) + flat-merge into state,
+    mirroring python's state.update(run_<name>(...)). Positional kwargs are
+    rendered in flow.takes order. A downstream read of the sub-flow's
+    published GIVES asserts to the inner producer's typed Out struct
+    (boundary extension)."""
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP fetch\n"
+        "  TAKES: url: str\n"
+        "  GIVES: article: str\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "STEP shout\n"
+        "  TAKES: article: str\n"
+        "  GIVES: loud: str\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "FLOW enrich\n"
+        "  TAKES: url: str\n"
+        "  GIVES: article: str\n"
+        "  fetch(url=url)\n"
+        "FLOW pipeline\n"
+        "  TAKES: url: str\n"
+        "  GIVES: loud: str\n"
+        "  enrich(url=url) -> shout(article=article)\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile_flow(src, out, "pipeline")
+    body = (out / "flow" / "flow.go").read_text()
+    # Call site: run<Name>, positional in flow.takes order, @url -> take ref.
+    assert '_subEnrich, err := runEnrich(ctx, state["url"].(string))' in body
+    assert "if err != nil {" in body
+    # Typed flat-merge (verbatim interface copy).
+    assert "for k, v := range _subEnrich {" in body
+    assert "state[k] = v" in body
+    # Boundary extension: downstream shout reads @article, which enrich
+    # publishes from its inner Fetch step -> assert to steps.FetchOut.
+    assert 'steps.Shout(ctx, steps.ShoutIn{ Article: state["article"].(steps.FetchOut).Article })' in body
+
+
 def test_go_mod_uses_safe_package_name(tmp_path: Path) -> None:
     """Module name is lowercased and normalised for Go (no uppercase, no
     special chars).  CamelCase flow name 'CustomerRetention' becomes

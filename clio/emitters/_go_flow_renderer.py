@@ -17,6 +17,7 @@ from clio.emitters._shared_utils import (
 from clio.ir.graph import (
     CallIR,
     ContractIR,
+    FlowCallIR,
     FlowGraph,
     FlowIR,
     ForEachIR,
@@ -570,9 +571,181 @@ def _render_chain_item(
         ])
         return par_lines, prev_var
 
+    if isinstance(item, FlowCallIR):
+        _flows = flows_by_name or {}
+        sub_flow = _flows.get(item.flow_name)
+        if sub_flow is None:
+            # Unknown sub-flow — should not happen after IR validation.
+            return [], prev_var
+        sub_cls = _to_class_name(item.flow_name)
+        # Render positional kwargs in flow.takes order (run<Name> is positional).
+        take_order = [f.name for f in sub_flow.takes]
+        by_take = {name: value for name, value in item.kwargs}
+        arg_exprs = [
+            _go_kwarg_value(
+                by_take[t], contracts_by_name, state_field_to_step,
+                scope_local, take_types=_takes,
+            )
+            for t in take_order
+        ]
+        args = ", ".join(["ctx", *arg_exprs])
+
+        if suppress_state_write:
+            # Parallel goroutine body — single-GIVES typed collector.
+            return _render_subflow_parallel_body(
+                item, sub_flow, args, indent,
+                steps_by_name=steps_by_name,
+            )
+
+        if scope_local:
+            # Nested scope (FOR EACH / IF / MATCH / WHILE body): invoke without
+            # binding, mirroring python's invoke-without-bind. Errors propagate.
+            return (
+                [
+                    f"{indent}if _, err := run{sub_cls}({args}); err != nil {{",
+                    f"{indent}\treturn nil, err",
+                    f"{indent}}}",
+                    "",
+                ],
+                prev_var,
+            )
+
+        # Top-level: call + typed flat-merge + boundary extension.
+        sub_var = f"_sub{sub_cls}"
+        lines = [
+            f"{indent}{sub_var}, err := run{sub_cls}({args})",
+            f"{indent}if err != nil {{",
+            f"{indent}\treturn nil, err",
+            f"{indent}}}",
+            f"{indent}for k, v := range {sub_var} {{",
+            f"{indent}\tstate[k] = v",
+            f"{indent}}}",
+            "",
+        ]
+        # Boundary extension: the sub-flow publishes each GIVES field carrying
+        # its inner producer's concrete steps.<Cls>Out value verbatim. Register
+        # those producers in THIS flow's running map so downstream typed reads
+        # of @<g> assert to the right struct. Last-writer-wins on collision
+        # (parity with python's state.update + builder available[g] overwrite).
+        sub_producers = _build_state_field_to_step(sub_flow, steps_by_name)
+        for g in sub_flow.gives:
+            producer = sub_producers.get(g.name)
+            if producer is None:
+                raise ValueError(
+                    f"internal go emitter error: sub-flow {sub_flow.name!r} "
+                    f"declares GIVES {g.name!r} with no producing step"
+                )
+            state_field_to_step[g.name] = producer  # mutate running map in place
+        return lines, prev_var
+
     raise NotImplementedError(
         f"chain item kind not yet supported in v0.20.0: {type(item).__name__}"
     )
+
+
+def _render_subflow_parallel_body(
+    item: FlowCallIR,
+    sub_flow: FlowIR,
+    args: str,
+    indent: str,
+    *,
+    steps_by_name: dict[str, StepIR],
+) -> tuple[list[str], str]:
+    """Single-GIVES sub-flow as a FOR EACH PARALLEL body.
+
+    Emits `_sub<Name>, err := run<Name>(...)`, propagates the error (rewritten
+    to `return err` by the enclosing goroutine), then extracts the lone GIVES
+    field as a typed struct so the collector slot stores `steps.<Producer>Out`.
+    Returns (_g) as the new prev_var (cur_par) for the collector line.
+
+    Multi-GIVES bodies are refused upstream (narrowed E_GO_006) — asserted here
+    for defence in depth.
+    """
+    if len(sub_flow.gives) != 1:
+        raise ValueError(
+            f"internal go emitter error: multi-GIVES sub-flow {sub_flow.name!r} "
+            f"used as a typed FOR EACH PARALLEL body (should be refused upstream)"
+        )
+    sub_cls = _to_class_name(item.flow_name)
+    sub_var = f"_sub{sub_cls}"
+    g0 = sub_flow.gives[0].name
+    producer = _build_state_field_to_step(sub_flow, steps_by_name).get(g0)
+    if producer is None:
+        raise ValueError(
+            f"internal go emitter error: sub-flow {sub_flow.name!r} GIVES "
+            f"{g0!r} has no producing step"
+        )
+    producer_cls = _to_class_name(producer.name)
+    lines = [
+        f"{indent}{sub_var}, err := run{sub_cls}({args})",
+        f"{indent}if err != nil {{",
+        f"{indent}\treturn nil, err",
+        f"{indent}}}",
+        f'{indent}_g := {sub_var}["{g0}"].(steps.{producer_cls}Out)',
+    ]
+    return lines, "_g"
+
+
+def _render_flow_body(
+    flow: FlowIR,
+    *,
+    steps_by_name: dict[str, StepIR],
+    contracts_by_name: dict[str, ContractIR],
+    take_types: dict[str, str],
+    flows_by_name: dict[str, FlowIR],
+    return_fields: tuple[str, ...] | None,
+) -> list[str]:
+    """Render the body of one flow function (Run or run<Name>).
+
+    Shared by `Run` (return_fields=None -> `return state, nil`) and each
+    `run<Name>` (return_fields=GIVES names -> `return map[string]any{...}, nil`).
+
+    Builds this flow's own per-flow `state_field_to_step` (collision-free
+    inside one flow — the IR forbids two producers of one field), seeds the
+    TAKES into state, then threads a *mutable running copy* of that map plus
+    `take_types` through `_render_chain_item`, so each top-level FlowCallIR
+    arm can extend the map (boundary extension) before downstream items read
+    the sub-flow's published GIVES.
+    """
+    state_field_to_step = _build_state_field_to_step(flow, steps_by_name)
+    rescues_by_step: dict[str, RescueBlockIR] = {
+        rb.step_name: rb for rb in flow.rescues
+    }
+    body: list[str] = ["\tstate := map[string]any{}", ""]
+    # Seed each TAKE so reads resolve via take_types (Phase 4 retrofit).
+    # `Run` seeds from kwargs; `run<Name>` seeds from the bare param.
+    # Name-sorted for deterministic goldens.
+    for f in sorted(flow.takes, key=lambda fld: fld.name):
+        body.append(
+            f'\tstate["{f.name}"] = kwargs["{f.name}"]'
+            if return_fields is None
+            else f'\tstate["{f.name}"] = {f.name}'
+        )
+    if flow.takes:
+        body.append("")
+    # Running, mutable per-flow map — extended at FlowCallIR boundaries.
+    running_map = dict(state_field_to_step)
+    prev_var = "kwargs"
+    for elem in flow.chain:
+        elem_lines, prev_var = _render_chain_item(
+            elem,
+            prev_var,
+            "\t",
+            steps_by_name=steps_by_name,
+            state_field_to_step=running_map,
+            contracts_by_name=contracts_by_name,
+            scope_local=set(),
+            rescues_by_step=rescues_by_step,
+            take_types=take_types,
+            flows_by_name=flows_by_name,
+        )
+        body.extend(elem_lines)
+    if return_fields is None:
+        body.append("\treturn state, nil")
+    else:
+        pairs = ", ".join(f'"{g}": state["{g}"]' for g in return_fields)
+        body.append(f"\treturn map[string]any{{{pairs}}}, nil")
+    return body
 
 
 def render_flow_go(graph: FlowGraph) -> str:
@@ -592,16 +765,9 @@ def render_flow_go(graph: FlowGraph) -> str:
 
     contracts_by_name = {c.name: c for c in graph.contracts}
     steps_by_name = {s.name: s for s in graph.steps if isinstance(s, StepIR)}
-    # Per-flow producer map (chain + rescues + nested bodies) for the entry
-    # flow — replaces the old global build so it matches the sub-flow path.
-    state_field_to_step = _build_state_field_to_step(graph.flow, steps_by_name)
-    # Entry-flow TAKES are produced by no step; seed them into state and
-    # register their Go types so `@<take>` reads assert to the right type.
-    take_types = _build_take_field_to_gotype(graph.flow, contracts_by_name)
-    # Maps protected step name → RescueBlockIR for RESCUE handlers (T16).
-    rescues_by_step: dict[str, RescueBlockIR] = {
-        rb.step_name: rb for rb in graph.flow.rescues
-    }
+    # Lookup of every FLOW by name, so the FlowCallIR arm can resolve a
+    # sub-flow's signature (TAKES order, GIVES set, producers).
+    flows_by_name = {f.name: f for f in graph.flows}
 
     # Build the import block dynamically so errgroup is only included when
     # the flow contains a FOR EACH PARALLEL block (T17).
@@ -611,6 +777,7 @@ def render_flow_go(graph: FlowGraph) -> str:
         import_lines.append("")
     import_lines.append(f'\t"{pkg}/steps"')
 
+    take_types = _build_take_field_to_gotype(graph.flow, contracts_by_name)
     lines: list[str] = [
         "package flow",
         "",
@@ -621,28 +788,59 @@ def render_flow_go(graph: FlowGraph) -> str:
         ")",
         "",
         "func Run(ctx context.Context, kwargs map[string]any) (map[string]any, error) {",
-        "\tstate := map[string]any{}",
-        "",
     ]
-    # Seed entry-flow TAKES from kwargs (name-sorted for deterministic goldens).
-    for f in sorted(graph.flow.takes, key=lambda fld: fld.name):
-        lines.append(f'\tstate["{f.name}"] = kwargs["{f.name}"]')
-    if graph.flow.takes:
-        lines.append("")
-    prev_var = "kwargs"
-    for elem in graph.flow.chain:
-        elem_lines, prev_var = _render_chain_item(
-            elem,
-            prev_var,
-            "\t",
+    lines.extend(
+        _render_flow_body(
+            graph.flow,
             steps_by_name=steps_by_name,
-            state_field_to_step=state_field_to_step,
             contracts_by_name=contracts_by_name,
-            scope_local=set(),
-            rescues_by_step=rescues_by_step,
             take_types=take_types,
+            flows_by_name=flows_by_name,
+            return_fields=None,
         )
-        lines.extend(elem_lines)
-    lines.append("\treturn state, nil")
+    )
     lines.append("}")
+
+    # v0.23: one unexported run<Name> per callable sub-flow (TAKES + GIVES),
+    # excluding the entry flow. Name-sorted for deterministic goldens; Go
+    # resolves package-level funcs regardless of source order, so A->B->C
+    # nesting needs no topological sort.
+    entry_name = graph.flow.name
+    callable_subflows = sorted(
+        (
+            f for f in graph.flows
+            if f.name != entry_name and f.takes and f.gives
+        ),
+        key=lambda f: f.name,
+    )
+    _seen_run_names: set[str] = set()
+    for sub in callable_subflows:
+        sub_cls = _to_class_name(sub.name)
+        run_name = f"run{sub_cls}"
+        if run_name in _seen_run_names:
+            raise ValueError(
+                f"E_GO: run func name collision — two sub-flows render to "
+                f"{run_name!r}; rename one (Go func names must be unique)"
+            )
+        _seen_run_names.add(run_name)
+        params = ", ".join(
+            f"{f.name} {_type_to_go(f.type, contracts_by_name, qualifier='contracts')}"
+            for f in sub.takes
+        )
+        sub_take_types = _build_take_field_to_gotype(sub, contracts_by_name)
+        lines.append("")
+        lines.append(
+            f"func run{sub_cls}(ctx context.Context, {params}) (map[string]any, error) {{"
+        )
+        lines.extend(
+            _render_flow_body(
+                sub,
+                steps_by_name=steps_by_name,
+                contracts_by_name=contracts_by_name,
+                take_types=sub_take_types,
+                flows_by_name=flows_by_name,
+                return_fields=tuple(g.name for g in sub.gives),
+            )
+        )
+        lines.append("}")
     return "\n".join(lines) + "\n"
