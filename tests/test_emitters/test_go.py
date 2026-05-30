@@ -1708,3 +1708,32 @@ def test_go_kwarg_value_emits_direct_assertion_for_take_refs() -> None:
         "@url", {}, {}, scope_local={"url"}, take_types={"url": "string"},
     )
     assert out_scope == "url"
+
+
+def test_go_condition_expr_resolves_take_ref_as_contract_assertion() -> None:
+    """An IF/WHILE condition whose state field is a flow TAKE (a contract)
+    asserts to `state["x"].(contracts.<Cls>).<Field>`, not the `(any)`
+    fallback.
+
+    Intent: when a condition reads a contract-typed TAKE, the `(any)` fallback
+    makes `.<Field>` an invalid field access on `any` — the Go does not
+    compile.  This test pins the take_types branch in the leaf resolver; it
+    fails if the threading regresses, which a grep test cannot catch.
+    """
+    from clio.emitters._shared_utils import _go_condition_expr
+    from clio.ir.graph import ConditionIR
+
+    cond = ConditionIR(
+        step_name="who",            # state field name == the TAKE name
+        field="level",
+        op="==",
+        literal_value="high",
+        literal_kind="ident",
+    )
+    out = _go_condition_expr(
+        cond,
+        scope_local=set(),
+        state_field_to_step={},     # no producer: it's a TAKE
+        take_types={"who": "contracts.Customer"},
+    )
+    assert out == 'state["who"].(contracts.Customer).Level == "high"'
