@@ -21,6 +21,7 @@ from clio.emitters._go_flow_renderer import render_flow_go
 from clio.emitters._go_helpers import (
     _flow_uses_cache,
     _flow_uses_rest,
+    _flow_uses_substitute,
     _go_module_name,
     render_cmd_main_go,
     render_contracts_go,
@@ -138,13 +139,9 @@ class GoEmitter(BaseEmitter):
             runtime_rest_dir = output_dir / "clio_runtime" / "rest"
             runtime_rest_dir.mkdir(parents=True, exist_ok=True)
             (runtime_rest_dir / "rest.go").write_text(render_clio_runtime_rest(pkg))
-            runtime_subst_dir = output_dir / "clio_runtime" / "substitute"
-            runtime_subst_dir.mkdir(parents=True, exist_ok=True)
-            (runtime_subst_dir / "substitute.go").write_text(render_clio_runtime_substitute())
-        if any(
-            isinstance(s, StepIR) and isinstance(s.impl, ShellImplIR)
-            for s in graph.steps
-        ):
+        # substitute.go is shared by REST (rest.go imports it) and shell (the
+        # step body calls substitute.Apply); write it once when either is present.
+        if _flow_uses_substitute(graph):
             runtime_subst_dir = output_dir / "clio_runtime" / "substitute"
             runtime_subst_dir.mkdir(parents=True, exist_ok=True)
             (runtime_subst_dir / "substitute.go").write_text(render_clio_runtime_substitute())

@@ -1451,6 +1451,67 @@ def test_go_omits_rest_runtimes_when_no_rest_step(tmp_path):
     assert not (out / "clio_runtime" / "substitute").exists()
 
 
+def test_rest_and_shell_steps_write_substitute_once(tmp_path, monkeypatch):
+    """A flow mixing a REST step (rest.go imports substitute) and a shell step
+    (the step body calls substitute.Apply) both need clio_runtime/substitute.
+
+    The substitute runtime must be rendered exactly ONCE — not once per impl
+    family. Before consolidation go.py called render_clio_runtime_substitute()
+    twice (a redundant write); the single _flow_uses_substitute gate fixes that.
+    A call-count spy is the right tool: the on-disk file always ends up present,
+    so only counting renders proves the duplicate write is gone."""
+    from clio.emitters import go as _go
+    from clio.emitters.go import GoEmitter
+    from clio.ir.builder import build_ir as build_graph
+    from clio.parser.parser import parse
+
+    calls = {"n": 0}
+    real = _go.render_clio_runtime_substitute
+
+    def _spy() -> str:
+        calls["n"] += 1
+        return real()
+
+    monkeypatch.setattr(_go, "render_clio_runtime_substitute", _spy)
+
+    src = (
+        "STEP geocode\n"
+        "  TAKES: address: str\n"
+        "  GIVES: lat: float\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:    rest\n"
+        "    method:  GET\n"
+        '    url:     "https://maps.example.com/geocode"\n'
+        '    query:   {address: "${address}"}\n'
+        '    response_path: "results[0].lat"\n'
+        "STEP grep\n"
+        "  TAKES: file: str\n"
+        "  GIVES: lines: List<str>\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:  shell\n"
+        "    cmd:   \"grep foo ${file}\"\n"
+        "    parse: json\n"
+        "FLOW pipeline\n"
+        '  geocode(address="x")\n'
+        '  -> grep(file="y")\n'
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    graph = build_graph(parse(src))
+    out = tmp_path / "out"
+    GoEmitter().emit(graph, out)
+
+    subst = out / "clio_runtime" / "substitute" / "substitute.go"
+    assert subst.exists()
+    assert calls["n"] == 1, (
+        f"substitute runtime rendered {calls['n']} times; must be exactly once "
+        "even when both a rest and a shell step are present"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Shell step renderer tests (Phase 2 — E_GO_008)
 

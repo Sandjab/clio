@@ -34,6 +34,7 @@ from clio.ir.graph import (
     McpToolImplIR,
     RescueBlockIR,
     RestImplIR,
+    ShellImplIR,
     SqlImplIR,
     StepIR,
     WhileBlockIR,
@@ -97,11 +98,27 @@ def _flow_uses_cache(graph: FlowGraph) -> bool:
 def _flow_uses_rest(graph: FlowGraph) -> bool:
     """True if any step in the source is an impl.mode: rest step.
 
-    Gates emission of clio_runtime/rest + clio_runtime/substitute. graph.steps
-    is tuple[StepIR, ...], so no isinstance(StepIR) guard is needed. Like
-    _flow_uses_cache it over-collects steps declared but not on the entry chain;
-    harmless (the extra runtime is only ever emitted, never wrong-imported)."""
+    Gates emission of clio_runtime/rest. graph.steps is tuple[StepIR, ...], so
+    no isinstance(StepIR) guard is needed. Like _flow_uses_cache it over-collects
+    steps declared but not on the entry chain; harmless (the extra runtime is
+    only ever emitted, never wrong-imported)."""
     return any(isinstance(s.impl, RestImplIR) for s in graph.steps)
+
+
+def _flow_uses_shell(graph: FlowGraph) -> bool:
+    """True if any step in the source is an impl.mode: shell step.
+
+    Same over-collection caveat as _flow_uses_rest (harmless)."""
+    return any(isinstance(s.impl, ShellImplIR) for s in graph.steps)
+
+
+def _flow_uses_substitute(graph: FlowGraph) -> bool:
+    """True if the emitted module needs clio_runtime/substitute.
+
+    Both REST (rest.go imports the substitute package) and shell (the step body
+    calls substitute.Apply) depend on it, so the substitute runtime is written
+    once when either is present."""
+    return _flow_uses_rest(graph) or _flow_uses_shell(graph)
 
 
 def render_cmd_main_go(graph: FlowGraph) -> str:
