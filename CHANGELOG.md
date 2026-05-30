@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **`/skill2clio` Claude Code skill** (`.claude/skills/skill2clio/`) — a third skill→`.clio` import path that runs the reasoned conversion **inside the current Claude Code session, with no `ANTHROPIC_API_KEY`** (unlike `clio import`'s LLM path). It reads `clio/prompts/skill_to_clio_system.md` as the single source for the mapping rules and drives an unbounded `clio check` → fix loop, so it can compile-correct skills the single-shot API path fails on. Complements `clio import --mode strict` (deterministic sidecar, no key) and `clio import --mode infer` (API LLM path). Repo-local tooling — no compiler, CLI, or language change.
+
 ## [0.23.0] — 2026-05-30
 
 Minor release closing **#82 — Go target reaches stdlib feature parity**. The `target: go` emitter now lowers three IR families it previously refused: `impl.mode: rest` (`net/http` client with `${var}` substitution, `response_path` traversal, and impl-level retry — constant/exponential backoff with cap and `Retry-After`; **json/raw body parity** with `clio/runtime/rest.py` — `form`/`file`/`multipart` bodies are refused at compile time, E_GO_013), `impl.mode: shell` (`os/exec` with per-token `${var}` substitution, context timeout, `parse: none`/`parse: json`), and **FLOW composition** — each signed sub-flow lowers to an unexported `run<Name>(ctx, …) (map[string]any, error)` func and the call site flat-merges the sub-flow's GIVES into parent state (parity with the `python` target's `run_<name>()`). Lifting composition also closes the last `FlowCallIR` gap across all six targets. Zero new Go dependencies — everything is stdlib (`net/http`, `os/exec`, `encoding/json`) plus the already-present `golang.org/x/sync/errgroup`. Two documented limitations carried into v0.24: a single-GIVES sub-flow `FOR EACH PARALLEL` collector is terminal-only (typed downstream consumption fails `go build`), and `form`/`file`/`multipart` rest bodies are unsupported.

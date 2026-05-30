@@ -134,6 +134,14 @@ export ANTHROPIC_API_KEY=sk-...
 clio import ~/.claude/skills/my-skill --output my-skill.clio
 ```
 
+> **No-key alternative (inside Claude Code):** the repo ships a `/skill2clio` skill
+> (`.claude/skills/skill2clio/`) that performs the same reasoned conversion using the
+> running Claude Code session as the model — no `ANTHROPIC_API_KEY` required. It drives an
+> unbounded `clio check` → fix loop, so it can recover skills the single-shot API path
+> (`--mode infer`) gives up on. Use `clio import --mode strict` when the skill has an intact
+> `.clio/` sidecar (deterministic, also key-free); use `/skill2clio` for hand-written or
+> sidecar-less skills when you have no key.
+
 ## `doctor` — environment diagnostic (v0.15)
 
 ```
