@@ -1,9 +1,9 @@
 """Renderer for the top-level flow orchestrator (`flow/flow.go`).
 
 Emits `func Run(ctx, kwargs) (state, error)` that chains every item in
-graph.flow.chain.  v0.20.0 scope: sequential chain + IF/ELSE (T12),
-MATCH (T13), WHILE (T14), sequential FOR EACH (T15), parallel FOR EACH
-via errgroup (T17).
+graph.flow.chain.  Supported chain shapes: sequential chain + IF/ELSE,
+MATCH, WHILE, sequential FOR EACH, parallel FOR EACH via errgroup, and
+FLOW composition (FlowCallIR → `run<Name>()` sub-flow funcs, v0.23).
 """
 from __future__ import annotations
 
@@ -287,10 +287,10 @@ def _render_chain_item(
     the shared state map.  The goroutine body writes its result into a
     pre-allocated results slice instead (T17).
 
-    v0.20.0 supports: `CallIR`, `IfBlockIR`, `MatchBlockIR`, `WhileBlockIR`,
-    sequential `ForEachIR` (T15), and parallel `ForEachIR` via errgroup (T17).
-    RESCUE wrapping (T16) is applied at the `CallIR` level when
-    `rescues_by_step` contains the step.
+    Supports: `CallIR`, `IfBlockIR`, `MatchBlockIR`, `WhileBlockIR`,
+    sequential `ForEachIR` (T15), parallel `ForEachIR` via errgroup (T17),
+    and `FlowCallIR` sub-flow composition (v0.23). RESCUE wrapping (T16) is
+    applied at the `CallIR` level when `rescues_by_step` contains the step.
     """
     _rescues = rescues_by_step or {}
     _takes = take_types or {}
@@ -356,7 +356,7 @@ def _render_chain_item(
                     # RESUME(<this_step>.<field>), the RESUME terminal writes
                     # the extracted field value into state.  For abort-terminated
                     # rescues there is no continuation, so state writes are moot.
-                # Other node types inside rescue body are not supported in v0.20.0.
+                # Other node types inside rescue body are not supported by the Go target.
             defer_lines.extend([
                 f"{body_indent}\t}}",
                 f"{body_indent}}}()",
@@ -737,7 +737,7 @@ def _render_chain_item(
         return lines, prev_var
 
     raise NotImplementedError(
-        f"chain item kind not yet supported in v0.20.0: {type(item).__name__}"
+        f"chain item kind not supported by the Go target: {type(item).__name__}"
     )
 
 

@@ -395,9 +395,9 @@ These work identically to the v0.23 Go target without restriction:
 - `CACHE: ttl(...)` — on-disk SHA256 layout interchangeable with the `python` target (same key derivation).
 - `ON_FAIL: retry(N) then escalate then fallback(...) then abort(...)` — full strategy chain.
 - `RESCUE` handlers + `step.error.*` + `RESUME(...)` — emitted as Go `error` wrapping + typed return injection.
-- `impl.mode: rest` — `net/http` client with `${var}` substitution, `response_path` traversal, impl-level retry (constant/exponential backoff, `Retry-After`), parity with `clio/runtime/rest.py`.
+- `impl.mode: rest` — `net/http` client with `${var}` substitution, `response_path` traversal, impl-level retry (constant/exponential backoff, `Retry-After`); **json/raw body parity** with `clio/runtime/rest.py`. `form`/`file`/`multipart` bodies are refused at compile time (E_GO_013) — use `--target python`.
 - `impl.mode: shell` — `os/exec` with per-token `${var}` substitution, context timeout, `parse: none` (stdout str) / `parse: json` (unmarshal).
-- **FLOW composition** — each signed sub-flow lowers to an unexported `run<Name>(ctx, …) (map[string]any, error)` func; the call site flat-merges the sub-flow's GIVES into parent state (parity with the `python` target's `run_<name>()`).
+- **FLOW composition** — each signed sub-flow lowers to an unexported `run<Name>(ctx, …) (map[string]any, error)` func; the call site flat-merges the sub-flow's GIVES into parent state (parity with the `python` target's `run_<name>()`). A single-GIVES sub-flow used as a `FOR EACH PARALLEL` body is **terminal-only**: the collector is produced but typed downstream consumption (`aggregate(xs=results)`, `FOR EACH x IN results`) fails `go build` and is deferred to v0.24.
 
 ### Cache layout interchangeable with `python` and `claude-cli`
 
@@ -415,11 +415,11 @@ All three targets read/write `<output>/.cache/<step_name>/<sha256>.json` with th
 
 ### Logging
 
-Structured JSONL logging is a silent no-op in v0.20.0 (the `clio_runtime/cache` package is wired; flow-level event emission is deferred). To get `CLIO_LOG=1` structured events, compile to `--target python` or `--target mcp-server`.
+Structured JSONL logging is a silent no-op for the Go target (the `clio_runtime/cache` package is wired; flow-level event emission is deferred). To get `CLIO_LOG=1` structured events, compile to `--target python` or `--target mcp-server`.
 
 ### Resume
 
-`--from-step N` resume is deferred to v0.20.x (E_GO_011). The Go binary runs the full flow on each invocation. For incremental re-runs on a long pipeline, compile to `--target python` today.
+`--from-step N` resume is deferred (E_GO_011). The Go binary runs the full flow on each invocation. For incremental re-runs on a long pipeline, compile to `--target python` today.
 
 ---
 

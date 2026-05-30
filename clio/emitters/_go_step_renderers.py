@@ -155,7 +155,7 @@ def _on_fail_chain_parts(
     """Extract (retry_count, fallback_step_name, abort_msg) from the ON_FAIL chain.
 
     Returns (0, None, None) when there is no chain.
-    escalate is a no-op in v0.20.0 (single model per emission).
+    escalate is a no-op for the Go target (single model per emission).
     """
     if step.on_fail is None:
         return 0, None, None
@@ -175,7 +175,7 @@ def _on_fail_chain_parts(
                 fallback_step_name = s.fallback_step_name
         elif s.kind == "abort":
             abort_msg = s.abort_message or ""
-        # escalate: no-op in v0.20.0
+        # escalate: no-op for the Go target
 
     return retry_count, fallback_step_name, abort_msg
 
@@ -202,7 +202,7 @@ def render_judgment_step_go(step: StepIR, graph: FlowGraph) -> str:
       - fallback(step): after retry exhaustion, calls the named step with the
         same inputs and propagates its output.
       - abort(msg): returns a wrapped error with the configured message.
-      - escalate: no-op in v0.20.0 (single model per emission).
+      - escalate: no-op for the Go target (single model per emission).
     """
     cls = _to_class_name(step.name)
     pkg = _go_module_name(graph)

@@ -173,7 +173,7 @@ See [`docs/COMPILATION_TARGETS.md`](../COMPILATION_TARGETS.md#target-go) for the
 | `MODE: exact` + `LANG: python / bash / rust / node` | ✅ | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ❌ E_GO_001 |
 | `MODE: exact` + `impl.shell` | ✅ | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ✅ os/exec |
 | `MODE: exact` + `impl.shell` + `parse: json` | ⚠️ silently ignored | ✅ | ✅ | ✅ | ✅ | ✅ json.Unmarshal |
-| `MODE: exact` + `impl.rest` | ✅ (uses `requests` at runtime) | ✅ | ✅ | ✅ | ✅ | ✅ net/http + retry |
+| `MODE: exact` + `impl.rest` | ✅ (uses `requests` at runtime) | ✅ | ✅ | ✅ | ✅ | ✅ net/http + retry (json/raw bodies only; form/file/multipart → E_GO_013) |
 | `MODE: judgment` + `invoke: cli` (default) | ✅ | ❌ rejected | ❌ rejected | ❌ rejected | ✅ host-driven | ❌ E_GO_002 |
 | `MODE: judgment` + `invoke.api.anthropic` | (uses `RESOURCES.models` chain) | ✅ | ❌ rejected | ✅ | ✅ host-driven | ✅ |
 | `MODE: judgment` + `invoke.api.openai` | ❌ | ✅ | ❌ | ❌ rejected (v0) | ✅ host-driven | ❌ E_GO_005 |
@@ -187,7 +187,7 @@ See [`docs/COMPILATION_TARGETS.md`](../COMPILATION_TARGETS.md#target-go) for the
 | `FOR EACH ... PARALLEL AS` | ❌ rejected | ✅ ThreadPool | ✅ asyncio.gather | ❌ rejected (v0; v0.7 via Send) | ⚠️ serialised with warning | ✅ errgroup |
 | `FLOW.TAKES` / `FLOW.GIVES` (v0.16, optional) | ✅ README section | ✅ typed `run()` | ✅ inputSchema / outputSchema | ✅ State subset | ✅ SKILL.md Inputs / Outputs | ✅ typed `Run()` |
 | **FLOW composition** (sub-flow callable, v0.17) | ❌ rejected | ✅ `run_<name>()` | ✅ + multi-tool | ✅ sub-`StateGraph` | ⚠️ documented in SKILL.md (linear-only, `scripts/sub_<name>.py`) | ✅ `run<Name>()` func |
-| `FOR EACH PARALLEL` body = sub-flow (v0.17) | ❌ rejected | ✅ | ✅ asyncio.gather | ❌ rejected (v0; v0.7 via Send) | ⚠️ linear sub-flow only | ✅ single-GIVES (multi-GIVES → E_GO_006) |
+| `FOR EACH PARALLEL` body = sub-flow (v0.17) | ❌ rejected | ✅ | ✅ asyncio.gather | ❌ rejected (v0; v0.7 via Send) | ⚠️ linear sub-flow only | ✅ single-GIVES, terminal-only (typed downstream consumption of the collector → v0.24; multi-GIVES → E_GO_006) |
 | mcp-server multi-tool (multi-FLOW source, v0.17) | n/a | n/a | ✅ one tool per uncalled signed FLOW | n/a | n/a | n/a |
 | `TEST` blocks (v0.15) | ⚠️ ignored | ✅ pytest emitted | ⚠️ ignored | ⚠️ ignored | ⚠️ ignored | ❌ E_GO_012 |
 | `--from-step N` resume | ❌ | ✅ | ❌ | ❌ (use LangGraph checkpointers) | ❌ | ❌ E_GO_011 |
