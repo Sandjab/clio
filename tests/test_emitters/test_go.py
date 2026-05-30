@@ -989,3 +989,79 @@ def test_render_clio_runtime_rest_imports_substitute_package():
 
     src = render_clio_runtime_rest("flow")
     assert "flow/clio_runtime/substitute" in src
+
+
+def _rest_gives_graph():
+    from clio.parser.parser import parse
+    from clio.ir.builder import build_ir as build_graph
+    src = (
+        "CONTRACT geo_point\n"
+        "  SHAPE: {lat: float, lng: float}\n"
+        "STEP geocode\n"
+        "  TAKES: address: str\n"
+        "  GIVES: location: geo_point\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:           rest\n"
+        "    method:         GET\n"
+        '    url:            "https://maps.example.com/geocode"\n'
+        '    query:          {address: "${address}", key: "env:MAPS_KEY"}\n'
+        '    headers:        {Accept: "application/json"}\n'
+        '    response_path:  "results[0].geometry.location"\n'
+        "    timeout:        30s\n"
+        '    retry:          {attempts: 3, on: ["5xx", "429", "timeout"]}\n'
+        "FLOW pipeline\n"
+        '  geocode(address="123 Main St")\n'
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    return build_graph(parse(src))
+
+
+def test_render_rest_step_go_gives_typed():
+    from clio.emitters._go_step_renderers import render_rest_step_go
+
+    graph = _rest_gives_graph()
+    step = next(s for s in graph.steps if s.name == "geocode")
+    contracts = {c.name: c for c in graph.contracts}
+    out = render_rest_step_go(step, contracts, graph)
+
+    # Skeleton reused from _step_in_out_struct + judgment pattern.
+    assert "package steps\n" in out
+    assert "type GeocodeIn struct {" in out
+    assert 'Address string `json:"address"`' in out
+    assert "type GeocodeOut struct {" in out
+    assert 'Location contracts.GeoPoint `json:"location"`' in out
+    assert "func Geocode(ctx context.Context, in GeocodeIn) (GeocodeOut, error) {" in out
+
+    # Request construction: method + URL subst + query/headers via RenderDict.
+    assert 'method := "GET"' in out
+    assert 'rest.Subst("https://maps.example.com/geocode", _takes)' in out
+    assert 'rest.RenderDict(map[string]any{"address": "${address}", "key": "env:MAPS_KEY"}, _takes)' in out
+    assert 'rest.RenderDict(map[string]any{"Accept": "application/json"}, _takes)' in out
+
+    # Impl-level retry loop driven by RetryPolicyIR (NOT ON_FAIL).
+    assert "for _i := 0; _i < _attempts; _i++ {" in out
+    assert "rest.IsRetryableStatus(" in out
+    assert "rest.IsRetryableErr(" in out
+    assert "rest.ComputeDelay(_i+1," in out
+    assert "rest.ParseRetryAfter(" in out
+
+    # response_path traversal: results[0].geometry.location → keyed + indexed.
+    assert '_data = _m["results"]' in out
+    assert "_data = _arr[0]" in out
+    assert '_data = _m["geometry"]' in out
+    assert '_data = _m["location"]' in out
+
+    # Re-marshal traversed node, unmarshal into the typed Out field, validate.
+    assert "json.Unmarshal(_nodeBytes, &out.Location)" in out
+    assert "interface{ Validate(context.Context) error }" in out
+
+    # _takes seeds every TAKE for ${var} resolution.
+    assert '_takes := map[string]any{"address": in.Address}' in out
+
+    # Imports: stdlib http/json + the rest runtime + contracts.
+    assert '"net/http"' in out
+    assert "/clio_runtime/rest" in out
+    assert "/contracts" in out

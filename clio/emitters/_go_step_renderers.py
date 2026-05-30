@@ -11,6 +11,8 @@ with cross-cutting graph walkers.
 """
 from __future__ import annotations
 
+import json as _json
+
 from clio.emitters._go_helpers import _go_module_name
 from clio.emitters._shared_utils import (
     _model_id,
@@ -19,7 +21,15 @@ from clio.emitters._shared_utils import (
     _type_to_go,
     _uses_contract_refs,
 )
-from clio.ir.graph import CacheConfigIR, ContractIR, FlowGraph, StepIR
+from clio.ir.graph import (
+    CacheConfigIR,
+    ContractIR,
+    FlowGraph,
+    JsonBodyIR,
+    RawBodyIR,
+    RestImplIR,
+    StepIR,
+)
 
 
 def _step_in_out_struct(
@@ -425,6 +435,293 @@ def render_judgment_step_go(step: StepIR, graph: FlowGraph) -> str:
             lines.append(cache_block_post.rstrip("\n"))
         lines.append("\treturn out, nil")
 
+    lines.append("}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# REST step renderer (impl.mode: rest)
+
+
+def _go_json_scalar_kv(key: str, value: object) -> str:
+    """Render one JSON-body/query field as a Go map literal entry. bool MUST be
+    checked before str (Python bool is not a str, but keep the order explicit).
+    Strings stay Go-quoted with double quotes (subst happens at runtime in RenderDict)."""
+    if isinstance(value, bool):
+        return f'"{key}": {str(value).lower()}'
+    if isinstance(value, str):
+        return f'"{key}": {_json.dumps(value)}'
+    if value is None:
+        return f'"{key}": nil'
+    return f'"{key}": {_json.dumps(value)}'
+
+
+def _go_response_path_traversal(response_path: str, cls: str, step_name: str) -> list[str]:
+    """Go lines walking `response_path` over a decoded JSON value `_data` (any).
+    Dotted keys assert map[string]any; `[n]` indices assert []any. Empty path → whole body."""
+    import re as _re
+    parts = _re.findall(r"[^.\[\]]+|\[\d+\]", response_path)
+    lines: list[str] = []
+    for part in parts:
+        if part.startswith("["):
+            idx = part[1:-1]
+            lines += [
+                "\t_arr, _ok := _data.([]any)",
+                f"\tif !_ok || {idx} >= len(_arr) {{",
+                f'\t\treturn {cls}Out{{}}, fmt.Errorf("{step_name}: response_path index [{idx}] out of range")',
+                "\t}",
+                f"\t_data = _arr[{idx}]",
+            ]
+        else:
+            lines += [
+                "\t_m, _ok := _data.(map[string]any)",
+                "\tif !_ok {",
+                f'\t\treturn {cls}Out{{}}, fmt.Errorf("{step_name}: response_path on non-object")',
+                "\t}",
+                f'\t_data = _m["{part}"]',
+            ]
+    return lines
+
+
+def _go_rest_body_lines(impl: RestImplIR, cls: str, stepf: str) -> tuple[list[str], bool, bool]:
+    """Build the body reader + header defaults. Returns (lines, uses_bytes, uses_strings)
+    so the caller can keep imports tight. Only JsonBodyIR + RawBodyIR are supported."""
+    lines = ["\tvar _bodyReader io.Reader"]
+    uses_bytes = False
+    uses_strings = False
+    if isinstance(impl.body, JsonBodyIR):
+        uses_bytes = True
+        items = ", ".join(_go_json_scalar_kv(k, v) for k, v in impl.body.fields)
+        lines += [
+            f"\t_bodyDict, _bErr := rest.RenderDict(map[string]any{{{items}}}, _takes)",
+            "\tif _bErr != nil {",
+            f"\t\treturn {cls}Out{{}}, fmt.Errorf({stepf}, _bErr)",
+            "\t}",
+            "\t_bodyBytes, _ := json.Marshal(_bodyDict)",
+            "\t_bodyReader = bytes.NewReader(_bodyBytes)",
+            '\tif _, ok := _headers["Content-Type"]; !ok {',
+            '\t\t_headers["Content-Type"] = "application/json"',
+            "\t}",
+        ]
+    elif isinstance(impl.body, RawBodyIR):
+        uses_strings = True
+        lines += [
+            f"\t_raw, _rErr := rest.Subst({_json.dumps(impl.body.template)}, _takes)",
+            "\tif _rErr != nil {",
+            f"\t\treturn {cls}Out{{}}, fmt.Errorf({stepf}, _rErr)",
+            "\t}",
+            "\t_bodyReader = strings.NewReader(_raw)",
+            '\tif _, ok := _headers["Content-Type"]; !ok {',
+            '\t\t_headers["Content-Type"] = "text/plain"',
+            "\t}",
+        ]
+    return lines, uses_bytes, uses_strings
+
+
+def render_rest_step_go(
+    step: StepIR, contracts: dict[str, ContractIR], graph: FlowGraph
+) -> str:
+    """Render steps/NN_<name>.go for an impl.mode: rest step.
+
+    GIVES present → json.Unmarshal the (optionally response_path-traversed) body
+    into the typed <Cls>Out, then Validate(ctx). GIVES absent → side-effect:
+    issue the request, check the error, discard the body, return <Cls>Out{}.
+
+    Impl-level retry is driven by the step's RetryPolicyIR (impl.retry), distinct
+    from the ON_FAIL chain. Body shapes: JsonBodyIR + RawBodyIR only.
+    """
+    assert isinstance(step.impl, RestImplIR)
+    impl = step.impl
+    cls = _to_class_name(step.name)
+    pkg = _go_module_name(graph)
+    has_contract_refs = _uses_contract_refs(step)
+    qualifier = "contracts" if has_contract_refs else ""
+    in_body, out_body = _step_in_out_struct(step, contracts, qualifier=qualifier)
+    stepf = f'"{step.name}: %w"'
+
+    takes_kv = ", ".join(
+        f'"{f.name}": in.{_to_go_field_name(f.name)}' for f in step.takes
+    )
+    takes_line = f"\t_takes := map[string]any{{{takes_kv}}}"
+    url_line = f"\t_url, _uErr := rest.Subst({_json.dumps(impl.url)}, _takes)"
+
+    query_lines: list[str] = []
+    if impl.query is not None:
+        items = ", ".join(_go_json_scalar_kv(k, v) for k, v in impl.query)
+        query_lines = [
+            f"\t_query, _qErr := rest.RenderDict(map[string]any{{{items}}}, _takes)",
+            "\tif _qErr != nil {",
+            f"\t\treturn {cls}Out{{}}, fmt.Errorf({stepf}, _qErr)",
+            "\t}",
+        ]
+
+    header_lines: list[str] = ["\t_headers := map[string]any{}"]
+    if impl.headers is not None:
+        items = ", ".join(_go_json_scalar_kv(k, v) for k, v in impl.headers)
+        header_lines = [
+            f"\t_headers, _hErr := rest.RenderDict(map[string]any{{{items}}}, _takes)",
+            "\tif _hErr != nil {",
+            f"\t\treturn {cls}Out{{}}, fmt.Errorf({stepf}, _hErr)",
+            "\t}",
+        ]
+
+    body_lines, uses_bytes, uses_strings = _go_rest_body_lines(impl, cls, stepf)
+
+    timeout = impl.timeout_seconds if impl.timeout_seconds is not None else 0
+    retry = impl.retry
+
+    send_block: list[str] = [
+        "\t\t_req, _reqErr := http.NewRequestWithContext(ctx, method, _url, _bodyReader)",
+        "\t\tif _reqErr != nil {",
+        f"\t\t\treturn {cls}Out{{}}, fmt.Errorf({stepf}, _reqErr)",
+        "\t\t}",
+        "\t\tfor _k, _v := range _headers {",
+        '\t\t\t_req.Header.Set(_k, fmt.Sprintf("%v", _v))',
+        "\t\t}",
+        "\t\tif _query != nil {",
+        "\t\t\t_q := _req.URL.Query()",
+        "\t\t\tfor _k, _v := range _query {",
+        '\t\t\t\t_q.Set(_k, fmt.Sprintf("%v", _v))',
+        "\t\t\t}",
+        "\t\t\t_req.URL.RawQuery = _q.Encode()",
+        "\t\t}",
+    ]
+
+    if retry is not None:
+        on_lit = "[]string{" + ", ".join(f'"{o}"' for o in retry.on) + "}"
+        do_request = [
+            f"\t_attempts := {retry.attempts}",
+            f"\t_retryOn := {on_lit}",
+            f"\t_backoff := {_json.dumps(retry.backoff)}",
+            f"\t_base := {retry.base}",
+            f"\t_cap := {retry.cap}",
+            "\tvar _resp *http.Response",
+            "\tfor _i := 0; _i < _attempts; _i++ {",
+            *send_block,
+            "\t\t_r, _doErr := _client.Do(_req)",
+            "\t\tif _doErr != nil {",
+            "\t\t\tif rest.IsRetryableErr(_doErr, _retryOn) && _i+1 < _attempts {",
+            "\t\t\t\ttime.Sleep(rest.ComputeDelay(_i+1, _base, _cap, _backoff))",
+            "\t\t\t\tcontinue",
+            "\t\t\t}",
+            f"\t\t\treturn {cls}Out{{}}, fmt.Errorf({stepf}, _doErr)",
+            "\t\t}",
+            "\t\tif rest.IsRetryableStatus(_r.StatusCode, _retryOn) && _i+1 < _attempts {",
+            '\t\t\t_ra, _ok := rest.ParseRetryAfter(_r.Header.Get("Retry-After"))',
+            "\t\t\t_r.Body.Close()",
+            "\t\t\tif _ok {",
+            "\t\t\t\ttime.Sleep(_ra)",
+            "\t\t\t} else {",
+            "\t\t\t\ttime.Sleep(rest.ComputeDelay(_i+1, _base, _cap, _backoff))",
+            "\t\t\t}",
+            "\t\t\tcontinue",
+            "\t\t}",
+            "\t\t_resp = _r",
+            "\t\tbreak",
+            "\t}",
+            "\tif _resp == nil {",
+            f'\t\treturn {cls}Out{{}}, fmt.Errorf("{step.name}: request exhausted retries")',
+            "\t}",
+        ]
+    else:
+        # No retry: a single send_block, de-indented by one tab (no for-loop nest).
+        single = [ln[1:] if ln.startswith("\t\t") else ln for ln in send_block]
+        do_request = [
+            *single,
+            "\t_resp, _doErr := _client.Do(_req)",
+            "\tif _doErr != nil {",
+            f"\t\treturn {cls}Out{{}}, fmt.Errorf({stepf}, _doErr)",
+            "\t}",
+        ]
+
+    decode_lines: list[str] = [
+        "\tdefer _resp.Body.Close()",
+        "\t_respBytes, _readErr := io.ReadAll(_resp.Body)",
+        "\tif _readErr != nil {",
+        f"\t\treturn {cls}Out{{}}, fmt.Errorf({stepf}, _readErr)",
+        "\t}",
+        "\tif _resp.StatusCode >= 400 {",
+        f'\t\treturn {cls}Out{{}}, fmt.Errorf("{step.name}: http %d", _resp.StatusCode)',
+        "\t}",
+    ]
+    if step.gives is not None:
+        gives_field = _to_go_field_name(step.gives.name)
+        decode_lines += [
+            "\tvar _data any",
+            "\tif err := json.Unmarshal(_respBytes, &_data); err != nil {",
+            f"\t\treturn {cls}Out{{}}, fmt.Errorf({stepf}, err)",
+            "\t}",
+        ]
+        if impl.response_path:
+            decode_lines += _go_response_path_traversal(impl.response_path, cls, step.name)
+        decode_lines += [
+            "\t_nodeBytes, _ := json.Marshal(_data)",
+            f"\tvar out {cls}Out",
+            f"\tif err := json.Unmarshal(_nodeBytes, &out.{gives_field}); err != nil {{",
+            f"\t\treturn {cls}Out{{}}, fmt.Errorf({stepf}, err)",
+            "\t}",
+            "\tif validatable, ok := any(&out)"
+            ".(interface{ Validate(context.Context) error }); ok {",
+            "\t\tif err := validatable.Validate(ctx); err != nil {",
+            f"\t\t\treturn {cls}Out{{}}, fmt.Errorf({stepf}, err)",
+            "\t\t}",
+            "\t}",
+            "\treturn out, nil",
+        ]
+    else:
+        decode_lines += [
+            "\t_ = _respBytes",
+            f"\treturn {cls}Out{{}}, nil",
+        ]
+
+    imports = ['\t"context"', '\t"encoding/json"', '\t"fmt"', '\t"io"', '\t"net/http"', '\t"time"']
+    if uses_bytes:
+        imports.insert(0, '\t"bytes"')
+    if uses_strings:
+        imports.append('\t"strings"')
+    imports = sorted(set(imports))
+    imports += ["", f'\t"{pkg}/clio_runtime/rest"']
+    if has_contract_refs:
+        imports.append(f'\t"{pkg}/contracts"')
+
+    lines: list[str] = [
+        "package steps",
+        "",
+        "// Auto-generated by CLIO. Do not edit by hand.",
+        "",
+        "import (",
+        "\n".join(imports),
+        ")",
+        "",
+        f"type {cls}In struct {{",
+    ]
+    if in_body:
+        lines.append(in_body)
+    lines.append("}")
+    lines.append("")
+    lines.append(f"type {cls}Out struct {{")
+    if out_body:
+        lines.append(out_body)
+    lines.append("}")
+    lines.append("")
+    lines.append(f"// {cls} implements the '{step.name}' REST step.")
+    lines.append(f"func {cls}(ctx context.Context, in {cls}In) ({cls}Out, error) {{")
+    lines.append(takes_line)
+    lines.append(url_line)
+    lines.append("\tif _uErr != nil {")
+    lines.append(f"\t\treturn {cls}Out{{}}, fmt.Errorf({stepf}, _uErr)")
+    lines.append("\t}")
+    if query_lines:
+        lines.extend(query_lines)
+    else:
+        lines.append("\tvar _query map[string]any")
+    lines.extend(header_lines)
+    lines.extend(body_lines)
+    lines.append(f'\tmethod := "{impl.method}"')
+    lines.append(f"\t_client := &http.Client{{Timeout: {timeout} * time.Second}}")
+    lines.extend(do_request)
+    lines.extend(decode_lines)
     lines.append("}")
     lines.append("")
     return "\n".join(lines)
