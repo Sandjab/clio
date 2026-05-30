@@ -237,6 +237,39 @@ def test_subflow_parallel_single_gives_typed_collector(tmp_path: Path) -> None:
     assert 'state["results"] = _results' in body
 
 
+def test_subflow_name_collision_raises(tmp_path: Path) -> None:
+    """Two sub-flows whose Go func names collapse to the same run<Name> must
+    raise a clear emitter error rather than emit a duplicate func (which Go
+    would reject with a redeclaration error far from the cause). `foo_bar` and
+    `foo__bar` both normalise to FooBar -> runFooBar."""
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP a\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "FLOW foo_bar\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  a(x=x)\n"
+        "FLOW foo__bar\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  a(x=x)\n"
+        "FLOW pipeline\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  foo_bar(x=x)\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    with pytest.raises(ValueError, match="run func name collision"):
+        _compile_flow(src, out, "pipeline")
+
+
 def test_go_mod_uses_safe_package_name(tmp_path: Path) -> None:
     """Module name is lowercased and normalised for Go (no uppercase, no
     special chars).  CamelCase flow name 'CustomerRetention' becomes
