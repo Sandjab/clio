@@ -1636,3 +1636,41 @@ def test_build_state_field_to_step_walks_chain_rescues_and_nested_bodies() -> No
     assert m["rows2"].name == "fallback_load"
     # Map is collision-free per flow: exactly one StepIR per field name.
     assert set(m) == {"rows", "decision", "tagged", "rows2"}
+
+
+def test_build_take_field_to_gotype_maps_scalar_and_contract_takes() -> None:
+    """_build_take_field_to_gotype returns {take_name: go_type_string} for a
+    flow's TAKES, using the same _type_to_go(qualifier="contracts") rendering
+    the rest of the emitter uses.
+
+    Intent: a TAKE is produced by no step, so it is absent from
+    state_field_to_step.  Reading `@take` must assert to a concrete Go type,
+    NOT the untyped `state["x"]` fallback (which fails to compile against a
+    typed steps.<Cls>In field).  This map is the single source of those types,
+    so the scalar form must be `string` and the contract form must be the
+    `contracts.`-qualified struct name.
+    """
+    from clio.emitters._go_flow_renderer import _build_take_field_to_gotype
+    from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
+
+    src = (
+        "CONTRACT customer\n"
+        "  SHAPE: {client: str}\n"
+        "STEP use\n"
+        "  TAKES: url: str\n"
+        "  GIVES: out: str\n"
+        "  MODE:  exact\n"
+        "FLOW pipeline\n"
+        "  TAKES: url: str, who: customer\n"
+        "  GIVES: out: str\n"
+        "  use(url=url)\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    graph = build_ir(parse(src))
+    contracts = {c.name: c for c in graph.contracts}
+    m = _build_take_field_to_gotype(graph.flow, contracts)
+
+    assert m == {"url": "string", "who": "contracts.Customer"}

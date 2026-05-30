@@ -12,6 +12,7 @@ from clio.emitters._shared_utils import (
     _go_condition_expr,
     _to_class_name,
     _to_go_field_name,
+    _type_to_go,
 )
 from clio.ir.graph import (
     CallIR,
@@ -73,6 +74,29 @@ def _build_state_field_to_step(
     for rb in flow.rescues:
         walk(rb.body)
     return result
+
+
+def _build_take_field_to_gotype(
+    flow: FlowIR,
+    contracts: dict[str, ContractIR],
+) -> dict[str, str]:
+    """Map each TAKE field name to its Go type string for ONE flow.
+
+    A TAKE is produced by no step, so it never appears in
+    state_field_to_step.  Readers consult this map to emit a DIRECT value
+    assertion for `@<take>` — `state["url"].(string)` for a scalar,
+    `state["x"].(contracts.<Cls>).<Field>` for a contract — instead of the
+    untyped `state["x"]` fallback (which fails to compile against a typed
+    steps.<Cls>In field).
+
+    Uses the same `_type_to_go(qualifier="contracts")` rendering as the rest
+    of the Go emitter so the asserted type matches the struct definitions in
+    the contracts/ package.
+    """
+    return {
+        f.name: _type_to_go(f.type, contracts, qualifier="contracts")
+        for f in flow.takes
+    }
 
 
 def _go_kwarg_value(
