@@ -648,10 +648,20 @@ def _render_chain_item(
             f"{indent}}}",
             "",
         ])
-        # Register the typed collector in the running map so a downstream
-        # `FOR EACH x IN <collector>` (or any @<collector> read) resolves a
-        # typed slice rather than []any. Only when the body is a single-GIVES
-        # sub-flow (results_type != "any") — a []any collector has no producer.
+        # Register the parallel collector's producer in the running map.
+        #
+        # LIMITATION (preexisting Go-target constraint, NOT a Phase 5 regression;
+        # tracked for v0.24): this registration is only sound while the collector
+        # is TERMINAL — returned in the flow's GIVES (an untyped `state[<c>]`
+        # copy) and never read back typed. The collector slot holds a SLICE
+        # (`[]steps.<Cls>Out`), but a registered producer makes the readers emit
+        # a STRUCT assertion `state["<c>"].(steps.<Cls>Out).<Field>`. So any
+        # downstream typed consumption — `FOR EACH x IN <collector>` or
+        # `aggregate(xs=<collector>)` — would assert a struct against a slice and
+        # fail `go build`. The base `[]any` collector (non-sub-flow body) has the
+        # same gap, so this is a standing target constraint, not new here. We do
+        # NOT build the slice-typed downstream-read path: nothing exercises it
+        # today, and emitting it speculatively would violate Simplicity-First.
         if results_type != "any" and collector is not None and _prod is not None:
             state_field_to_step[collector] = _prod
         return par_lines, prev_var

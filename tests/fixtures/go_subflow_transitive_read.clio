@@ -1,0 +1,36 @@
+STEP a_to_b
+  TAKES: a: str
+  GIVES: b: str
+  MODE:  exact
+  LANG:  go
+
+STEP produce_c
+  TAKES: b: str
+  GIVES: c: str
+  MODE:  exact
+  LANG:  go
+
+STEP consume
+  TAKES: c: str
+  GIVES: out: str
+  MODE:  exact
+  LANG:  go
+
+FLOW deep
+  TAKES: b: str
+  GIVES: c: str
+  produce_c(b=b)
+
+FLOW middle
+  TAKES: a: str
+  GIVES: c: str
+  a_to_b(a=a) -> deep(b=b)
+
+FLOW pipeline
+  TAKES: a: str
+  GIVES: out: str
+  middle(a=a) -> consume(c=c)
+
+RESOURCES
+  target: go
+  models: [haiku]

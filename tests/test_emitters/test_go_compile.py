@@ -360,3 +360,58 @@ def test_go_build_passes_on_subflow_composition(
         f"go build failed for {fixture}:\n--- stdout ---\n{result.stdout}\n"
         f"--- stderr ---\n{result.stderr}"
     )
+
+
+@pytest.mark.parametrize(
+    "fixture,entry,typed_read",
+    [
+        # Transitive boundary: `middle` GIVES `c`, produced two sub-flow levels
+        # down (pipeline -> middle -> deep -> produce_c). The downstream
+        # `consume(c=c)` must assert to the DEEP producer's Out struct, proving
+        # _resolve_give_producer walks nested FlowCallIR boundaries — not just
+        # the immediate sub-flow's direct steps.
+        (
+            "go_subflow_transitive_read.clio",
+            "pipeline",
+            'state["c"].(steps.ProduceCOut).C',
+        ),
+        # Sibling collision: flow_a (result:int) then flow_b (result:str) both
+        # GIVE `result`; `sink(result=result)` must read the LAST writer
+        # (flow_b -> make_b). Types differ on purpose: a wrong (flow_a) assertion
+        # would type `int64` against sink's `str` TAKE and fail go build, so the
+        # build itself proves last-writer-wins ordering, not just "it compiles".
+        (
+            "go_subflow_collision_read.clio",
+            "pipeline",
+            'state["result"].(steps.MakeBOut).Result',
+        ),
+    ],
+)
+def test_go_build_passes_on_subflow_downstream_typed_read(
+    tmp_path: Path, fixture: str, entry: str, typed_read: str
+) -> None:
+    """Sub-flow compositions that CONSUME the boundary-extended producer in a
+    downstream typed read (sequential), not merely return it. The emitted
+    typed assertion (`typed_read`) must reference the correct producer, and the
+    module must `go build` — a wrong producer would fail the build (transitive
+    case) or fail it on the type mismatch (collision last-writer-wins case)."""
+    out = tmp_path / "out"
+    _compile_flow(FIXTURES / fixture, out, entry)
+    body = (out / "flow" / "flow.go").read_text()
+    assert typed_read in body, (
+        f"{fixture}: expected downstream typed read {typed_read!r} not found in "
+        f"flow.go — boundary extension pointed at the wrong producer.\n{body}"
+    )
+    tidy_env = {
+        "GOFLAGS": "-mod=mod",
+        "HOME": str(out / ".gohome"),
+        "PATH": os.environ.get("PATH", "/usr/bin:/usr/local/bin:/bin"),
+    }
+    subprocess.run(
+        ["go", "mod", "tidy"], cwd=out, check=True, capture_output=True, env=tidy_env,
+    )
+    result = _go_build(out)
+    assert result.returncode == 0, (
+        f"go build failed for {fixture}:\n--- stdout ---\n{result.stdout}\n"
+        f"--- stderr ---\n{result.stderr}"
+    )
