@@ -201,6 +201,44 @@ def test_go_build_passes_on_rest_bodyless_and_raw(tmp_path: Path) -> None:
     assert '"encoding/json"' not in raw_src
 
 
+def test_go_form_body_refused_while_json_body_builds(tmp_path: Path) -> None:
+    """E_GO_013 boundary, both halves:
+
+    * A form body must be REFUSED at compile time (no go build needed) — this is
+      the fix for the silent-drop bug where a form body fell through to a nil
+      reader and was never sent.
+    * A json body must still emit a module that ACTUALLY go-builds — proving the
+      refusal does not over-fire onto the supported shapes.
+    """
+    import pytest as _pytest
+
+    from tests.test_emitters.test_go import _rest_body_src
+
+    # Negative: form body refused at compile time.
+    form_src = tmp_path / "form.clio"
+    form_src.write_text(_rest_body_src('body: {form: {user: "${u}"}}'))
+    with _pytest.raises(ValueError, match="E_GO_013"):
+        _compile(form_src, tmp_path / "form_out")
+
+    # Positive: json body emits and go-builds.
+    json_src = tmp_path / "json.clio"
+    json_src.write_text(_rest_body_src('body: {payload: "${u}"}'))
+    out = tmp_path / "json_out"
+    _compile(json_src, out)
+    tidy_env = {
+        "GOFLAGS": "-mod=mod",
+        "HOME": str(out / ".gohome"),
+        "PATH": os.environ.get("PATH", "/usr/bin:/usr/local/bin:/bin"),
+    }
+    subprocess.run(
+        ["go", "mod", "tidy"], cwd=out, check=True, capture_output=True, env=tidy_env
+    )
+    result = _go_build(out)
+    assert result.returncode == 0, (
+        f"go build failed:\n--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+    )
+
+
 def test_go_build_passes_on_shell_flow(tmp_path: Path) -> None:
     """A flow with parse:json, parse:none, and a no-GIVES shell step must
     emit Go that actually compiles (catches import-path / type-assertion bugs

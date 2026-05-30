@@ -1094,6 +1094,63 @@ def test_rest_step_emits_go_file_instead_of_E_GO_007(tmp_path: Path) -> None:
     assert (out / "clio_runtime" / "substitute" / "substitute.go").exists()
 
 
+def _rest_body_src(body_line: str) -> str:
+    """A one-step go-target rest flow whose impl.body is `body_line`."""
+    return (
+        "STEP send\n"
+        "  TAKES: u: str\n"
+        "  GIVES: r: str\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode: rest\n"
+        "    method: POST\n"
+        '    url: "https://example.com/x"\n'
+        f"    {body_line}\n"
+        "FLOW pipeline\n"
+        '  send(u="bob")\n'
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+
+
+def test_E_GO_013_rest_form_body_refused(tmp_path: Path) -> None:
+    """A form body on target: go is a SILENT DROP in the renderer: it falls
+    through to reader_expr='nil', so http.NewRequestWithContext is handed nil
+    and the form never gets sent — no refusal, no warning. That violates
+    'fail loud'. The compiler must refuse it at compile time with E_GO_013
+    rather than emit a binary that drops the body."""
+    src = tmp_path / "src.clio"
+    src.write_text(_rest_body_src('body: {form: {user: "${u}"}}'))
+    _compile_expecting_error(src, tmp_path / "out", "E_GO_013")
+
+
+def test_E_GO_013_rest_file_body_refused(tmp_path: Path) -> None:
+    """A file body (`@path`) is the same silent-drop class as form — refuse it."""
+    src = tmp_path / "src.clio"
+    src.write_text(_rest_body_src('body: "@./blob.bin"'))
+    _compile_expecting_error(src, tmp_path / "out", "E_GO_013")
+
+
+def test_E_GO_013_rest_multipart_body_refused(tmp_path: Path) -> None:
+    """A multipart body is the same silent-drop class as form — refuse it."""
+    src = tmp_path / "src.clio"
+    src.write_text(_rest_body_src('body: {multipart: {label: "${u}"}}'))
+    _compile_expecting_error(src, tmp_path / "out", "E_GO_013")
+
+
+def test_E_GO_013_not_raised_for_json_or_raw_body(tmp_path: Path) -> None:
+    """The positive guard: json and raw bodies ARE supported and must NOT
+    trip E_GO_013. If the refusal over-fires, this catches it."""
+    json_src = tmp_path / "json.clio"
+    json_src.write_text(_rest_body_src('body: {payload: "${u}"}'))
+    _compile(json_src, tmp_path / "json_out")  # must NOT raise
+
+    raw_src = tmp_path / "raw.clio"
+    raw_src.write_text(_rest_body_src('body: "raw=${u}"'))
+    _compile(raw_src, tmp_path / "raw_out")  # must NOT raise
+
+
 def test_shell_step_emits_go_file_instead_of_E_GO_008(tmp_path: Path) -> None:
     """impl.mode: shell is now compiled (not refused). The step file calls
     os/exec + the substitute runtime, and the substitute runtime package is

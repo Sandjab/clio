@@ -30,8 +30,10 @@ from clio.ir.graph import (
     FlowGraph,
     ForEachIR,
     IfBlockIR,
+    JsonBodyIR,
     MatchBlockIR,
     McpToolImplIR,
+    RawBodyIR,
     RescueBlockIR,
     RestImplIR,
     ShellImplIR,
@@ -292,6 +294,10 @@ _GO_E_012_MSG = (
     "E_GO_012: target: go does not yet emit TEST blocks as `go test`. "
     "Use --target python until the Go TEST emitter ships."
 )
+_GO_E_013_MSG = (
+    "E_GO_013: target: go impl.rest supports json and raw bodies only; "
+    "form/file/multipart are not yet supported — use --target python."
+)
 
 _GO_OK_LANGS: frozenset[str | None] = frozenset({"go", "auto", None})
 
@@ -362,6 +368,13 @@ def validate_graph_for_go(graph: FlowGraph) -> None:
             raise ValueError(_GO_E_009_MSG)
         if isinstance(step.impl, McpToolImplIR):
             raise ValueError(_GO_E_010_MSG)
+        # E_GO_013: the rest renderer only builds a body reader for json/raw
+        # bodies; form/file/multipart silently fall through to a nil reader (the
+        # body is never sent). Refuse them loudly instead of emitting a drop.
+        if isinstance(step.impl, RestImplIR) and step.impl.body is not None and not (
+            isinstance(step.impl.body, (JsonBodyIR, RawBodyIR))
+        ):
+            raise ValueError(_GO_E_013_MSG)
 
     # Walk every flow's chain for the narrowed multi-GIVES PARALLEL refusal
     # (composition itself is supported since v0.23).
