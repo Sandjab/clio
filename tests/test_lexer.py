@@ -257,3 +257,9 @@ def test_lex_string_unterminated_after_trailing_escaped_quote():
     with pytest.raises(LexError) as exc:
         lex('"foo\\"\n')
     assert "unterminated string literal" in str(exc.value)
+
+
+def test_lex_string_escaped_quote_then_hash_not_treated_as_comment():
+    # _strip_comment must be escape-aware: a # inside a string, reached after an
+    # escaped quote, is NOT a comment.  .clio source:  "a \"#b\" c"
+    assert _string_value('"a \\"#b\\" c"\n') == 'a "#b" c'

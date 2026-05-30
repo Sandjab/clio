@@ -10,12 +10,12 @@ FIXTURES = Path(__file__).parent.parent / "fixtures"
 
 def _read_tree(root: Path) -> str:
     return "\n".join(
-        p.read_text() for p in sorted(root.rglob("*")) if p.is_file()
+        p.read_text(encoding="utf-8") for p in sorted(root.rglob("*")) if p.is_file()
     )
 
 
 def test_python_emit_shell_json_cmd_reescapes(tmp_path):
-    graph = build_ir(parse((FIXTURES / "shell_json_cmd.clio").read_text()))
+    graph = build_ir(parse((FIXTURES / "shell_json_cmd.clio").read_text(encoding="utf-8")))
     PythonEmitter().emit(graph, tmp_path)
     text = _read_tree(tmp_path)
     # The JSON blob survives as one argv token, re-escaped by Python repr.
@@ -23,7 +23,7 @@ def test_python_emit_shell_json_cmd_reescapes(tmp_path):
 
 
 def test_go_emit_shell_json_cmd_reescapes(tmp_path):
-    graph = build_ir(parse((FIXTURES / "shell_json_cmd.clio").read_text()))
+    graph = build_ir(parse((FIXTURES / "shell_json_cmd.clio").read_text(encoding="utf-8")))
     GoEmitter().emit(graph, tmp_path)
     text = _read_tree(tmp_path)
     # Go renders argv tokens via json.dumps -> the quotes are backslash-escaped.
@@ -74,10 +74,10 @@ def test_claude_skill_sidecar_preserves_escaped_cmd_verbatim(tmp_path):
     # The sidecar is only written when source_path is supplied (it stores that
     # file verbatim) — mirror how the CLI invokes the emitter.
     ClaudeSkillEmitter().emit(
-        build_ir(parse(src_path.read_text())), tmp_path, source_path=src_path
+        build_ir(parse(src_path.read_text(encoding="utf-8"))), tmp_path, source_path=src_path
     )
     sidecar = "\n".join(
-        p.read_text()
+        p.read_text(encoding="utf-8")
         for p in sorted(tmp_path.rglob("*"))
         if p.is_file() and ".clio" in p.parts
     )

@@ -171,11 +171,21 @@ def lex(source: str) -> list[Token]:
 
 def _strip_comment(line: str) -> str:
     in_str = False
-    for idx, ch in enumerate(line):
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        # Mirror the string scanner's escapes: inside a string, \" and \\ consume
+        # two chars so an escaped quote does not toggle `in_str` (and a # that
+        # follows it is not mistaken for a comment).
+        if in_str and ch == "\\" and i + 1 < n and line[i + 1] in ('"', "\\"):
+            i += 2
+            continue
         if ch == '"':
             in_str = not in_str
         elif ch == "#" and not in_str:
-            return line[:idx].rstrip()
+            return line[:i].rstrip()
+        i += 1
     return line.rstrip()
 
 
