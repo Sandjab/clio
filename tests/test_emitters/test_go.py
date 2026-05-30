@@ -200,6 +200,43 @@ def test_subflow_call_site_flat_merge(tmp_path: Path) -> None:
     assert 'steps.Shout(ctx, steps.ShoutIn{ Article: state["article"].(steps.FetchOut).Article })' in body
 
 
+def test_subflow_parallel_single_gives_typed_collector(tmp_path: Path) -> None:
+    """A single-GIVES sub-flow as a FOR EACH PARALLEL body pre-allocates a
+    typed []steps.<Producer>Out collector and extracts the GIVES field from
+    the returned map via _g := _sub["<g0>"].(steps.<Producer>Out)."""
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP fetch\n"
+        "  TAKES: url: str\n"
+        "  GIVES: summary: str\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "FLOW enrich\n"
+        "  TAKES: url: str\n"
+        "  GIVES: summary: str\n"
+        "  fetch(url=url)\n"
+        "FLOW batch\n"
+        "  TAKES: urls: List<str>\n"
+        "  GIVES: results: List<str>\n"
+        "  FOR EACH u IN urls PARALLEL AS results:\n"
+        "    enrich(url=u)\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile_flow(src, out, "batch")
+    body = (out / "flow" / "flow.go").read_text()
+    # Typed collector pre-allocation (not []any).
+    assert "_results := make([]steps.FetchOut, len(_items))" in body
+    # GIVES extraction from the returned map inside the goroutine.
+    assert '_subEnrich, err := runEnrich(ctx, u)' in body
+    assert '_g := _subEnrich["summary"].(steps.FetchOut)' in body
+    # Collector stores the typed struct.
+    assert "_results[_i] = _g" in body
+    assert 'state["results"] = _results' in body
+
+
 def test_go_mod_uses_safe_package_name(tmp_path: Path) -> None:
     """Module name is lowercased and normalised for Go (no uppercase, no
     special chars).  CamelCase flow name 'CustomerRetention' becomes

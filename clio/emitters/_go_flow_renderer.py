@@ -528,10 +528,27 @@ def _render_chain_item(
         collector = item.collector  # state key for the collected results slice
         inner_indent = indent + "\t\t\t"
         inner_scope = scope_local | {var}
+        # Determine the collector element type. When the sole body item is a
+        # single-GIVES sub-flow call, the collector holds the inner producer's
+        # typed Out struct; otherwise (a step/control body) keep []any.
+        results_type = "any"
+        _prod: StepIR | None = None
+        if (
+            len(item.body) == 1
+            and isinstance(item.body[0], FlowCallIR)
+            and flows_by_name is not None
+        ):
+            _sf = flows_by_name.get(item.body[0].flow_name)
+            if _sf is not None and len(_sf.gives) == 1:
+                _prod = _build_state_field_to_step(_sf, steps_by_name).get(
+                    _sf.gives[0].name
+                )
+                if _prod is not None:
+                    results_type = f"steps.{_to_class_name(_prod.name)}Out"
         par_lines: list[str] = [
             f"{indent}{{",
             f"{indent}\t_items := {coll_expr}",
-            f"{indent}\t_results := make([]any, len(_items))",
+            f"{indent}\t_results := make([]{results_type}, len(_items))",
             f"{indent}\tg, ctx := errgroup.WithContext(ctx)",
             f"{indent}\tg.SetLimit(10)",
             f"{indent}\tfor _i, {var} := range _items {{",
@@ -569,6 +586,12 @@ def _render_chain_item(
             f"{indent}}}",
             "",
         ])
+        # Register the typed collector in the running map so a downstream
+        # `FOR EACH x IN <collector>` (or any @<collector> read) resolves a
+        # typed slice rather than []any. Only when the body is a single-GIVES
+        # sub-flow (results_type != "any") — a []any collector has no producer.
+        if results_type != "any" and collector is not None and _prod is not None:
+            state_field_to_step[collector] = _prod
         return par_lines, prev_var
 
     if isinstance(item, FlowCallIR):
