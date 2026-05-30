@@ -1219,6 +1219,36 @@ def test_E_GO_012_test_block(tmp_path: Path) -> None:
     _compile_expecting_error(src, tmp_path / "out", "E_GO_012")
 
 
+def test_go_error_messages_have_no_stale_v020_strings() -> None:
+    """Every surviving E_GO_* message constant must not mention the retired
+    'v0.20.0' / 'v0.20.x' milestone — those shapes either shipped (rest/shell/
+    composition in v0.23) or moved to v0.24 (sql/mcp_tool). A stale string
+    misleads users about which target to switch to."""
+    import re as _re
+
+    from clio.emitters import _go_helpers as _goh
+
+    stale = _re.compile(r"v0\.20\.[0-9x]")
+    offenders = {
+        name: getattr(_goh, name)
+        for name in dir(_goh)
+        if name.startswith("_GO_E_") and name.endswith("_MSG")
+        and stale.search(getattr(_goh, name))
+    }
+    assert offenders == {}, f"stale v0.20.x in: {sorted(offenders)}"
+
+
+def test_go_error_messages_mention_correct_milestone() -> None:
+    """sql/mcp_tool now point at v0.24; the E_GO_001 parenthetical no longer
+    claims shell is deferred (it ships in v0.23)."""
+    from clio.emitters import _go_helpers as _goh
+
+    assert "v0.24" in _goh._GO_E_009_MSG
+    assert "v0.24" in _goh._GO_E_010_MSG
+    # E_GO_001 must not still tell users shell is "deferred to v0.20.x".
+    assert "deferred to v0.20" not in _goh._GO_E_001_MSG
+
+
 def test_render_clio_runtime_substitute_shape():
     from clio.emitters._go_runtime_templates import render_clio_runtime_substitute
 

@@ -7,10 +7,12 @@ under the emitted package's `clio_runtime/`.
 Module-level helpers live in `_go_helpers.py`; this file holds only
 the GoEmitter class.
 
-Scope (v0.20.0): exact + judgment with Anthropic SDK, CACHE, control flow
-(IF/MATCH/WHILE/FOR EACH + PARALLEL), RESCUE, ON_FAIL chain. Refuses at
-compile time: OpenAI, FLOW composition, impl.mode {rest,sql,mcp_tool,shell},
-RESUME-shape declarations, TEST blocks. See E_GO_001..012 in
+Scope (v0.23): exact + judgment with Anthropic SDK, CACHE, control flow
+(IF/MATCH/WHILE/FOR EACH + PARALLEL), RESCUE, ON_FAIL chain, impl.mode
+{rest,shell}, and FLOW composition (sub-flow → run<Name>() funcs). Refuses at
+compile time: OpenAI judgment, impl.mode {sql,mcp_tool} (deferred to v0.24),
+RESUME-shape declarations, TEST blocks, and a multi-GIVES sub-flow used as a
+FOR EACH PARALLEL body. See E_GO_001..012 in
 docs/manual/06-troubleshooting.md.
 """
 from __future__ import annotations

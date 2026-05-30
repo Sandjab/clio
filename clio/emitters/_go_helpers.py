@@ -62,8 +62,8 @@ def _go_module_name(graph: FlowGraph, default: str = "flow") -> str:
 def _flow_uses_judgment(graph: FlowGraph) -> bool:
     """True if any step in the source is judgment mode.
 
-    v0.20.0 refuses FLOW composition, so graph.steps contains exactly the
-    steps used by the single entry flow."""
+    Scans graph.steps, which holds every declared step across all flows (entry
+    + sub-flows), so judgment in a sub-flow still pulls the Anthropic SDK."""
     return any(isinstance(s, StepIR) and s.mode == "judgment" for s in graph.steps)
 
 
@@ -78,16 +78,15 @@ def _flow_uses_parallel(graph: FlowGraph) -> bool:
 
 
 def _flow_uses_cache(graph: FlowGraph) -> bool:
-    """True if any step in the entry flow declares a CACHE directive.
+    """True if any declared step has a CACHE directive.
 
-    Mirrors the gating logic of _flow_uses_judgment / _flow_uses_parallel.
-    v0.20 refuses FLOW composition, so graph.steps contains exactly the
-    steps used by the single entry flow.
+    Mirrors the gating logic of _flow_uses_judgment / _flow_uses_parallel,
+    scanning graph.steps across the entry flow and every sub-flow.
 
     NOTE: graph.steps over-collects — it includes steps declared but not
-    reached from graph.flow.chain. In v0.20 the practical impact is zero
-    (extra cache runtime emission is harmless); revisit if step-function
-    scoping needs to match the actual chain in a future iteration.
+    reached from any flow's chain. The practical impact is zero (extra cache
+    runtime emission is harmless); revisit if step-function scoping needs to
+    match the actual chain in a future iteration.
     """
     for step in graph.steps:
         if isinstance(step, StepIR) and step.cache is not None and step.cache.mode != "off":
@@ -196,9 +195,8 @@ def render_contracts_go(graph: FlowGraph) -> str | None:
     # Collect contract names referenced by any step in the graph.
     contracts_used: set[str] = set()
     # NOTE: graph.steps over-collects — it includes steps declared but
-    # not reached from graph.flow.chain. In v0.20 this is harmless (extra
-    # dead struct types); revisit in T9 if step-function scoping needs
-    # to match the actual chain.
+    # not reached from any flow's chain. This is harmless (extra dead struct
+    # types); revisit if step-function scoping needs to match the actual chain.
     for step in graph.steps:
         contracts_used |= _collect_contract_refs(step)
     if not contracts_used:
@@ -272,24 +270,27 @@ _GO_E_004_MSG = (
     "E_GO_004: target: go needs at least one FLOW to emit cmd/<flow>/main.go."
 )
 _GO_E_005_MSG = (
-    "E_GO_005: target: go v0.20.0 does not yet support invoke.protocol: openai. "
-    "Use --target python until the v0.20.x OpenAI emitter ships."
+    "E_GO_005: target: go does not yet support invoke.protocol: openai. "
+    "Use --target python until the Go OpenAI emitter ships."
 )
 _GO_E_006_MSG = (
-    "E_GO_006: target: go v0.20.0 does not yet support FLOW composition. Use "
-    "--target python until the v0.20.x sub-flow emitter ships."
+    "E_GO_006: target: go does not support a multi-GIVES sub-flow used as a "
+    "FOR EACH ... PARALLEL body — a single typed slice collector cannot hold "
+    "multiple GIVES fields. Use --target python, or give the sub-flow a single "
+    "GIVES field (single-GIVES parallel and all sequential composition are "
+    "supported)."
 )
 _GO_E_009_MSG = (
-    "E_GO_009: target: go v0.20.0 does not yet support impl.mode: sql. Use "
-    "--target python until the v0.20.x SQL emitter ships."
+    "E_GO_009: target: go does not yet support impl.mode: sql. Use "
+    "--target python until the Go SQL emitter ships (tracked for v0.24)."
 )
 _GO_E_010_MSG = (
-    "E_GO_010: target: go v0.20.0 does not yet support impl.mode: mcp_tool. "
-    "Use --target python until the v0.20.x MCP emitter ships."
+    "E_GO_010: target: go does not yet support impl.mode: mcp_tool. "
+    "Use --target python until the Go MCP emitter ships (tracked for v0.24)."
 )
 _GO_E_012_MSG = (
-    "E_GO_012: target: go v0.20.0 does not yet emit TEST blocks as `go test`. "
-    "Use --target python until the v0.20.x TEST emitter ships."
+    "E_GO_012: target: go does not yet emit TEST blocks as `go test`. "
+    "Use --target python until the Go TEST emitter ships."
 )
 
 _GO_OK_LANGS: frozenset[str | None] = frozenset({"go", "auto", None})
@@ -303,8 +304,7 @@ def _walk_chain(items: tuple, flows_by_name: dict) -> None:  # type: ignore[type
     >=2 GIVES used as the body of a `FOR EACH ... PARALLEL` block. The Go
     collector is a single typed `[]T` slice and cannot hold a multi-field
     struct (builder.py declines a typed collector for that shape), so this
-    is refused at compile time. (Re-narrowing the E_GO_006 message text is
-    Phase 6's job.)
+    is refused at compile time with `_GO_E_006_MSG`.
     """
     for it in items:
         if isinstance(it, IfBlockIR):
@@ -321,14 +321,7 @@ def _walk_chain(items: tuple, flows_by_name: dict) -> None:  # type: ignore[type
                 if isinstance(body0, FlowCallIR):
                     sub = flows_by_name.get(body0.flow_name)
                     if sub is not None and len(sub.gives) >= 2:
-                        raise ValueError(
-                            "E_GO_006: target: go cannot use a multi-GIVES "
-                            f"sub-flow ({body0.flow_name!r}, "
-                            f"{len(sub.gives)} GIVES) as a FOR EACH PARALLEL "
-                            "body — the typed []T collector holds a single "
-                            "field. Split the sub-flow to one GIVES or use a "
-                            "sequential FOR EACH."
-                        )
+                        raise ValueError(_GO_E_006_MSG)
             _walk_chain(it.body, flows_by_name)
         elif isinstance(it, RescueBlockIR):
             _walk_chain(it.body, flows_by_name)
@@ -336,7 +329,7 @@ def _walk_chain(items: tuple, flows_by_name: dict) -> None:  # type: ignore[type
 
 def validate_graph_for_go(graph: FlowGraph) -> None:
     """Raise ValueError with an E_GO_NNN code if the graph uses any feature
-    outside v0.20.0 scope. Runs before any file is written."""
+    outside the supported go-target scope. Runs before any file is written."""
     # E_GO_004: no FLOW at all
     if len(graph.flows) == 0:
         raise ValueError(_GO_E_004_MSG)
