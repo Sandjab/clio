@@ -1065,3 +1065,47 @@ def test_render_rest_step_go_gives_typed():
     assert '"net/http"' in out
     assert "/clio_runtime/rest" in out
     assert "/contracts" in out
+
+
+def test_render_rest_step_go_no_gives_side_effect():
+    from clio.emitters._go_step_renderers import render_rest_step_go
+    from clio.parser.parser import parse
+    from clio.ir.builder import build_ir as build_graph
+
+    src = (
+        "STEP notify\n"
+        "  TAKES: msg: str\n"
+        "  MODE:  exact\n"
+        "  impl:\n"
+        "    mode:    rest\n"
+        "    method:  POST\n"
+        '    url:     "https://hooks.example.com/notify"\n'
+        '    body:    {text: "${msg}", urgent: true}\n'
+        "FLOW pipeline\n"
+        '  notify(msg="hi")\n'
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    graph = build_graph(parse(src))
+    step = next(s for s in graph.steps if s.name == "notify")
+    out = render_rest_step_go(step, {}, graph)
+
+    # Side-effect skeleton: empty Out, returns NotifyOut{} with no field copy.
+    assert "type NotifyOut struct {\n}" in out
+    assert "func Notify(ctx context.Context, in NotifyIn) (NotifyOut, error) {" in out
+    assert "return NotifyOut{}, nil" in out
+
+    # JSON body still built + subst; bool literal renders bare.
+    assert 'rest.RenderDict(map[string]any{"text": "${msg}", "urgent": true}, _takes)' in out
+    assert "bytes.NewReader(" in out
+    assert '"application/json"' in out
+
+    # No GIVES → no field unmarshal, no traversal, no Validate.
+    assert "&out." not in out
+    assert "_data = _m[" not in out
+    assert "interface{ Validate(context.Context) error }" not in out
+
+    # No contracts import (no contract refs); no retry block (no impl.retry).
+    assert "/contracts" not in out
+    assert "for _i := 0; _i <" not in out
