@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.22.0] — 2026-05-30
+
+Minor release closing **#67 — multi-file IMPORT sidecar recovery**. A cross-file (`FROM … IMPORT`) project emitted to `target: claude-skill` now stores every imported source verbatim under `.clio/sources/`, so `clio import --output <dir>` reconstructs the full source tree and the recovered project recompiles cleanly. Before v0.22 the sidecar stored only the entry `.clio`, so recompiling a recovered multi-file source failed with `CompileError: imported file not found`. Scope is the **deterministic sidecar path only** — the LLM-recovery path (`skill_to_clio.py`) stays single-file; Go-target parity is tracked separately for v0.23/v0.24. One feature PR (#80, squash-merged on `main`) through CI + Gemini review; the two-pass review surfaced three path-traversal risks and a Windows cross-drive crash, all fixed (see **Fixed**).
+
+### Added
+
+- **Multi-file source tree in the `.clio/` sidecar.** `write_sidecar` gains a `sources` kwarg; for a multi-file project it writes the full source tree under `.clio/sources/`, rooted at `os.path.commonpath` so a `FROM "../x.clio"` import keeps its relative offset. The manifest gains `sources` (`{relpath: "sha256:…"}`) and `entry` — **emitted only when imports are present**, so single-file output stays byte-identical to v0.21.
+- **`check_source_drift`** — new integrity check (separate from `check_drift`, since `.clio/` is deliberately excluded from `file_hashes`) comparing the manifest's `sources` hashes to the actual `.clio/sources/` tree.
+- **`emit()` gains a defaulted `sources` kwarg** on `BaseEmitter` and all six emitters (mirroring `source_path`); only `ClaudeSkillEmitter` consumes it. `compile` threads the resolved import sources through to the emitter.
+- **`clio import` reconstructs the source tree** when the manifest carries `sources`; `--mode strict` verifies every stored source against its recorded hash before writing. Documented as a round-trip recipe in `docs/manual/06-troubleshooting.md`.
+
+### Fixed
+
+- **Path traversal in untrusted manifests (security, Gemini review).** Both the `clio import` dispatcher (`clio/cli.py`) and `check_source_drift` (`clio/emitters/_sidecar.py`) resolved relative paths taken verbatim from a potentially tampered `manifest.json`. A crafted `../../escaped.clio` entry could read or write outside the intended directory. Both now `resolve()` the base and target and guard with `is_relative_to` before any read/write — `clio import` exits 2 with a "path traversal detected" message; `check_source_drift` flags the entry as drift instead of hashing off-tree.
+- **`clio import` rejects a file-shaped `--output` for multi-file skills** (exit 2) instead of silently failing when reconstructing a directory tree.
+- **Windows cross-drive `commonpath` crash (Gemini review).** `os.path.commonpath` raises `ValueError` when imported sources span different drive letters (`C:` vs `D:`), and `Path.relative_to` raises it too; `ValueError` is not an `OSError` subclass, so the best-effort sidecar handler's `except (OSError, FileNotFoundError)` let it escape and crash the compiler. Changed to `except (OSError, ValueError)` (and dropped the redundant `FileNotFoundError`, already an `OSError` subclass) so the `.clio/` sidecar degrades to a warning with the main skill intact.
+
+### Docs
+
+- `docs/manual/06-troubleshooting.md`: multi-file skill round-trip recipe added; the stale pre-v0.22 "multi-file out of scope" limitation entry corrected and the importer-design deferral lifted.
+
+### Tests
+
+- +19 test functions; suite at `1206 passed / 19 skipped / 1 xfailed`. `tests/test_sidecar.py` +13 (multi-file source tree, single-file omission back-compat, source drift detect/none/delete, path-traversal rejection), `tests/test_cli_import.py` +5 (tree reconstruction, strict-mode hash verify, stdout/file-shaped-output/path-traversal rejection), `tests/test_emitters/test_claude_skill_multifile.py` +1 (commonpath `ValueError` degrades to a warning — verified to fail on the pre-fix handler).
+
 ## [0.21.0] — 2026-05-28
 
 Minor release closing the **v0.21 spec-alignment trilogy** — the parser now accepts the three type-system extensions `docs/LANGUAGE_SPEC.md` has documented since v0.1: `Dict<K, V>`, `Optional<T>`, and numeric/string constraints (`int(min, max)`, `float(min, max, precision)`, `str(min)`). Three feature PRs squash-merged on `main` (PR #76 Dict, #77 Optional, #78 constraints), each gone through CI + Gemini review (10 inline comments total, 8 applied — 2 pushback as out-of-scope refactor candidates). Net test count `1136 → 1188` (+52: 6+5+8 parser, 3+3+5 IR, 6+7+7 cross-target smoke). Notable Gemini catches: an idiomatic-Go fix (no `*` on slices/maps which are already nilable), and a HIGH-severity bug where `Optional<str(max=200)>` silently dropped its `max_length` Field kwarg because `_field_from_schema` did not unwrap the `anyOf` Optional shape.
