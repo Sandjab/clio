@@ -223,6 +223,10 @@ def _render_chain_item(
                 rescue_lines.append(
                     f'{body_indent}state["{step.gives.name}"] = {out_var}'
                 )
+            else:
+                # Side-effect step: discard the unused typed output (Go forbids
+                # an unused declared variable).
+                rescue_lines.append(f"{body_indent}_ = {out_var}")
             rescue_lines.append(f"{indent}}}()")
             rescue_lines.append("")
             return rescue_lines, out_var
@@ -238,9 +242,15 @@ def _render_chain_item(
         # Skip the write when suppress_state_write=True (inside parallel goroutine
         # bodies) to avoid concurrent writes to the shared state map — the parallel
         # block writes collected results once after g.Wait() instead.
-        # Skip entirely for steps with no GIVES (side-effect-only).
         if step.gives is not None and not suppress_state_write:
             rendered.append(f'{indent}state["{step.gives.name}"] = {out_var}')
+        elif step.gives is None:
+            # Side-effect step (no GIVES): its typed output is never read, but Go
+            # forbids an unused declared variable. Keep the `:=` (so `err` stays
+            # valid whether or not it was already in scope) and explicitly discard
+            # the output. `_, err := ...` would be illegal as the first call in a
+            # scope and as `no new variables` when err already exists.
+            rendered.append(f"{indent}_ = {out_var}")
         rendered.append("")
         return rendered, out_var
 

@@ -459,15 +459,29 @@ def _go_json_scalar_kv(key: str, value: object) -> str:
 
 def _go_response_path_traversal(response_path: str, cls: str, step_name: str) -> list[str]:
     """Go lines walking `response_path` over a decoded JSON value `_data` (any).
-    Dotted keys assert map[string]any; `[n]` indices assert []any. Empty path → whole body."""
+    Dotted keys assert map[string]any; `[n]` indices assert []any. Empty path → whole body.
+
+    The assertion targets (`_m`, `_arr`, `_ok`) are declared once up front and
+    reused with plain `=` on each hop: Go's `:=` requires at least one *new* var
+    on the left, so re-`:=`-ing the same pair on every hop is a compile error
+    ("no new variables on left side of :="). Only the targets a given path
+    actually visits are declared, to avoid Go's unused-variable error."""
     import re as _re
     parts = _re.findall(r"[^.\[\]]+|\[\d+\]", response_path)
-    lines: list[str] = []
+    if not parts:
+        return []
+    has_index = any(p.startswith("[") for p in parts)
+    has_key = any(not p.startswith("[") for p in parts)
+    lines: list[str] = ["\tvar _ok bool"]
+    if has_key:
+        lines.append("\tvar _m map[string]any")
+    if has_index:
+        lines.append("\tvar _arr []any")
     for part in parts:
         if part.startswith("["):
             idx = part[1:-1]
             lines += [
-                "\t_arr, _ok := _data.([]any)",
+                "\t_arr, _ok = _data.([]any)",
                 f"\tif !_ok || {idx} >= len(_arr) {{",
                 f'\t\treturn {cls}Out{{}}, fmt.Errorf("{step_name}: response_path index [{idx}] out of range")',
                 "\t}",
@@ -475,7 +489,7 @@ def _go_response_path_traversal(response_path: str, cls: str, step_name: str) ->
             ]
         else:
             lines += [
-                "\t_m, _ok := _data.(map[string]any)",
+                "\t_m, _ok = _data.(map[string]any)",
                 "\tif !_ok {",
                 f'\t\treturn {cls}Out{{}}, fmt.Errorf("{step_name}: response_path on non-object")',
                 "\t}",
