@@ -12,6 +12,7 @@ with cross-cutting graph walkers.
 from __future__ import annotations
 
 import json as _json
+import re as _re
 
 from clio.emitters._go_helpers import _go_module_name
 from clio.emitters._shared_utils import (
@@ -466,7 +467,6 @@ def _go_response_path_traversal(response_path: str, cls: str, step_name: str) ->
     on the left, so re-`:=`-ing the same pair on every hop is a compile error
     ("no new variables on left side of :="). Only the targets a given path
     actually visits are declared, to avoid Go's unused-variable error."""
-    import re as _re
     parts = _re.findall(r"[^.\[\]]+|\[\d+\]", response_path)
     if not parts:
         return []
@@ -498,39 +498,52 @@ def _go_response_path_traversal(response_path: str, cls: str, step_name: str) ->
     return lines
 
 
-def _go_rest_body_lines(impl: RestImplIR, cls: str, stepf: str) -> tuple[list[str], bool, bool]:
-    """Build the body reader + header defaults. Returns (lines, uses_bytes, uses_strings)
-    so the caller can keep imports tight. Only JsonBodyIR + RawBodyIR are supported."""
-    lines = ["\tvar _bodyReader io.Reader"]
+def _go_rest_body_lines(
+    impl: RestImplIR, cls: str, stepf: str
+) -> tuple[list[str], str, bool, bool]:
+    """Build the body setup (pre-loop) + the per-request reader expression.
+
+    Returns (setup_lines, reader_expr, uses_bytes, uses_strings):
+      * setup_lines — computed ONCE before the retry loop: serialise the body
+        (`_bodyBytes` / `_raw`) and default the Content-Type header.
+      * reader_expr — a Go expression evaluated AFRESH on every attempt to build
+        the request body reader (`bytes.NewReader(_bodyBytes)` /
+        `strings.NewReader(_raw)`), or `"nil"` when there is no body.
+
+    The reader MUST be reconstructed per attempt: a single `bytes.Reader` is at
+    EOF after the first send, so retries would silently transmit an empty body.
+    Only JsonBodyIR + RawBodyIR are supported."""
+    setup_lines: list[str] = []
+    reader_expr = "nil"
     uses_bytes = False
     uses_strings = False
     if isinstance(impl.body, JsonBodyIR):
         uses_bytes = True
+        reader_expr = "bytes.NewReader(_bodyBytes)"
         items = ", ".join(_go_json_scalar_kv(k, v) for k, v in impl.body.fields)
-        lines += [
+        setup_lines += [
             f"\t_bodyDict, _bErr := rest.RenderDict(map[string]any{{{items}}}, _takes)",
             "\tif _bErr != nil {",
             f"\t\treturn {cls}Out{{}}, fmt.Errorf({stepf}, _bErr)",
             "\t}",
             "\t_bodyBytes, _ := json.Marshal(_bodyDict)",
-            "\t_bodyReader = bytes.NewReader(_bodyBytes)",
             '\tif _, ok := _headers["Content-Type"]; !ok {',
             '\t\t_headers["Content-Type"] = "application/json"',
             "\t}",
         ]
     elif isinstance(impl.body, RawBodyIR):
         uses_strings = True
-        lines += [
+        reader_expr = "strings.NewReader(_raw)"
+        setup_lines += [
             f"\t_raw, _rErr := rest.Subst({_json.dumps(impl.body.template)}, _takes)",
             "\tif _rErr != nil {",
             f"\t\treturn {cls}Out{{}}, fmt.Errorf({stepf}, _rErr)",
             "\t}",
-            "\t_bodyReader = strings.NewReader(_raw)",
             '\tif _, ok := _headers["Content-Type"]; !ok {',
             '\t\t_headers["Content-Type"] = "text/plain"',
             "\t}",
         ]
-    return lines, uses_bytes, uses_strings
+    return setup_lines, reader_expr, uses_bytes, uses_strings
 
 
 def render_rest_step_go(
@@ -580,13 +593,26 @@ def render_rest_step_go(
             "\t}",
         ]
 
-    body_lines, uses_bytes, uses_strings = _go_rest_body_lines(impl, cls, stepf)
+    body_lines, reader_expr, uses_bytes, uses_strings = _go_rest_body_lines(
+        impl, cls, stepf
+    )
 
     timeout = impl.timeout_seconds if impl.timeout_seconds is not None else 0
     retry = impl.retry
 
-    send_block: list[str] = [
-        "\t\t_req, _reqErr := http.NewRequestWithContext(ctx, method, _url, _bodyReader)",
+    # Reconstruct the body reader on every attempt (a bytes/strings Reader is at
+    # EOF after the first send). No body -> pass nil directly (an untyped nil
+    # cannot be assigned to a `:=` local).
+    if reader_expr == "nil":
+        send_block: list[str] = [
+            "\t\t_req, _reqErr := http.NewRequestWithContext(ctx, method, _url, nil)",
+        ]
+    else:
+        send_block = [
+            f"\t\t_bodyReader := {reader_expr}",
+            "\t\t_req, _reqErr := http.NewRequestWithContext(ctx, method, _url, _bodyReader)",
+        ]
+    send_block += [
         "\t\tif _reqErr != nil {",
         f"\t\t\treturn {cls}Out{{}}, fmt.Errorf({stepf}, _reqErr)",
         "\t\t}",
@@ -689,9 +715,20 @@ def render_rest_step_go(
             f"\treturn {cls}Out{{}}, nil",
         ]
 
-    imports = ['\t"context"', '\t"encoding/json"', '\t"fmt"', '\t"io"', '\t"net/http"', '\t"time"']
+    # encoding/json is needed to marshal a JSON body OR to unmarshal a typed
+    # response (GIVES). A bodyless side-effect step (e.g. GET/DELETE ping with
+    # no GIVES) uses neither -> importing it would be "imported and not used".
+    uses_json = uses_bytes or (step.gives is not None)
+    # time is referenced only by the Client timeout and the retry backoff sleeps;
+    # a no-timeout, no-retry step uses neither.
+    uses_time = timeout > 0 or retry is not None
+    imports = ['\t"context"', '\t"fmt"', '\t"io"', '\t"net/http"']
+    if uses_time:
+        imports.append('\t"time"')
+    if uses_json:
+        imports.append('\t"encoding/json"')
     if uses_bytes:
-        imports.insert(0, '\t"bytes"')
+        imports.append('\t"bytes"')
     if uses_strings:
         imports.append('\t"strings"')
     imports = sorted(set(imports))
@@ -733,7 +770,12 @@ def render_rest_step_go(
     lines.extend(header_lines)
     lines.extend(body_lines)
     lines.append(f'\tmethod := "{impl.method}"')
-    lines.append(f"\t_client := &http.Client{{Timeout: {timeout} * time.Second}}")
+    # Omit the Timeout field on the zero-value (no impl.timeout) — `0 * time.Second`
+    # is a no-op that staticcheck flags (SA1015 family / redundant zero).
+    if timeout > 0:
+        lines.append(f"\t_client := &http.Client{{Timeout: {timeout} * time.Second}}")
+    else:
+        lines.append("\t_client := &http.Client{}")
     lines.extend(do_request)
     lines.extend(decode_lines)
     lines.append("}")

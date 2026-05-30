@@ -341,7 +341,6 @@ _REST_GO_TEMPLATE = '''package rest
 
 import (
 \t"errors"
-\t"fmt"
 \t"net"
 \t"net/url"
 \t"strconv"
@@ -441,8 +440,6 @@ func ParseRetryAfter(v string) (time.Duration, bool) {{
 \t}}
 \treturn time.Duration(f * float64(time.Second)), true
 }}
-
-var _ = fmt.Sprintf
 '''
 
 
