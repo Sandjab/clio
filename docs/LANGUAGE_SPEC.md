@@ -651,7 +651,10 @@ declares a single GIVES field, the collector publishes a
 `List<<gives.type>>` cleanly. When the sub-flow declares multiple
 GIVES fields, the collector holds a list of dicts and the parent's
 declared `List<T>` annotation will not match — track this as a
-limitation pending a follow-up release.
+limitation pending a follow-up release. On `target: go` this exact shape
+(a multi-GIVES sub-flow read through a typed `FOR EACH PARALLEL`
+collector) is refused at compile time with `E_GO_006`; single-GIVES
+parallel and all sequential composition compile cleanly.
 
 ### Target support for sub-flow composition
 
@@ -661,6 +664,7 @@ limitation pending a follow-up release.
 | `mcp-server`    | yes (sub-flow → function; uncalled FLOWs become tools)               |
 | `claude-skill`  | yes (sub-flow → standalone script invoked from main)                  |
 | `langgraph`     | yes (sub-flow → compiled sub-`StateGraph`)                            |
+| `go`            | yes (sub-flow → `run<Name>()` func; single-GIVES parallel bodies; multi-GIVES PARALLEL refused — E_GO_006) |
 | `claude-cli`    | **no** — compile-time error (deferred to a later release)             |
 
 ### IMPORT and EXPOSE (v0.18)

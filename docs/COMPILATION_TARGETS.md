@@ -371,25 +371,23 @@ result, err := flow.Run(ctx, map[string]any{"file": "customers.csv"})
 
 - **FOR EACH PARALLEL:** emits `golang.org/x/sync/errgroup` with a concurrency cap of 10.
 
-### Refused combinations (v0.20.0 scope)
+### Refused combinations (v0.23 scope)
 
 The following are rejected at compile time with a clear error code and a pointer to the appropriate alternative:
 
 - `LANG: python` / `bash` / `rust` / `node` — only `go` or `auto` accepted (E_GO_001).
 - `invoke.mode: cli` — no `claude -p` subprocess in a Go binary (E_GO_002).
-- `invoke.api.bedrock` / `vertex` — not wired in v0.20.0 (E_GO_003).
+- `invoke.api.bedrock` / `vertex` — not wired (E_GO_003).
 - `invoke.api.openai` — OpenAI-compat SDK not wired yet; use `--target python` (E_GO_005).
-- **FLOW composition** (sub-flow calls) — deferred to v0.20.x (E_GO_006).
-- `impl.mode: rest` — deferred to v0.20.x (E_GO_007).
-- `impl.mode: shell` — deferred to v0.20.x (E_GO_008).
-- `impl.mode: sql` — deferred to v0.20.x (E_GO_009).
-- `impl.mode: mcp_tool` — deferred to v0.20.x (E_GO_010).
-- `--from-step N` resume — deferred to v0.20.x (E_GO_011).
-- `TEST` blocks — deferred to v0.20.x (E_GO_012).
+- A **multi-GIVES sub-flow used as a `FOR EACH PARALLEL` body** — a single typed slice collector cannot hold multiple GIVES fields (E_GO_006). Single-GIVES parallel and all sequential composition are supported.
+- `impl.mode: sql` — deferred to v0.24 (E_GO_009).
+- `impl.mode: mcp_tool` — deferred to v0.24 (E_GO_010).
+- `--from-step N` resume — deferred (E_GO_011).
+- `TEST` blocks — deferred (E_GO_012).
 
 ### Inherited features
 
-These work identically to the v0.20.0 Go target without restriction:
+These work identically to the v0.23 Go target without restriction:
 
 - `IF / ELSE`, `MATCH / CASE`, `WHILE ... MAX N:` — emits idiomatic Go `if/else`, `switch`, bounded `for`.
 - `FOR EACH ... IN ...:` — emits `for _, v := range state[...]`.
@@ -397,6 +395,9 @@ These work identically to the v0.20.0 Go target without restriction:
 - `CACHE: ttl(...)` — on-disk SHA256 layout interchangeable with the `python` target (same key derivation).
 - `ON_FAIL: retry(N) then escalate then fallback(...) then abort(...)` — full strategy chain.
 - `RESCUE` handlers + `step.error.*` + `RESUME(...)` — emitted as Go `error` wrapping + typed return injection.
+- `impl.mode: rest` — `net/http` client with `${var}` substitution, `response_path` traversal, impl-level retry (constant/exponential backoff, `Retry-After`), parity with `clio/runtime/rest.py`.
+- `impl.mode: shell` — `os/exec` with per-token `${var}` substitution, context timeout, `parse: none` (stdout str) / `parse: json` (unmarshal).
+- **FLOW composition** — each signed sub-flow lowers to an unexported `run<Name>(ctx, …) (map[string]any, error)` func; the call site flat-merges the sub-flow's GIVES into parent state (parity with the `python` target's `run_<name>()`).
 
 ### Cache layout interchangeable with `python` and `claude-cli`
 

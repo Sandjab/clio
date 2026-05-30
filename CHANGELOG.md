@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.23.0] — 2026-05-30
+
+Minor release closing **#82 — Go target reaches stdlib feature parity**. The `target: go` emitter now lowers three IR families it previously refused: `impl.mode: rest` (`net/http` client with `${var}` substitution, `response_path` traversal, and impl-level retry — constant/exponential backoff with cap and `Retry-After`, behaviour parity with `clio/runtime/rest.py`), `impl.mode: shell` (`os/exec` with per-token `${var}` substitution, context timeout, `parse: none`/`parse: json`), and **FLOW composition** — each signed sub-flow lowers to an unexported `run<Name>(ctx, …) (map[string]any, error)` func and the call site flat-merges the sub-flow's GIVES into parent state (parity with the `python` target's `run_<name>()`). Lifting composition also closes the last `FlowCallIR` gap across all six targets. Zero new Go dependencies — everything is stdlib (`net/http`, `os/exec`, `encoding/json`) plus the already-present `golang.org/x/sync/errgroup`.
+
+### Added
+
+- **`impl.mode: rest` on `target: go`.** New `clio_runtime/rest` (Go mirror of `clio/runtime/rest.py`) — `Subst` / `RenderDict` / `IsRetryableStatus` / `IsRetryableErr` / `ComputeDelay` / `ParseRetryAfter` — plus `clio_runtime/substitute` for `${var}` tokens, shared by REST and shell. `render_rest_step_go` emits the typed `<Cls>In`/`<Cls>Out` skeleton; GIVES present → `json.Unmarshal` + `.Validate(ctx)`, GIVES absent → pure side-effect.
+- **`impl.mode: shell` on `target: go`.** `render_shell_step_go` emits `exec.CommandContext` with per-token substitution and a context timeout; `parse: none` → a single stdout `str` field, `parse: json` → unmarshal into `<Cls>Out`.
+- **FLOW composition on `target: go`.** Each callable sub-flow (signed `TAKES` + `GIVES`, excluding the entry) becomes a name-sorted unexported `run<Name>()` func appended after `Run`; the entry flow is retrofitted to seed `state["<take>"] = kwargs["<take>"]` and register entry TAKES, so entry and sub-flows read TAKES identically. Three compile-time maps (`_build_state_field_to_step`, `_build_take_field_to_gotype`, plus boundary extension) keep the typed-state model sound; `_render_chain_item` gains a `FlowCallIR` arm (sequential flat-merge + single-GIVES parallel `_results := make([]steps.<Cls>Out, …)`).
+
+### Fixed
+
+- **Step-stub collector walked only the top-level entry chain** (`go.py`). Replaced with `_collect_reachable_steps`, a recursive collector over every flow (chain + nested IF/MATCH/WHILE/FOR EACH bodies + rescues), dedup by name with stable first-seen `NN_` numbering. Pre-existing latent bug: steps nested in an entry-flow control block already got no stub file.
+- **`_flow_uses_parallel` scanned only `graph.flow.chain`** (`_go_helpers.py`), so a `FOR EACH PARALLEL` inside a sub-flow would miss the `golang.org/x/sync/errgroup` dependency. Now scans every flow's chain.
+- **Duplicate `clio_runtime/substitute/substitute.go` write** (`go.py`) — the substitute runtime was rendered once for REST and again for shell. Consolidated behind a single `_flow_uses_substitute` gate so a flow mixing both writes it exactly once.
+
+### Changed
+
+- **`E_GO_006` re-narrowed.** It no longer refuses all FLOW composition — only a multi-GIVES sub-flow used as a `FOR EACH PARALLEL` body (a single typed slice collector cannot hold multiple GIVES fields). `E_GO_007` (rest) and `E_GO_008` (shell) are no longer raised. `validate_graph_for_go` drops the `len(graph.flows) > 1` refusal (kept `== 0` → `E_GO_004`). Stale `v0.20.x` milestone strings in the surviving `E_GO_*` messages refreshed; `sql`/`mcp_tool` (E_GO_009/010) now point at v0.24.
+
+### Docs
+
+- `docs/manual/04-targets.md` matrix: `impl.rest`, both `impl.shell` rows, **FLOW composition**, and `FOR EACH PARALLEL body = sub-flow` flipped to ✅ for go. `docs/COMPILATION_TARGETS.md`, `docs/LANGUAGE_SPEC.md` (sub-flow target table + multi-GIVES note), and `docs/manual/{03-cookbook,06-troubleshooting}.md` updated.
+
+### Tests
+
+- A real `go build` of an emitted sub-flow module is added (a grep-only golden cannot fail when `@take` typing regresses). Refusal-test suite updated: obsolete flow-composition/rest/shell refusal tests removed, replaced by positive emission tests + a narrowed multi-GIVES-parallel `E_GO_006` negative. Suite at `NNNN passed`.
+
 ## [0.22.0] — 2026-05-30
 
 Minor release closing **#67 — multi-file IMPORT sidecar recovery**. A cross-file (`FROM … IMPORT`) project emitted to `target: claude-skill` now stores every imported source verbatim under `.clio/sources/`, so `clio import --output <dir>` reconstructs the full source tree and the recovered project recompiles cleanly. Before v0.22 the sidecar stored only the entry `.clio`, so recompiling a recovered multi-file source failed with `CompileError: imported file not found`. Scope is the **deterministic sidecar path only** — the LLM-recovery path (`skill_to_clio.py`) stays single-file; Go-target parity is tracked separately for v0.23/v0.24. One feature PR (#80, squash-merged on `main`) through CI + Gemini review; the two-pass review surfaced three path-traversal risks and a Windows cross-drive crash, all fixed (see **Fixed**).

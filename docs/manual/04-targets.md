@@ -154,13 +154,13 @@ You get a `go.mod`, a `contracts/` package (Go structs with `json` tags), `steps
 - Your exact steps are in Go (or `LANG: auto`) and you want the orchestrator to match.
 - You need concurrent iteration (`FOR EACH PARALLEL`) backed by goroutines and `errgroup`.
 
-**Don't use when (v0.20.0):**
+**Don't use when (v0.23):**
 
 - You need OpenAI / Bedrock / Vertex (only `invoke.api.anthropic` is wired — E_GO_005, E_GO_003).
-- You need `impl.mode: rest / shell / sql / mcp_tool` (deferred — E_GO_007..010).
-- You need FLOW composition (sub-flow calls) — deferred to v0.20.x (E_GO_006).
+- You need `impl.mode: sql / mcp_tool` (deferred — E_GO_009/010, tracked for v0.24).
+- You need a multi-GIVES sub-flow as a `FOR EACH PARALLEL` body (E_GO_006 — single-GIVES parallel and all sequential composition are supported).
 - You need `--from-step N` resume (deferred — E_GO_011).
-- You need structured JSONL logging (`CLIO_LOG=1`) — silent no-op in v0.20.0; use `--target python`.
+- You need structured JSONL logging (`CLIO_LOG=1`) — silent no-op; use `--target python`.
 
 See [`docs/COMPILATION_TARGETS.md`](../COMPILATION_TARGETS.md#target-go) for the full layout and refused-combo table.
 
@@ -171,9 +171,9 @@ See [`docs/COMPILATION_TARGETS.md`](../COMPILATION_TARGETS.md#target-go) for the
 | `MODE: exact` (code stub) | ✅ | ✅ | ✅ | ✅ | ✅ (`scripts/NN.py` stub) | ✅ (Go stub) |
 | `MODE: exact` + `LANG: go / auto` | ✅ | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ✅ |
 | `MODE: exact` + `LANG: python / bash / rust / node` | ✅ | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ❌ E_GO_001 |
-| `MODE: exact` + `impl.shell` | ✅ | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ❌ E_GO_008 |
-| `MODE: exact` + `impl.shell` + `parse: json` | ⚠️ silently ignored | ✅ | ✅ | ✅ | ✅ | ❌ E_GO_008 |
-| `MODE: exact` + `impl.rest` | ✅ (uses `requests` at runtime) | ✅ | ✅ | ✅ | ✅ | ❌ E_GO_007 |
+| `MODE: exact` + `impl.shell` | ✅ | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ✅ os/exec |
+| `MODE: exact` + `impl.shell` + `parse: json` | ⚠️ silently ignored | ✅ | ✅ | ✅ | ✅ | ✅ json.Unmarshal |
+| `MODE: exact` + `impl.rest` | ✅ (uses `requests` at runtime) | ✅ | ✅ | ✅ | ✅ | ✅ net/http + retry |
 | `MODE: judgment` + `invoke: cli` (default) | ✅ | ❌ rejected | ❌ rejected | ❌ rejected | ✅ host-driven | ❌ E_GO_002 |
 | `MODE: judgment` + `invoke.api.anthropic` | (uses `RESOURCES.models` chain) | ✅ | ❌ rejected | ✅ | ✅ host-driven | ✅ |
 | `MODE: judgment` + `invoke.api.openai` | ❌ | ✅ | ❌ | ❌ rejected (v0) | ✅ host-driven | ❌ E_GO_005 |
@@ -186,8 +186,8 @@ See [`docs/COMPILATION_TARGETS.md`](../COMPILATION_TARGETS.md#target-go) for the
 | `FOR EACH` (sequential) | ✅ | ✅ | ✅ | ❌ rejected (v0; v0.7) | ✅ | ✅ |
 | `FOR EACH ... PARALLEL AS` | ❌ rejected | ✅ ThreadPool | ✅ asyncio.gather | ❌ rejected (v0; v0.7 via Send) | ⚠️ serialised with warning | ✅ errgroup |
 | `FLOW.TAKES` / `FLOW.GIVES` (v0.16, optional) | ✅ README section | ✅ typed `run()` | ✅ inputSchema / outputSchema | ✅ State subset | ✅ SKILL.md Inputs / Outputs | ✅ typed `Run()` |
-| **FLOW composition** (sub-flow callable, v0.17) | ❌ rejected | ✅ `run_<name>()` | ✅ + multi-tool | ✅ sub-`StateGraph` | ⚠️ documented in SKILL.md (linear-only, `scripts/sub_<name>.py`) | ❌ E_GO_006 |
-| `FOR EACH PARALLEL` body = sub-flow (v0.17) | ❌ rejected | ✅ | ✅ asyncio.gather | ❌ rejected (v0; v0.7 via Send) | ⚠️ linear sub-flow only | ❌ E_GO_006 |
+| **FLOW composition** (sub-flow callable, v0.17) | ❌ rejected | ✅ `run_<name>()` | ✅ + multi-tool | ✅ sub-`StateGraph` | ⚠️ documented in SKILL.md (linear-only, `scripts/sub_<name>.py`) | ✅ `run<Name>()` func |
+| `FOR EACH PARALLEL` body = sub-flow (v0.17) | ❌ rejected | ✅ | ✅ asyncio.gather | ❌ rejected (v0; v0.7 via Send) | ⚠️ linear sub-flow only | ✅ single-GIVES (multi-GIVES → E_GO_006) |
 | mcp-server multi-tool (multi-FLOW source, v0.17) | n/a | n/a | ✅ one tool per uncalled signed FLOW | n/a | n/a | n/a |
 | `TEST` blocks (v0.15) | ⚠️ ignored | ✅ pytest emitted | ⚠️ ignored | ⚠️ ignored | ⚠️ ignored | ❌ E_GO_012 |
 | `--from-step N` resume | ❌ | ✅ | ❌ | ❌ (use LangGraph checkpointers) | ❌ | ❌ E_GO_011 |
