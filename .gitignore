@@ -216,3 +216,9 @@ vfix_*.png
 
 # session-local manual test sandboxes (one subdir per probe: skill2clio, etc.)
 testprojects/
+
+# /code-review scratch sandboxes (one subdir per probe; holds a throwaway Go module cache)
+.review_tmp/
+
+# scheduled-tasks runner lock file (runtime artifact, stale across sessions)
+.claude/scheduled_tasks.lock
