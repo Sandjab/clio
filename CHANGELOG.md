@@ -85,10 +85,10 @@ Minor release closing the **v0.21 spec-alignment trilogy** — the parser now ac
 
 ### Tests
 
-- Net `1136 → 1184` (+48).
+- Net `1136 → 1188` (+52).
 - `tests/test_parser.py`: +6 for `Dict<K, V>`, +5 for `Optional<T>`, +8 for extended constraints (str(min), int min/max, float min/max, float(precision), three rejection paths).
 - `tests/test_ir.py`: +3 for `Dict`, +3 for `Optional`, +5 for extended constraints (str_min, str_min_max combined, int min/max, float min/max, float(precision) → multipleOf 0.01).
-- `tests/test_emitters/test_dict_type.py`, `test_optional_type.py`, `test_constraints.py`: 6 + 7 + 6 cross-target smoke tests.
+- `tests/test_emitters/test_dict_type.py`, `test_optional_type.py`, `test_constraints.py`: 6 + 7 + 7 cross-target smoke tests.
 
 ## [0.20.1] — 2026-05-28
 
@@ -215,7 +215,7 @@ Patch release rolling up three cross-file IMPORT / EXPOSE correctness fixes (clo
   entry file (E_MCP_001). Files relying on the v0.17 implicit exposure
   must be migrated.
 - `target: claude-cli` rejects sources containing `FROM ... IMPORT ...`
-  (E_CLI_001). Use `python`, `mcp-server`, `claude-skill`, or
+  with a plain stderr error. Use `python`, `mcp-server`, `claude-skill`, or
   `langgraph` for multi-file projects, or inline the imported FLOWs.
 
 ### Migration

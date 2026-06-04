@@ -1,9 +1,13 @@
 # CLIO examples
 
-Three compilable `.clio` files demonstrate distinct use cases. The first two
-compile to both targets (`claude-cli` and `python`); the third targets
-`python` only because it uses `invoke.protocol: openai` (LiteLLM bridge) which
-the `claude-cli` target does not implement.
+This directory contains many compilable `.clio` files demonstrating distinct
+use cases. The five documented sections below cover the main examples. For the
+full set, run `ls examples/` — additional fixtures include
+`critical_pipeline.clio` / `critical_pipeline_resume.clio` (resume-from-step
+demo), `feedback_routing.clio`, `flow_composition.clio`, `flow_signature.clio`,
+`mcp_tool.clio`, `parallel_classify.clio`, `rest_advanced.clio`,
+`skill_minimal.clio`, `sql_demo.clio`, and `mvp_go.clio` (Go target demo).
+Multi-file examples live under [`multi_file/`](multi_file/).
 
 ## Project examples
 
@@ -96,6 +100,11 @@ What this example exercises that the first two do not:
   Ollama or vLLM without any code change.
 - A contract with `ASSERT` (`confidence > 0.0`) compiled into a Pydantic
   `@field_validator` in the emitted package.
+
+This example compiles to `--target python` only. The `claude-cli` target rejects
+it because its `FOR EACH` body contains a **judgment** step — `claude-cli` does
+not implement `FOR EACH` with a judgment body. (`invoke.protocol: openai` is
+accepted silently by `claude-cli`; it is not the reason for the rejection.)
 
 ```bash
 uv run python -m clio compile examples/classify_corpus.clio --target python --output ./out
