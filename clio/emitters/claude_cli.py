@@ -31,11 +31,14 @@ from clio.ir.graph import (
     FlowCallIR,
     FlowGraph,
     ForEachIR,
+    IfBlockIR,
+    MatchBlockIR,
     McpToolImplIR,
     RestImplIR,
     ShellImplIR,
     SqlImplIR,
     StepIR,
+    WhileBlockIR,
 )
 
 
@@ -104,6 +107,27 @@ class ClaudeCLIEmitter(BaseEmitter):
                     f"--target mcp-server"
                 )
 
+    def _reject_control_flow(self, graph: FlowGraph) -> None:
+        """IF / MATCH / WHILE are not supported by the claude-cli target — the
+        bash orchestrator emits sequential chains and FOR EACH only. Refuse
+        cleanly here instead of crashing in the chain emitter."""
+        _kinds = ((IfBlockIR, "IF/ELSE"), (MatchBlockIR, "MATCH"), (WhileBlockIR, "WHILE"))
+
+        def _walk(chain) -> None:
+            for elem in chain:
+                for cls, kind in _kinds:
+                    if isinstance(elem, cls):
+                        raise ValueError(
+                            f"claude-cli target does not support {kind} control "
+                            f"flow; use --target python or --target mcp-server "
+                            f"(line {elem.line})"
+                        )
+                if isinstance(elem, ForEachIR):
+                    _walk(elem.body)
+
+        if graph.flow is not None:
+            _walk(graph.flow.chain)
+
     def emit(
         self,
         graph: FlowGraph,
@@ -116,6 +140,7 @@ class ClaudeCLIEmitter(BaseEmitter):
         self._reject_parallel(graph)
         self._reject_rescue(graph)
         self._reject_sql(graph)
+        self._reject_control_flow(graph)
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "CLAUDE.md").write_text(_CLAUDE_MD)
         readme = self._emit_readme(graph)

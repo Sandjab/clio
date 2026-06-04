@@ -10,6 +10,7 @@ from clio.emitters.python import PythonEmitter
 from clio.graph_render import to_dot, to_html, to_mermaid
 from clio.ir.builder import IRBuildError, build_ir
 from clio.ir.resolver import CompileError, resolve_imports
+from clio.parser.lexer import LexError
 from clio.parser.parser import ParseError
 
 
@@ -126,7 +127,7 @@ def _cmd_compile(source: str, target: str, output: str, flow: str | None = None)
             )
             return 1
         graph = build_ir(parsed, entry=src_path.resolve(), flow_name=flow)
-    except (ParseError, IRBuildError, CompileError) as e:
+    except (LexError, ParseError, IRBuildError, CompileError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
 
@@ -161,7 +162,7 @@ def _cmd_check(source: str) -> int:
     try:
         parsed = resolve_imports(src_path)
         build_ir(parsed, entry=src_path.resolve())
-    except (ParseError, IRBuildError, CompileError) as e:
+    except (LexError, ParseError, IRBuildError, CompileError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
     print("ok")
@@ -176,7 +177,7 @@ def _cmd_graph(source: str, fmt: str, output: str | None, flow: str | None = Non
     try:
         parsed = resolve_imports(src_path)
         graph = build_ir(parsed, entry=src_path.resolve(), flow_name=flow)
-    except (ParseError, IRBuildError, CompileError) as e:
+    except (LexError, ParseError, IRBuildError, CompileError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
 

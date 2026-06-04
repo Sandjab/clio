@@ -43,10 +43,10 @@ Each target is an emitter module that transforms the IR graph into a runnable pr
 | STEP `judgment`   | `steps/NN_name.prompt` + `steps/NN_name.schema.json` |
 | CONTRACT          | JSON Schema file + validation hook in `.claude/hooks.json` |
 | FLOW              | `run.sh` — bash orchestrator                      |
-| WHILE loop        | ❌ not supported (crashes at emit — sequential chains only) |
+| WHILE loop        | ❌ not supported (refused at compile time — sequential chains only) |
 | FOR EACH          | bash `for` loop + `claude -p` or `xargs`          |
-| MATCH/CASE        | ❌ not supported (crashes at emit)                 |
-| IF/ELSE           | ❌ not supported (crashes at emit)                 |
+| MATCH/CASE        | ❌ not supported (refused at compile time)                 |
+| IF/ELSE           | ❌ not supported (refused at compile time)                 |
 | ON_FAIL/fallback  | `||` operator or trap                              |
 | RESOURCES         | `CLAUDE.md` header + CLI flags in `run.sh`         |
 | CACHE             | `.cache/` dir, SHA256 hash check before API calls   |
