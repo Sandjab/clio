@@ -44,14 +44,10 @@ clio doctor --migrate-v018 --write your_file.clio
 ```
 
 With `--write`, the doctor inserts `EXPOSE` before each FLOW in the list and
-leaves the rest of the file unchanged. The modified file is written in place;
-the original is preserved as `your_file.clio.bak`.
-
-Review the diff before committing:
-
-```bash
-diff your_file.clio.bak your_file.clio
-```
+leaves the rest of the file unchanged. The modified file is written **in place
+with no backup** — `--write` is destructive. Back up the file manually before
+running (e.g., `cp your_file.clio your_file.clio.orig`, or rely on `git diff`
+after the write to review what changed).
 
 ### Step 3: apply manually (if preferred)
 

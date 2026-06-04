@@ -24,7 +24,7 @@ clio compile examples/ticket_routing.clio --target mcp-server --output ./out
 clio compile examples/entities.clio --target langgraph --output ./out
 ```
 
-**Errors you may see:** `ParseError` on bad syntax; `IRBuildError` on type mismatches; `ValueError` from emitter when the target rejects a feature (e.g. `FOR EACH PARALLEL` on `claude-cli`).
+**Errors you may see:** `ParseError` on bad syntax; `IRBuildError` on type mismatches; these are caught and printed as `error: <message>`. Emitter `ValueError`s (e.g. `FOR EACH PARALLEL` on `claude-cli`) are raised **outside** the `try/except` block in `cli.py` and surface as an unhandled Python traceback — they are not pretty-printed.
 
 ## `check` — validate without emitting
 
