@@ -2,6 +2,8 @@
 
 **C**ompiled **L**anguage for **I**ntent **O**rchestration
 
+> ⚠️ **Document de conception original (2026-05-02) — historique.** Ceci est la vision *initiale* de CLIO, conservée pour la trace du raisonnement de conception. Le langage réellement implémenté a **divergé** sur plusieurs points décrits ici : le compilateur **ne décide pas** code-vs-LLM (l'auteur choisit `exact`/`judgment` par STEP), il n'y a **pas** de `MODE: auto`, pas d'optimizer, pas de `ContractValidator`, et `RESOURCES` n'accepte **pas** `budget`/`prefer`/`strategy`/`lang`. Pour le langage **courant et maintenu**, voir [`LANGUAGE_SPEC.md`](LANGUAGE_SPEC.md).
+
 ## L'intuition en une phrase
 
 Tout programme hybride LLM/code se réduit à un **graphe de steps typés**, où chaque step déclare *ce qu'il veut* (intent) et *ce qu'il garantit* (contrat), et où un compilateur décide *qui l'exécute* (code, LLM, ou les deux).
