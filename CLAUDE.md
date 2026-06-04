@@ -167,7 +167,7 @@ docs/
 - Multi-LLM routing logic in the compiler. The emitter writes the scaffolding; the runtime decides.
 - A package registry or plugin system.
 - A VS Code extension or LSP server.
-- Dependencies on Guidance, Outlines, or Instructor. Contract validation for API-based targets is trivial (JSON Schema + Pydantic). These libs become relevant only for `target: local` with open-source models. Keep a `ContractValidator` interface in the emitter for future pluggability.
+- Dependencies on Guidance, Outlines, or Instructor. Contract validation for API-based targets is trivial (JSON Schema + Pydantic). These libs become relevant only for `target: local` with open-source models — at which point a pluggable validator interface would be the natural seam (none is built today).
 
 (`clio gen` — natural language → `.clio` — and `clio import` — skill → `.clio` — are both shipped. Their LLM-assisted paths live in `clio/nl_to_clio.py` and `clio/skill_to_clio.py`; they are CLI helpers, not part of the compiler core.)
 
