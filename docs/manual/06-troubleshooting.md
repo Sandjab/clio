@@ -485,11 +485,11 @@ Use the bundled `scripts/_validate.py` to check the return value against `schema
 
 **Fix**: compile to `--target python` or `--target mcp-server`. MCP tool support for Go is tracked for v0.24.
 
-### E_GO_011 — `ValueError: target=go does not support --from-step resume`
+### Go `--from-step N` silently re-runs the whole flow
 
-**Cause**: you passed `--from-step N` to the Go binary (or tried to configure resume in the flow). State-file resume for the Go target is deferred.
+**Cause**: `--from-step N` resume is **not implemented** for the Go target. Unlike the Python target, the Go binary does not refuse the flag — it re-runs the full flow from the start, without error.
 
-**Fix**: compile to `--target python` for `--from-step N` resume. Go resume is on the backlog.
+**Fix**: compile to `--target python` for `--from-step N` resume. Go resume is on the backlog (issue #83).
 
 ### E_GO_012 — `ValueError: target=go does not support TEST blocks`
 
