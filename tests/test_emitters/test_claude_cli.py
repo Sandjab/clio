@@ -628,3 +628,38 @@ RESOURCES
     assert "sub-flow" in msg.lower() or "composition" in msg.lower() or "FlowCallIR" in msg
     # Hint at the version + suggested alternative.
     assert "v0.17" in msg or "not supported" in msg.lower()
+
+
+def test_claude_cli_rejects_if(tmp_path):
+    """claude-cli must REFUSE IF control flow cleanly — it used to crash at emit
+    with `AttributeError: 'IfBlockIR' object has no attribute 'step_name'`."""
+    import pytest as _pytest
+    src = (
+        "CONTRACT res\n  SHAPE: {x: int}\n"
+        "STEP a\n  TAKES: n: int\n  GIVES: out: res\n  MODE: exact\n"
+        "STEP b\n  TAKES: v: res\n  GIVES: out: res\n  MODE: exact\n"
+        "FLOW p\n"
+        "  a(n=1)\n"
+        "    -> IF out.x > 0:\n"
+        "        b(v=out)\n"
+        "    ELSE:\n"
+        "        b(v=out)\n"
+    )
+    with _pytest.raises(ValueError, match="claude-cli target does not support.*control flow"):
+        ClaudeCLIEmitter().emit(build_ir(parse(src)), tmp_path)
+
+
+def test_claude_cli_rejects_while(tmp_path):
+    """claude-cli must REFUSE WHILE control flow cleanly (same crash class as IF)."""
+    import pytest as _pytest
+    src = (
+        "CONTRACT draft_score\n  SHAPE: {text: str(max=2000), score: float}\n"
+        "STEP draft_initial\n  TAKES: brief: str\n  GIVES: draft: draft_score\n  MODE: judgment\n"
+        "STEP refine_draft\n  TAKES: draft: draft_score\n  GIVES: draft: draft_score\n  MODE: judgment\n"
+        "FLOW main\n"
+        '    draft_initial(brief="x")\n'
+        "    -> WHILE draft.score < 0.9 MAX 3:\n"
+        "        refine_draft(draft=draft)\n"
+    )
+    with _pytest.raises(ValueError, match="claude-cli target does not support.*control flow"):
+        ClaudeCLIEmitter().emit(build_ir(parse(src)), tmp_path)
