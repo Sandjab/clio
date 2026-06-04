@@ -84,7 +84,7 @@ STEP classify
     temperature: 0.0
 ```
 
-If `invoke:` is omitted, the step uses **`invoke.cli`** (Claude Code) by default.
+If `invoke:` is omitted, the step uses the target's default: the `python` target calls the Anthropic SDK directly; `invoke.mode: cli` (Claude Code subprocess) is the default only for `--target claude-cli`.
 
 ### Resilience
 
@@ -147,10 +147,10 @@ FLOW ticket_routing
 
 - **`->`** — sequential: the right-hand step starts when the left-hand finishes, and may reference its outputs.
 - **`FOR EACH x IN xs:`** — sequential iteration. Today does not accumulate per-iteration results into state.
-- **`FOR EACH x IN xs PARALLEL AS results:`** — fan a step across the collection in parallel, collect typed results into `state[results]`. Default cap = 10 concurrent. Single body step in v0.
+- **`FOR EACH x IN xs PARALLEL AS results:`** — fan a step across the collection in parallel, collect typed results into `state[results]`. Default cap = 10 concurrent. Single body step in v1.
 - **`IF report.confidence < 0.7: ... ELSE: ...`** *(v0.7, composed in v0.12)* — conditional branching on a contract sub-field. Since v0.12 multiple comparisons combine with the lowercase keywords `and` / `or` (Python precedence: `and` > `or`; parentheses override). No `not` yet — flip the comparator instead. ELSE optional on python/mcp-server, required on langgraph.
 - **`MATCH classification.category: CASE bug: ... DEFAULT: ...`** *(v0.7)* — multi-way dispatch on an enum sub-field. CASE values must match enum variants; DEFAULT optional (recommended; required on langgraph).
-- **`WHILE draft.score < 0.85 MAX 3: refine_draft(draft=draft)`** *(v0.7, composed in v0.12)* — bounded loop. MAX is mandatory; the loop exits when the condition turns false or after MAX iterations. Shares the IF grammar, so `and` / `or` work here too. Compiles to python/mcp-server only — langgraph rejects it (cyclic edges + state reducers planned for v0.8).
+- **`WHILE draft.score < 0.85 MAX 3: refine_draft(draft=draft)`** *(v0.7, composed in v0.12)* — bounded loop. MAX is mandatory; the loop exits when the condition turns false or after MAX iterations. Shares the IF grammar, so `and` / `or` work here too. Compiles to python, mcp-server, claude-skill, and go — langgraph and claude-cli reject it.
 
 ### Step calls
 
@@ -217,9 +217,9 @@ error, not a runtime surprise.
 
 **One RESCUE per STEP**; the handler attaches to a STEP that appears in
 the top-level FLOW chain (not nested inside FOR EACH / IF / MATCH /
-WHILE). Compiles to **python**, **mcp-server**, and **claude-skill**
+WHILE). Compiles to **python**, **mcp-server**, **claude-skill**
 (rendered as a RESCUE sub-section in `SKILL.md` for the LLM host to
-follow); **langgraph** and **claude-cli** reject at compile time.
+follow), and **go** (v0.23); **langgraph** and **claude-cli** reject at compile time.
 
 ### FLOW signature (v0.16, optional)
 

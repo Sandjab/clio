@@ -97,8 +97,8 @@ Each `STEP` becomes a node function `(state: State) -> dict`. The State is a `Ty
 - You need LangGraph's runtime features (persistence layer, human-in-the-loop, event streaming) on top of a CLIO-described pipeline.
 
 **Don't use when (v0):**
-- You need `FOR EACH` (any kind) — rejected at compile time. Send-API support is planned for v0.7. Use `--target python` today.
-- You need `WHILE` — rejected at compile time (cyclic edges + state reducers deferred to v0.8). Use `--target python` or `--target mcp-server`.
+- You need `FOR EACH` (any kind) — rejected at compile time. Send-API support is planned (not yet shipped). Use `--target python` today.
+- You need `WHILE` — rejected at compile time (cyclic edges + state reducers planned, not yet shipped). Use `--target python` or `--target mcp-server`.
 - You need `impl.mode: sql` — rejected at compile time in v0.11. Use `--target python` or `--target mcp-server`.
 - You need `invoke.api.openai/bedrock/vertex` — only `anthropic` is wired in v0. Use `--target python`.
 - You need `invoke.mode: cli` — LangGraph runs server-side. Use `--target claude-cli`.
@@ -171,8 +171,8 @@ See [`docs/COMPILATION_TARGETS.md`](../COMPILATION_TARGETS.md#target-go) for the
 | Feature | claude-cli | python | mcp-server | langgraph | claude-skill | go |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|
 | `MODE: exact` (code stub) | ✅ | ✅ | ✅ | ✅ | ✅ (`scripts/NN.py` stub) | ✅ (Go stub) |
-| `MODE: exact` + `LANG: go / auto` | ✅ | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ✅ |
-| `MODE: exact` + `LANG: python / bash / rust / node` | ✅ | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ❌ E_GO_001 |
+| `MODE: exact` + `LANG: go / auto` | ⚠️ LANG ignored (always Python stub) | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ✅ |
+| `MODE: exact` + `LANG: python / bash / rust / node` | ⚠️ LANG ignored (always Python stub) | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ❌ E_GO_001 |
 | `MODE: exact` + `impl.shell` | ✅ | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ✅ os/exec |
 | `MODE: exact` + `impl.shell` + `parse: json` | ⚠️ silently ignored | ✅ | ✅ | ✅ | ✅ | ✅ json.Unmarshal |
 | `MODE: exact` + `impl.rest` | ✅ (uses `requests` at runtime) | ✅ | ✅ | ✅ | ✅ | ✅ net/http + retry (json/raw bodies only; form/file/multipart → E_GO_013) |
@@ -203,7 +203,7 @@ A `.clio` file is target-independent (modulo the limitations above). A common pa
 1. **Sketch** the flow with `--target claude-cli`. Read the emitted `.prompt` files, tune the wording.
 2. **Test** at scale with `--target python` once the prompts are stable.
 3. **Distribute** as `--target mcp-server` if you want it consumable by other AI clients.
-4. **Bridge** to `--target langgraph` if you need to plug into LangChain runtime features (checkpointers, human-in-the-loop, streaming). Subset features today, full parity is on the v0.7+ roadmap.
+4. **Bridge** to `--target langgraph` if you need to plug into LangChain runtime features (checkpointers, human-in-the-loop, streaming). Subset features today, full parity is planned (not yet shipped).
 5. **Ship as a Claude Code skill** with `--target claude-skill` when the audience is Claude Code users who want a zero-runtime install (no API key, no Python env).
 
 The same source compiles all six (within each target's scope).

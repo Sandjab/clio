@@ -10,7 +10,7 @@ Each target is an emitter module that transforms the IR graph into a runnable pr
 | `python` | Implemented | Python package (Anthropic SDK + Pydantic v2) | Production-grade Python deployment | ✅ | — |
 | `claude-skill` | Implemented | Claude Code skill directory (`SKILL.md` + `scripts/` + `schemas/` + `prompts/`) | Turn a `.clio` into an LLM-host-orchestrated skill; no external runtime or API key needed after install | ✅ | — |
 | `mcp-server` | Implemented | MCP server, each FLOW exposed as a tool with sampling-based judgment | Native Anthropic ecosystem integration; turn a `.clio` into a structured MCP tool | ✅ | — |
-| `langgraph` | Implemented | LangGraph graph (nodes = STEPs, state = CONTRACTs) | Adoption by existing LangChain users; positions CLIO as a meta-language | ✅ | Medium |
+| `langgraph` | Implemented | LangGraph graph (nodes = STEPs, state = CONTRACTs) | Adoption by existing LangChain users; positions CLIO as a meta-language | ✅ | — |
 | `local` | Future | Same as `python`, with Ollama/vLLM | Offline / data-privacy constraints | ✅ (planned) | High (Outlines/Guidance) |
 | `rust` | Future | Cargo async project | Performance-critical `exact` steps | planned | High |
 | `go` | Implemented | Go module (package `flow.Run` + `cmd/<flow>/main.go`) | Single static binary, no runtime to install; concurrent `exact` steps via goroutines | ✅ | — |
@@ -43,10 +43,10 @@ Each target is an emitter module that transforms the IR graph into a runnable pr
 | STEP `judgment`   | `steps/NN_name.prompt` + `steps/NN_name.schema.json` |
 | CONTRACT          | JSON Schema file + validation hook in `.claude/hooks.json` |
 | FLOW              | `run.sh` — bash orchestrator                      |
-| WHILE loop        | `claude -p` in a bash while loop with state file  |
+| WHILE loop        | ❌ not supported (crashes at emit — sequential chains only) |
 | FOR EACH          | bash `for` loop + `claude -p` or `xargs`          |
-| MATCH/CASE        | bash `case ... esac`                               |
-| IF/ELSE           | bash `if/else`                                     |
+| MATCH/CASE        | ❌ not supported (crashes at emit)                 |
+| IF/ELSE           | ❌ not supported (crashes at emit)                 |
 | ON_FAIL/fallback  | `||` operator or trap                              |
 | RESOURCES         | `CLAUDE.md` header + CLI flags in `run.sh`         |
 | CACHE             | `.cache/` dir, SHA256 hash check before API calls   |
@@ -118,13 +118,13 @@ Both targets read/write `<output>/.cache/<step_name>/<sha256>.json` with the sam
 
 Each judgment step's SDK call sends a strict JSON-only system prompt that aligns the model's behavior with `claude -p`'s built-in scaffolding. Ensures contract validation succeeds reliably.
 
-**Logging** (v0.4+): structured JSONL events via `CLIO_LOG=1`. Six event types
+**Logging** (since v0.4): structured JSONL events via `CLIO_LOG=1`. Six event types
 covering `flow_start`/`flow_end`, `step_start`/`step_end` (3 paths for judgment),
 `parallel_block_start`/`parallel_block_end`. Tokens extracted from
 `response.usage` (Anthropic `input_tokens`/`output_tokens`, OpenAI
 `prompt_tokens`/`completion_tokens`).
 
-**Resume** (v0.4+): emitted package writes `state.json` atomically after
+**Resume** (since v0.4): emitted package writes `state.json` atomically after
 each top-level chain item; `python -m my_pkg --from-step N` reloads the
 state and skips items 1..N. Path via `CLIO_STATE_FILE` env var.
 
@@ -184,7 +184,7 @@ The following are rejected at compile time with a clear error and a pointer to `
 - `invoke.protocol: openai` — use `--target python`.
 - `invoke.protocol: bedrock` / `vertex` — use `--target python`.
 - `invoke.mode: cli` — no `claude -p` subprocess on an MCP server.
-- Source with no `FLOW` declaration — an MCP server with no tools is a no-op.
+- Source with no `FLOW` declaration — rejected at compile time with a `ValueError`.
 
 ### Inherited features
 
@@ -197,7 +197,7 @@ These work identically to the `python` target (shared helpers in `_python_helper
 - `impl.mode: rest` — emits `requests.request(...)` with `${var}` URL templating.
 - `impl.mode: shell` — emits `subprocess.run([...], shell=False)`.
 
-**Logging** (v0.4+): same event taxonomy as `python` target. `model` field
+**Logging** (since v0.4): same event taxonomy as `python` target. `model` field
 comes from the MCP sampling response. `tokens_in`/`tokens_out` emitted iff the
 sampling response carries `usage`.
 
@@ -293,11 +293,11 @@ blocks the main skill output.
 
 **Known limitation (v0.19):** the sidecar stores only the entry `.clio`
 file. Multi-file projects (those using `FROM "<path>" IMPORT ...`) recover
-a `source.clio` that references files not present in the sidecar — track
-[#67](https://github.com/Sandjab/clio/issues/67) for the multi-file
-extension. Workarounds: keep the imported `.clio` files next to the
-recovered entry, or use `clio import --mode infer` to inline everything
-through the LLM.
+a `source.clio` that references files not present in the sidecar — resolved
+in v0.22 (multi-file sidecar recovery shipped;
+[#67](https://github.com/Sandjab/clio/issues/67) closed). Workarounds for
+older skills: keep the imported `.clio` files next to the recovered entry,
+or use `clio import --mode infer` to inline everything through the LLM.
 
 ---
 

@@ -53,9 +53,8 @@ Key idea: `FOR EACH ... PARALLEL AS results` is the only loop today that **accum
 
 ```
 CONTRACT classified_ticket
-  SHAPE: {id: int, category: enum(bug|billing|...), priority: enum(low|...|urgent),
-          team: enum(...), urgency_score: float}
-  ASSERT: 0.0 <= urgency_score <= 1.0
+  SHAPE: {id: int, category: enum(bug|billing|feature|account|other), priority: enum(low|medium|high|urgent), team: enum(engineering|finance|product|support), urgency_score: float}
+  ASSERT: urgency_score >= 0.0
 
 STEP classify_ticket
   TAKES:   ticket: support_ticket
@@ -210,7 +209,7 @@ WHILE draft.score < 0.85 MAX 3:
     refine_draft(draft=draft)
 ```
 
-Key idea: `MAX <int>` is **mandatory** — bounds the loop to keep LLM-driven flows terminating. The body must update the state field referenced by the condition (typically by writing back the same `gives.name`) so the loop can make progress. Compiles to python and mcp-server only — langgraph rejects `WHILE` in v0.7 (cyclic edges + state reducers planned for v0.8).
+Key idea: `MAX <int>` is **mandatory** — bounds the loop to keep LLM-driven flows terminating. The body must update the state field referenced by the condition (typically by writing back the same `gives.name`) so the loop can make progress. Compiles to python, mcp-server, claude-skill, and go — langgraph and claude-cli reject `WHILE`.
 
 ## 10. Critical LLM pipeline with ON_FAIL × RESCUE
 
@@ -255,7 +254,7 @@ For a complete working example, see [`examples/critical_pipeline.clio`](../../ex
 Key idea: ON_FAIL declares **what to try** (retry/escalate/fallback);
 RESCUE declares **what to do once the tries are spent** (notify, log,
 clean up, then abort). The two compose: ON_FAIL runs first, RESCUE runs
-only on exhaustion. Compiles to python and mcp-server; langgraph and
+only on exhaustion. Compiles to python, mcp-server, claude-skill, and go (v0.23); langgraph and
 claude-cli reject at compile time.
 
 ## 11. REST API integration with auth, retries, and file upload
@@ -557,8 +556,8 @@ safe default) and the downstream steps can run usefully on top of it. Use
 
 Key idea: the compiler validates at build time that `fallback_detect.report`'s
 type matches `detect`'s `GIVES` type exactly. A type mismatch is a compile error,
-not a runtime surprise. Compiles to `python` and `mcp-server`; `claude-cli` and
-`langgraph` reject RESCUE at compile time (v0.13).
+not a runtime surprise. Compiles to `python`, `mcp-server`, `claude-skill`, and `go` (v0.23); `claude-cli` and
+`langgraph` reject RESCUE at compile time.
 
 ## 15. Compile a `.clio` into a Claude Code skill
 
@@ -652,7 +651,7 @@ TEST scores_at_least_one_row:
 ```
 
 ```bash
-clio compile examples/risk.clio --target python --output ./out
+clio compile flow.clio --target python --output ./out
 cd ./out && pytest tests/ -v
 ```
 
