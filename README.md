@@ -205,7 +205,7 @@ docs/
 - [Compilation targets](docs/COMPILATION_TARGETS.md) — what each target emits.
 - [Positioning](docs/POSITIONING.md) — strategy, comparisons (DSPy, LangGraph, Outlines).
 - [Comparison with openprose](docs/COMPARISON_OPENPROSE.md) — side-by-side analysis and the cross-pollination table that drove the v0.15 sprint.
-- [Design document (FR)](docs/clio-spec.md) — original design rationale (in French).
+- [Design document (FR)](docs/clio-spec.md) — original (2026-05-02) design rationale (in French); **historical** — the implemented language diverged; see [LANGUAGE_SPEC.md](docs/LANGUAGE_SPEC.md) for the current language.
 - [Examples README](examples/README.md) — guided tour of the polished `.clio` files in `examples/`.
 - [Changelog](CHANGELOG.md) — what's landed in each tag.
 
