@@ -752,16 +752,12 @@ surface at runtime.
 
 ### RESOURCES
 
-Execution constraints declared at the flow level.
+Flow-level resources and defaults.
 
 ```
 RESOURCES
-  budget:       <amount>                        # e.g. 30€/month
-  prefer:       cost | latency | quality
-  models:       [<model>, <model>, ...]
-  strategy:     escalate | round-robin | fixed
-  target:       claude-cli | python | rust | go | node | docker | hybrid
-  lang:         python | rust | go | node | bash | auto
+  target:       claude-cli | python | mcp-server | langgraph | claude-skill | go   # required
+  models:       [<model>, <model>, ...]         # required for the claude-cli target
   impl:         <impl-block>                    # default impl for all exact steps in this flow
   invoke:       <invoke-block>                  # default invoke for all judgment steps in this flow
   mcp_servers:  {<name>: <server-spec>, ...}    # MCP servers callable from impl.mcp_tool steps
