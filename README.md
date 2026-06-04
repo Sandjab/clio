@@ -230,7 +230,7 @@ What's in the language today:
 - **Observability**: structured JSONL events (`CLIO_LOG=1`, six event types, OTel-mappable). Replay an `events.jsonl` inside the HTML viewer (`clio graph --format html` then drag-drop the trace).
 - **Resume**: `--from-step N` from `state.json` (atomically written after each completed step).
 
-**Phase 2** (future): natural language → `.clio` frontend (the `gen` command is a first cut), `MODE: auto` routing inference, multi-step LangGraph IF / MATCH / WHILE / RESCUE branches, additional EXACT modes (`binary`), `CONFIDENCE` thresholds, `VALIDATE` post-conditions, batching / context-budget / model-routing optimizer.
+**Phase 2** (future): natural language → `.clio` frontend (the `gen` command is a first cut), and broader multi-step LangGraph `IF` / `MATCH` / `WHILE` / `RESCUE` branches.
 
 ## License
 

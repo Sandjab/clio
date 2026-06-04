@@ -305,7 +305,7 @@ through the LLM.
 
 **What it emits**: same as `python`, but judgment steps use a local model (Ollama, vLLM) instead of an API.
 
-**Contract validation**: this is the one target where Outlines or Guidance become necessary. Local models don't support native `response_model` — constrained decoding at the tokenizer level is the only way to guarantee schema compliance. The emitter plugs Outlines/Guidance behind the same `ContractValidator` interface used by other targets.
+**Contract validation**: this is the one target where Outlines or Guidance become necessary. Local models don't support native `response_model` — constrained decoding at the tokenizer level is the only way to guarantee schema compliance. The emitter would constrain decoding with Outlines/Guidance at the tokenizer level — the one place a pluggable validator interface (none is built today) would be warranted.
 
 This is the only justified dependency on these libraries. Not day 1.
 

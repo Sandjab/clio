@@ -1,4 +1,4 @@
-# CLIO Language Specification v0.2
+# CLIO Language Specification v0.23
 
 This is the reference grammar for the CLIO language. The compiler parses `.clio` files written in this syntax.
 
@@ -42,13 +42,13 @@ Adds OpenProse-inspired surface features without touching execution semantics:
 
 ## v0.2 changes
 
-Adds per-step **`impl:`** block (EXACT implementations: code, REST, shell, SQL, MCP tool, binary) and per-step **`invoke:`** block (JUDGMENT invocations: CLI, API, embedded, MCP sampling). Both are optional and backward-compatible — v0.1 files parse unchanged. Defaults can be set at the `RESOURCES` level and overridden per step.
+Adds per-step **`impl:`** block (EXACT implementations: code, REST, shell, SQL, MCP tool) and per-step **`invoke:`** block (JUDGMENT invocations: CLI, API). Both are optional and backward-compatible — v0.1 files parse unchanged. Defaults can be set at the `RESOURCES` level and overridden per step.
 
 Also lifts `FOR EACH <var> IN <collection>:` from spec-only to implemented control flow.
 
 ### Implementation status (as of v0.2)
 
-| Feature | Parser | IR | python target | claude-cli target | mcp-server target | go target |
+| Feature | Parser | IR | python target | claude-cli target | mcp-server target | go target (v0.20) |
 |---|---|---|---|---|---|---|
 | `LANG:` per step | ✅ | ✅ | ignored (still emits Python on every EXACT) | ignored | ignored | only `go` or `auto` accepted (E_GO_001) |
 | `impl.mode: code` | ✅ | ✅ | (default behavior — Python stub) | (default behavior — Python stub) | (default behavior — Python stub) |
@@ -59,7 +59,6 @@ Also lifts `FOR EACH <var> IN <collection>:` from spec-only to implemented contr
 | `impl.mode: shell` | ✅ | ✅ | ✅ `subprocess.run([...], shell=False)` | ✅ standalone Python step with `subprocess` | ✅ `subprocess.run([...], shell=False)` |
 | `impl.shell.parse: json` | ✅ | ✅ | ✅ standalone Python step with `subprocess` + `json.loads` | ignored — stdout stored as raw `str` (since v0.5) | ✅ `subprocess.run([...]) + json.loads(stdout)` |
 | `impl.mode: sql` (sqlite + postgres + mysql) | ✅ | ✅ | ✅ shared `clio_runtime.sql` | rejected at compile time | ✅ shared `clio_runtime.sql` |
-| `impl.mode: binary` | ❌ | ❌ | ❌ | ❌ | ❌ |
 | `impl.mode: mcp_tool` (stdio + SSE/HTTP) | ✅ | ✅ | ✅ long-lived client | ✅ per-step bootstrap | ✅ long-lived client |
 | `RESOURCES.mcp_servers` block (named server specs) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `RESOURCES.databases` block (named DB specs) | ✅ | ✅ | ✅ | rejected at compile time | ✅ |
@@ -67,14 +66,13 @@ Also lifts `FOR EACH <var> IN <collection>:` from spec-only to implemented contr
 | `invoke.mode: api` (`anthropic`) | ✅ | ✅ | ✅ with overrides | (uses RESOURCES.models chain) | rejected at compile time |
 | `invoke.mode: api` (`openai`) | ✅ | ✅ | ✅ — covers LiteLLM / OpenRouter / Ollama / vLLM via OpenAI-compat | rejected | rejected at compile time |
 | `invoke.mode: api` (`bedrock` / `vertex`) | ✅ | ✅ | rejected at compile time | rejected | rejected at compile time |
-| `invoke.mode: embedded` / `mcp_sampling` | ❌ | ❌ | ❌ | ❌ | ✅ — `sampling/createMessage` via MCP client |
 | `FOR EACH ... IN ...:` | ✅ | ✅ | ✅ `for x in state[...]:` | ✅ `mapfile` + bash `for` loop | ✅ `for x in state[...]:` |
 | Judgment step inside FOR EACH | parses fine | builds fine | works | rejected at emit | works |
 | `FOR EACH ... PARALLEL AS <name>` | ✅ | ✅ | ✅ `ThreadPoolExecutor` | ❌ rejected | ✅ `asyncio.gather` |
 | `IF <cond>: ... ELSE: ...` (v0.7) | ✅ | ✅ | ✅ `if/else` | ❌ rejected | ✅ `if/else` |
 | `MATCH x: CASE ...` (v0.7) | ✅ | ✅ | ✅ `match/case` | ❌ rejected | ✅ `match/case` |
 | `WHILE <cond> MAX N:` (v0.7) | ✅ | ✅ | ✅ bounded `for/break` | ❌ rejected | ✅ bounded `for/break` |
-| `FLOW.TAKES` / `FLOW.GIVES` (v0.16) | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `FLOW.TAKES` / `FLOW.GIVES` (v0.16) | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 Where the table says *rejected at compile time*, the emitter raises a clear `ValueError` / `NotImplementedError` rather than producing silent or broken code.
 
@@ -116,10 +114,9 @@ An atomic unit of work. Does not describe HOW — only WHAT and with what guaran
 STEP <name>
   TAKES:        <name>: <type> [, <name>: <type>]*
   GIVES:        <name>: <type>
-  MODE:         exact | judgment | auto
+  MODE:         exact | judgment
   LANG:         python | rust | go | node | bash | auto  # optional, exact only — shorthand for impl.mode=code; impl.lang=<value>
   CACHE:        on | off | ttl(<duration>)               # optional, judgment only
-  VALIDATE:     <boolean expression>                     # optional
   ON_FAIL:      <failure strategy>                       # optional
   impl:         <impl-block>                             # optional, exact only — see "EXACT implementations"
   invoke:       <invoke-block>                           # optional, judgment only — see "JUDGMENT invocation"
@@ -130,9 +127,8 @@ STEP <name>
 **MODE values:**
 - `exact` — deterministic code. The compiler generates a function/script.
 - `judgment` — requires an LLM. The compiler generates a prompt + schema.
-- `auto` — the compiler decides. Tries `exact` first, falls back to `judgment`.
 
-**LANG** only applies to `exact` steps. If omitted, defaults to `auto` (compiler picks based on data size, dependencies, and target). Can also be set globally in RESOURCES.
+**LANG** only applies to `exact` steps. If omitted, the IR stores `None` (no language override; the emitter uses its target default). Can also be set globally in RESOURCES.
 
 **CACHE** only applies to `judgment` steps. Controls reproducibility:
 - `on` — permanent cache. The input is hashed (prompt + schema + model + parameters) to produce a key. Same input = same output guaranteed, no API call.
@@ -147,7 +143,6 @@ A typed shape guarantee on data flowing between steps.
 CONTRACT <name>
   SHAPE:      <type definition>
   ASSERT:     <boolean expression>          # optional
-  CONFIDENCE: >= <float>                    # optional, judgment steps only
 ```
 
 **SHAPE** uses a type notation inspired by JSON Schema / Python typing:
@@ -156,8 +151,6 @@ CONTRACT <name>
 - Enums: `enum(val1|val2|val3)`
 - Records: `{field: type, field: type}`
 - Constrained: `str(max=200)`, `int(min=0)`
-
-**CONFIDENCE** sets a threshold for LLM outputs. Below this, the step retries or escalates.
 
 ### EXACT implementations: `impl:` block
 
@@ -288,7 +281,7 @@ STEP extract_pdf
 
 The `cmd` is a quoted string. The compiler `shlex.split`s it at compile time, then templates `${var}` per token at runtime — `subprocess.run([...], shell=False)` runs the resulting argv. No pipes/redirections (wrap a pipeline in a script if needed). Non-zero exit codes raise `subprocess.CalledProcessError`, which `ON_FAIL` will see.
 
-String literals (`"…"`) support two escapes — `\"` for a literal double-quote and `\\` for a literal backslash; any other `\x` is a literal backslash followed by `x`. This makes a `cmd` that emits JSON expressible: `cmd: "echo '{\"ok\": true}'"`. (Multi-line content belongs in a `|` block scalar, not a `"…"` literal.)
+String literals (`"…"`) support two escapes — `\"` for a literal double-quote and `\\` for a literal backslash; any other `\x` is a literal backslash followed by `x`. This is the generic scanner rule and applies to **all** quoted string values in the language, not just `cmd`. For example it makes a `cmd` that emits JSON expressible: `cmd: "echo '{\"ok\": true}'"`. (Multi-line content belongs in a `|` block scalar, not a `"…"` literal.)
 
 **`parse:`** (optional, default `none`) — controls how stdout is returned to the flow:
 
@@ -406,23 +399,6 @@ STEP search_docs
 - `parse: <path>` (response navigation) not supported. Compose with a small `code` step downstream if you need to extract a sub-tree.
 - The first text content block is the only one consumed. If a tool returns multiple content blocks (rare), only the first is mapped into `GIVES`.
 
-#### `impl.mode: binary`
-
-Pre-compiled binary with stdin/stdout JSON marshalling.
-
-```
-STEP fast_classify
-  MODE:    exact
-  TAKES:   text: str
-  GIVES:   label: str
-  impl:
-    mode:   binary
-    path:   ./bin/classifier
-    args:   [--model, models/v3.bin]
-    stdin:  json
-    stdout: json
-```
-
 ### JUDGMENT invocation: `invoke:` block
 
 The `invoke:` block describes how a `JUDGMENT` step calls its LLM. It is optional; if omitted, falls back to `RESOURCES.invoke` (or compiler defaults if neither is set).
@@ -437,15 +413,11 @@ STEP analyze
   TAKES:   text: str
   GIVES:   summary: str
   invoke:
-    mode:                  cli
-    cli:                   claude          # default
-    model:                 opus            # haiku | sonnet | opus (CLIO aliases)
-    output_format:         json            # default
-    max_turns:             5               # optional
-    allowed_tools:         [Read, Grep]    # optional
-    permission_mode:       default         # optional
-    append_system_prompt:  <expr>          # optional
-    session:               continue        # optional: continue | resume:<id>
+    mode:          cli
+    cli:           claude          # default
+    model:         opus            # haiku | sonnet | opus (CLIO aliases)
+    output_format: json            # accepted; passed through to the CLI; not validated by the compiler
+    max_turns:     5               # optional
 ```
 
 #### `invoke.mode: api`
@@ -458,65 +430,18 @@ STEP classify
   TAKES:   text: str
   GIVES:   label: enum(low|mid|high)
   invoke:
-    mode:            api
-    protocol:        openai                    # anthropic | openai | bedrock | vertex
-    base_url:        http://litellm:4000       # optional for native providers; required for proxies / local servers
-    model:           gemini-1.5-pro            # opaque — endpoint validates
-    auth:            env:LITELLM_KEY           # env:VAR | aws-profile:NAME | gcp-sa:PATH | none
-    temperature:     0.0                       # optional
-    max_tokens:      1024                      # optional
-    response_format: json_schema               # optional
-    timeout:         60s                       # optional
-    retries:         3                         # optional
-    extra_headers:   {X-Tenant-ID: clio-prod}  # optional, passed through
-    extra_body:      {metadata: {...}}         # optional, passed through
+    mode:        api
+    protocol:    openai                    # anthropic | openai | bedrock | vertex
+    base_url:    http://litellm:4000       # optional for native providers; required for proxies / local servers
+    model:       gemini-1.5-pro            # opaque — endpoint validates
+    auth:        env:LITELLM_KEY           # env:VAR | aws-profile:NAME | gcp-sa:PATH | none
+    temperature: 0.0                       # optional
+    max_tokens:  1024                      # optional
+    timeout:     60s                       # optional
+    retries:     3                         # optional
 ```
 
 This decomposition (protocol / base_url / model / auth) handles cases where a model from one provider is served behind another protocol — e.g. Gemini exposed via LiteLLM in OpenAI-compat format: `protocol: openai`, `base_url: <litellm>`, `model: gemini-1.5-pro`.
-
-#### `invoke.mode: embedded`
-
-LLM loaded in-process by the workflow runtime.
-
-```
-STEP local_classify
-  MODE:    judgment
-  TAKES:   text: str
-  GIVES:   label: str
-  invoke:
-    mode:          embedded
-    engine:        mlx                        # mlx | llama_cpp | transformers | outlines | guidance
-    model_repo:    mlx-community/Llama-3.1-8B-Instruct-4bit
-    model_path:    <path>                     # mutually exclusive with model_repo
-    quantization:  Q4_K_M                     # engine-specific
-    n_ctx:         8192                       # optional
-    n_gpu_layers:  32                         # optional, llama_cpp
-    device:        mps                        # mps | cuda | cpu
-    lazy_load:     false                      # default false
-```
-
-The runtime loads the model at workflow init (or first use if `lazy_load: true`) and shares it across all steps using the same `engine + model`.
-
-#### `invoke.mode: mcp_sampling`
-
-Delegation to the MCP client via JSON-RPC `sampling/createMessage`. Valid only for the `mcp-server` target.
-
-```
-STEP draft_reply
-  MODE:    judgment
-  TAKES:   request: str
-  GIVES:   reply: str
-  invoke:
-    mode:                  mcp_sampling
-    model_hints:           [claude-3-5-sonnet]
-    intelligence_priority: 0.8
-    speed_priority:        0.5
-    cost_priority:         0.2
-    include_context:       thisServer       # none | thisServer | allServers
-    max_tokens:            1024
-```
-
-No model is enforced — the client decides based on hints. No API key on the server side.
 
 ### FLOW
 
@@ -769,7 +694,6 @@ symbol. It is legal to re-export a CONTRACT or a FLOW this way.
 | E_VIS_003  | `EXPOSE FLOW` missing `TAKES:` or `GIVES:`                      |
 | E_VIS_004  | same name exposed as both FLOW and CONTRACT                     |
 | E_MCP_001  | `target: mcp-server` entry file has no `EXPOSE FLOW`            |
-| E_CLI_001  | `target: claude-cli` source contains `FROM ... IMPORT ...`      |
 
 #### Cross-file import support per target
 
@@ -779,7 +703,7 @@ symbol. It is legal to re-export a CONTRACT or a FLOW this way.
 | `mcp-server`   | yes                                     |
 | `claude-skill` | yes                                     |
 | `langgraph`    | yes                                     |
-| `claude-cli`   | **no** — E_CLI_001 at compile time      |
+| `claude-cli`   | **no** — rejected at compile time (stderr message, exit 1) |
 
 ### TEST (v0.15)
 
@@ -828,16 +752,12 @@ surface at runtime.
 
 ### RESOURCES
 
-Execution constraints declared at the flow level.
+Flow-level resources and defaults.
 
 ```
 RESOURCES
-  budget:       <amount>                        # e.g. 30€/month
-  prefer:       cost | latency | quality
-  models:       [<model>, <model>, ...]
-  strategy:     escalate | round-robin | fixed
-  target:       claude-cli | python | rust | go | node | docker | hybrid
-  lang:         python | rust | go | node | bash | auto
+  target:       claude-cli | python | mcp-server | langgraph | claude-skill | go   # required
+  models:       [<model>, <model>, ...]         # required for the claude-cli target
   impl:         <impl-block>                    # default impl for all exact steps in this flow
   invoke:       <invoke-block>                  # default invoke for all judgment steps in this flow
   mcp_servers:  {<name>: <server-spec>, ...}    # MCP servers callable from impl.mcp_tool steps
@@ -938,7 +858,7 @@ RESOURCES
 
 #### Override semantics for `impl` and `invoke`
 
-`RESOURCES.impl` and `RESOURCES.invoke` provide flow-wide defaults. A step's own `impl:` or `invoke:` block performs a **shallow merge** over the corresponding default, key by key. Nested objects (e.g. `headers`, `extra_body`, `args`) are *replaced* on conflict, not deep-merged.
+`RESOURCES.impl` and `RESOURCES.invoke` provide flow-wide defaults. A step's own `impl:` or `invoke:` block performs a **shallow merge** over the corresponding default, key by key. Nested objects (e.g. `headers`, `args`) are *replaced* on conflict, not deep-merged.
 
 Example. If
 
@@ -1315,7 +1235,7 @@ claude-cli deferred to v2.
 
 ### Containers
 
-`List<T>`, `Dict<K, V>`, `Optional<T>`, `Set<T>`
+`List<T>`, `Dict<K, V>`, `Optional<T>`
 
 #### `Dict<K, V>` constraints (v0.21)
 
@@ -1378,10 +1298,9 @@ accepts a float. `precision` is always an int (decimal-place count).
 
 Domain types are aliases for common patterns:
 
-- `CSV`, `JSON`, `Log` — file inputs
-- `Email`, `URL`, `Markdown` — string subtypes
+- `CSV` — file input (alias for `str`; the parser accepts it as a named type)
 
-These compile to their base type + validation.
+Other domain types (`JSON`, `Log`, `Email`, `URL`, `Markdown`) are **not** implemented and are rejected at parse time.
 
 ## Example
 
@@ -1400,36 +1319,26 @@ STEP détecter_churn
   GIVES:     risques: List<compte_risque>
   MODE:      judgment
   CACHE:     ttl(24h)
-  VALIDATE:  each risque.raison cites a column from clients
   ON_FAIL:   retry(3) then escalate
 
-STEP vérifier_ticket_zendesk
-  TAKES:     client: str
-  GIVES:     dernier_ticket: {sujet: str, date: str, statut: str}
-  MODE:      exact
-
 STEP rédiger_mail_rétention
-  TAKES:     risque: compte_risque, ticket: {sujet: str, date: str, statut: str}
+  TAKES:     risque: compte_risque
   GIVES:     mail: {objet: str, corps: str}
   MODE:      judgment
-  VALIDATE:  len(mail.corps) > 50 AND len(mail.corps) < 2000
 
 FLOW rétention_clients
   charger_clients(fichier="clients.csv")
     -> détecter_churn(clients)
     -> FOR EACH risque IN risques:
-         vérifier_ticket_zendesk(risque.client)
-           -> rédiger_mail_rétention(risque, dernier_ticket)
+         rédiger_mail_rétention(risque=risque)
 
   RESCUE détecter_churn:
     -> abort("Impossible de détecter le churn — vérifier le format du CSV")
 
 RESOURCES
-  prefer:     quality
-  models:     [haiku, sonnet]
-  strategy:   escalate
   target:     claude-cli
-  lang:       python
+  models:     [haiku, sonnet]
+```
 
 ## The `.clio/` sidecar convention (v0.19+)
 
@@ -1452,10 +1361,7 @@ under `--mode strict`).
 `.clio/` is excluded from `_gather_skill_files` so importing a CLIO-emitted
 skill in `--mode infer` does not cheat by reading the stored source.
 
-**Single-file limitation (v0.19).** The v0.19 sidecar stores only the **entry**
-`.clio` file. Projects using cross-file imports (`FROM "lib.clio" IMPORT ...`)
-recover an `source.clio` that references files not present in the sidecar; the
-recovered source compiles only when the imported `.clio` files are also
-present on disk next to it. Multi-file sidecar recovery is tracked as issue
-[#67](https://github.com/Sandjab/clio/issues/67) for v0.20.
-```
+**Multi-file support (v0.22).** Since v0.22, the sidecar stores all source
+files (entry + imported). Projects using cross-file imports
+(`FROM "lib.clio" IMPORT ...`) are fully recoverable from the sidecar.
+The v0.19 single-file limitation (issue #67) is closed.

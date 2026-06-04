@@ -4,7 +4,7 @@
 
 ## What this project is
 
-A compiler that takes hybrid LLM/code programs written in a declarative language and emits executable projects. The language unifies deterministic code and stochastic LLM calls through three primitives: **STEP** (unit of work), **CONTRACT** (typed guarantee), and **FLOW** (composition). The compiler decides what runs as code and what runs as LLM, based on the `MODE` field (`exact`, `judgment`, `auto`).
+A compiler that takes hybrid LLM/code programs written in a declarative language and emits executable projects. The language unifies deterministic code and stochastic LLM calls through three primitives: **STEP** (unit of work), **CONTRACT** (typed guarantee), and **FLOW** (composition). Each STEP declares its `MODE` (`exact` or `judgment`): the compiler emits deterministic code for `exact` steps and LLM-call scaffolding for `judgment` steps. The author chooses the mode — the compiler does not decide, infer, or execute; it emits.
 
 Read `docs/LANGUAGE_SPEC.md` for the full language reference before writing any code.
 
@@ -107,13 +107,16 @@ Read `docs/COMPILATION_TARGETS.md` for the per-target contracts and `docs/manual
 clio/
   parser/             # .clio source → AST
     lexer.py
+    tokens.py
     parser.py
+    expressions.py
     ast_nodes.py
   ir/                 # AST → IR graph (validated, target-independent)
     builder.py        # build the FlowGraph (4 passes)
     graph.py          # FlowGraph + FlowIR / StepIR / FlowCallIR
     resolver.py       # cross-file FROM…IMPORT resolution (v0.18)
-    contracts.py      # contract validation
+    contracts.py      # type_to_json_schema (CONTRACT shape → JSON Schema)
+    types.py          # IR type nodes
   emitters/           # IR → target project (6 emitters)
     base.py           # abstract emitter interface
     claude_cli.py     # target: claude-cli
@@ -127,11 +130,16 @@ clio/
     _claude_skill_helpers.py, _claude_cli_helpers.py, _shared_utils.py,
     _go_helpers.py, _go_flow_renderer.py, _go_step_renderers.py, _go_runtime_templates.py
   runtime/            # snippets copied verbatim into emitted Python projects
-    cache.py, logging.py, rest.py, sql.py, mcp_client.py
+    cache.py, logging.py, rest.py, sql.py, mcp_client.py, substitute.py, validate.py
   prompts/            # LLM system prompts loaded by gen/import (v0.19)
   nl_to_clio.py       # NL → .clio   (clio gen)
   skill_to_clio.py    # skill → .clio (clio import, v0.19)
   cli.py              # command-line entry point
+  __main__.py         # `python -m clio` module entry point
+  keywords.py         # the single keyword/token enum (no magic strings)
+  diagnostics.py      # diagnostics + error formatting
+  graph_render.py     # FLOW rendering for `clio graph` (Mermaid / DOT / HTML)
+  _llm_validation.py  # shared validation helpers for gen/import LLM output
 tests/
   fixtures/           # sample .clio files
   test_parser.py
@@ -159,7 +167,7 @@ docs/
 - Multi-LLM routing logic in the compiler. The emitter writes the scaffolding; the runtime decides.
 - A package registry or plugin system.
 - A VS Code extension or LSP server.
-- Dependencies on Guidance, Outlines, or Instructor. Contract validation for API-based targets is trivial (JSON Schema + Pydantic). These libs become relevant only for `target: local` with open-source models. Keep a `ContractValidator` interface in the emitter for future pluggability.
+- Dependencies on Guidance, Outlines, or Instructor. Contract validation for API-based targets is trivial (JSON Schema + Pydantic). These libs become relevant only for `target: local` with open-source models — at which point a pluggable validator interface would be the natural seam (none is built today).
 
 (`clio gen` — natural language → `.clio` — and `clio import` — skill → `.clio` — are both shipped. Their LLM-assisted paths live in `clio/nl_to_clio.py` and `clio/skill_to_clio.py`; they are CLI helpers, not part of the compiler core.)
 

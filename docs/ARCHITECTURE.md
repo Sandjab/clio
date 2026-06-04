@@ -8,12 +8,11 @@ flowchart LR
     lex --> tok["Token stream"]
     tok --> psr["Parser<br/><sub>parser/parser.py</sub>"]
     psr --> ast["AST<br/><sub>parser/ast_nodes.py</sub>"]
-    ast --> rsv["Resolver (v0.18)<br/><sub>ir/resolver.py — FROM…IMPORT,<br/>EXPOSE/INTERNAL, alpha-rename</sub>"]
-    rsv --> bld["IR Builder<br/><sub>ir/builder.py</sub>"]
+    ast --> rsv["Resolver (v0.18)<br/><sub>ir/resolver.py — FROM…IMPORT,<br/>EXPOSE/INTERNAL validation</sub>"]
+    rsv --> bld["IR Builder<br/><sub>ir/builder.py — flatten +<br/>alpha-rename, then build</sub>"]
     bld --> ir["IR Graph<br/><sub>ir/graph.py</sub>"]
-    ir --> opt["Optimizer<br/><sub>ir/optimizer.py (future)</sub>"]
-    opt --> emt["Emitter<br/><sub>emitters/{claude_cli,python,<br/>mcp_server,langgraph,claude_skill}.py</sub>"]
-    emt --> out["Target project<br/><sub>per target: run.sh / Python pkg /<br/>MCP server / StateGraph / SKILL.md +<br/>.clio/ sidecar on claude-skill (v0.19)</sub>"]
+    ir --> emt["Emitter<br/><sub>emitters/{claude_cli,python,mcp_server,<br/>langgraph,claude_skill,go}.py</sub>"]
+    emt --> out["Target project<br/><sub>per target: run.sh / Python pkg /<br/>MCP server / StateGraph / SKILL.md +<br/>.clio/ sidecar on claude-skill (v0.19) /<br/>Go module</sub>"]
 ```
 
 ### Layer 1: Parser (source → AST)
@@ -24,7 +23,7 @@ The parser is a hand-written recursive descent parser. No parser generators (PEG
 
 **Parser** (`parser/parser.py`): consumes tokens and produces an AST. Each grammar rule maps to one method. Errors reference the source line number.
 
-**AST** (`parser/ast_nodes.py`): frozen dataclasses. One node type per declaration (StepNode, ContractNode, FlowNode, ResourcesNode) and per control structure (ForEachNode, WhileNode, IfNode, MatchNode).
+**AST** (`parser/ast_nodes.py`): frozen dataclasses. One node type per declaration (`StepDecl`, `ContractDecl`, `FlowDecl`, `ResourcesDecl`) and per control structure (`ForEachBlock`, `WhileBlock`, `IfBlock`, `MatchBlock`). The suffix is always `Decl` or `Block` — never `Node`.
 
 ### Layer 2: IR (AST → executable graph)
 
@@ -32,77 +31,58 @@ The IR Builder transforms the AST into a directed graph of steps with typed edge
 
 - Contracts are resolved: each step's GIVES is checked against the CONTRACT it references
 - Type checking happens: a step's TAKES must match the GIVES of the step feeding into it
-- Implicit steps are inserted: e.g., summarize steps for context overflow
-- MODE inference runs: `auto` steps are classified as `exact` or `judgment`
-- LANG inference runs: `auto` lang steps get a language assigned based on data size heuristics
 
-**Graph** (`ir/graph.py`): the flow as a DAG of StepIR nodes. Each node holds its resolved contract, inferred mode, inferred lang, and connections. Since v0.17, `FlowGraph` also carries `flows` (every parsed `FlowIR`, not only the main one) and `exposed_flow_names` (those not called by a sibling — used by the `mcp-server` emitter to decide which FLOWs surface as tools). A call that resolves to a signed FLOW (one with both `TAKES` and `GIVES`) produces a `FlowCallIR` node — distinct from the regular `CallIR` for STEP invocations.
+`MODE` and `LANG` are carried through verbatim as parsed — the builder does not infer them, and it inserts no implicit steps.
 
-**Contracts** (`ir/contracts.py`): validates SHAPE definitions against Pydantic models and JSON Schema. Generates the validation code/schema that emitters will embed.
+**Graph** (`ir/graph.py`): the flow as a DAG of StepIR nodes. Each node holds its resolved contract, mode, lang, and connections. Since v0.17, `FlowGraph` also carries `flows` (every parsed `FlowIR`, not only the main one) and `exposed_flow_names` (those not called by a sibling — used by the `mcp-server` emitter to decide which FLOWs surface as tools). A call that resolves to a signed FLOW (one with both `TAKES` and `GIVES`) produces a `FlowCallIR` node — distinct from the regular `CallIR` for STEP invocations.
 
-**Optimizer** (`ir/optimizer.py`): runs passes on the IR graph:
-- **Batching**: merges consecutive `judgment` steps without interleaving `exact` steps into a single LLM call
-- **Context budgeting**: estimates token cost per step, inserts summarize steps if needed
-- **Model routing**: assigns a model tier to each `judgment` step based on complexity heuristics
+**Contracts** (`ir/contracts.py`): a single `type_to_json_schema` function that converts a CONTRACT's type expression into JSON Schema (an ASSERT predicate, when present, rides along as `x-clio-assert`). No Pydantic and no code generation happen at this layer — emitters embed the schema, and the `python` target's Pydantic models are produced by that emitter.
 
-The IR build is itself a multi-pass process. Since v0.2 (`fallback(step)` resolution), `build_ir` runs four passes in order:
+The IR build runs in passes. For the multi-file case, `build_ir` first validates and flattens the parsed files (resolver functions + `_flatten_to_program`, see [Multi-file resolution](#multi-file-resolution-v018)); then `_build_ir_single` builds the graph:
 
-```mermaid
-flowchart TD
-    p1["Pass 1<br/>build StepIRs<br/><sub>cache + on_fail captured;<br/>fallback_step = None</sub>"] --> p2
-    p2["Pass 2<br/>_resolve_fallbacks<br/><sub>name → StepIR ref;<br/>TAKES/GIVES compat check</sub>"] --> p3
-    p3["Pass 3<br/>_detect_fallback_cycles<br/><sub>DFS white/gray/black</sub>"] --> p4
-    p4["Pass 4<br/>build flow + resources<br/><sub>type-check inter-step edges</sub>"]
-```
+- builds each CONTRACT into a JSON-Schema-backed `ContractIR`
+- **Pass 1** — build `StepIR`s (fallback refs left as placeholders; every TAKES/GIVES contract reference is checked)
+- **Pass 2** — `_resolve_fallbacks`: resolve `ON_FAIL fallback(step)` references to `StepIR`s and check TAKES/GIVES compatibility
+- **Pass 3** — `_detect_fallback_cycles`: DFS (white/gray/black) over the fallback graph
+- **Pass 4** — build each FLOW (`_build_flow`), type-checking inter-step edges, guarded by `_detect_flow_call_cycles` against cyclic sub-flow calls
 
 Each pass either succeeds or raises `IRBuildError` with a `<file>:<line>:<col>` message; later passes never see a partial graph.
 
 ### Multi-file resolution (v0.18)
 
-Before the IR Builder runs, a separate **Resolver** phase resolves all cross-file
-`FROM ... IMPORT` declarations. The resolver runs in four passes:
+`clio compile` first calls `resolve_imports` (`ir/resolver.py`) on the entry file: it walks the `FROM ... IMPORT` graph, parses every reachable file, and returns a `dict[Path, Program]` (one parsed `Program` per file), detecting import cycles along the way.
 
-```mermaid
-flowchart TD
-    d["Pass 1 — Discovery<br/><sub>DFS walk of FROM…IMPORT declarations;<br/>cycle detection (E_RES_001)</sub>"] --> v
-    v["Pass 2 — Per-file validation<br/><sub>path syntax checks (E_IMP_001/002);<br/>symbol existence + exposure checks<br/>(E_RES_002/003/004)</sub>"] --> e
-    e["Pass 3 — Exposed-set computation<br/><sub>build each file's EXPOSE set;<br/>resolve re-exports (bare EXPOSE &lt;name&gt;);<br/>E_VIS_001/002/003/004</sub>"] --> i
-    i["Pass 4 — Import validation<br/><sub>confirm all imported names are exposed;<br/>duplicate-import detection (E_RES_005/006)</sub>"]
-```
+`build_ir` then runs the resolver's validation functions over that dict — `validate_per_file` (path/symbol/exposure checks), `compute_exposed_sets` (each file's `EXPOSE` set, resolving bare `EXPOSE <name>` re-exports), and `validate_imports` (every imported name is actually exposed; duplicate-import detection) — and `_flatten_to_program` (in `ir/builder.py`) merges the reachable files into a single alpha-renamed `Program`. Internal (non-exposed) symbols are prefixed `{file_stem}__{name}` to avoid collisions; exposed names keep their original form. RESOURCES and TEST blocks come from the entry file only.
 
-After the four passes, the resolver produces an **alpha-renamed, merged `Program`**
-that the IR Builder receives as a single flat namespace. Each imported symbol is
-prefixed with a canonical file-derived namespace (`<slug>__<name>`) to avoid
-collisions; references in the importing file's AST are rewritten to use the
-renamed form transparently. The IR Builder and all emitters are unaware of the
-cross-file origin: they see a standard single-file program.
+After flattening, the IR Builder and all emitters are unaware of the cross-file origin: they see a standard single-file program. The alpha-renaming preserves CONTRACT shapes structurally — a `List<Article>` reference in `main.clio` that resolves to `schemas.clio::Article` becomes `List<schemas__Article>` in the merged namespace, with an identical `SHAPE` declaration carried over.
 
-The alpha-renaming means imported CONTRACT shapes are structurally preserved —
-a `List<Article>` reference in `main.clio` that resolves to `schemas.clio::Article`
-becomes `List<schemas__Article>` in the merged namespace, with an identical `SHAPE`
-declaration carried over.
-
-**Module:** `clio/ir/resolver.py` — single module orchestrating the four passes
-above. It is invoked by `clio/ir/builder.py` before the IR build proper.
+**Ownership:** `resolve_imports` is invoked by `clio/cli.py`; the per-file validation, exposed-set computation, import validation, and the flatten/alpha-rename all run inside `build_ir` (the validation functions live in `ir/resolver.py`, the flatten in `ir/builder.py`).
 
 ### Layer 3: Emitters (IR → target project)
 
-Each target is a separate emitter class inheriting from `BaseEmitter`. An emitter takes an optimized IR graph and writes files to disk.
+Each target is a separate emitter class inheriting from `BaseEmitter`. An emitter takes an IR graph and writes files to disk.
 
 **BaseEmitter** (`emitters/base.py`): abstract class defining the interface:
 ```python
 class BaseEmitter(ABC):
     @abstractmethod
-    def emit(self, graph: FlowGraph, output_dir: Path) -> None: ...
+    def emit(
+        self,
+        graph: FlowGraph,
+        output_dir: Path,
+        *,
+        source_path: Path | None = None,
+        sources: tuple[Path, ...] | None = None,
+    ) -> None: ...
 ```
 
-Emitters are pure functions of the IR. They never import from each other. Adding a new target = adding a new file in `emitters/`.
+Emitters depend only on the IR — never on the parser or builder internals. They are **not**, however, strictly isolated from one another: several share rendering logic through `_*_helpers` modules (e.g. `_python_helpers`, `_mcp_helpers`, `_go_helpers`), and the `langgraph` emitter delegates to `PythonEmitter` for the per-step code it reuses. Adding a new target = adding a new emitter file in `emitters/` (plus any helper module it needs).
 
 ## Key design decisions
 
 ### Why frozen dataclasses for the AST?
 
-Immutability prevents accidental mutation during optimization passes. Each pass produces a new graph rather than modifying in place. This makes debugging trivial: you can diff any two stages.
+Immutability prevents accidental mutation during the IR build passes. Each pass produces new nodes rather than modifying in place. This makes debugging trivial: you can diff any two stages.
 
 ### Why not use an existing framework?
 
@@ -110,19 +90,19 @@ This project IS the framework. Depending on LangChain/DSPy/LangGraph would coupl
 
 ### Why hand-written parser?
 
-The grammar has ~20 keywords and ~10 rules. A parser generator would add a dependency, obscure error messages, and make the lexer/parser harder to modify. We can always migrate later if the grammar grows.
+The `keywords.py` enum has ~100 members, but the rule set is small and regular. A parser generator would add a dependency, obscure error messages, and make the lexer/parser harder to modify. We can always migrate later if the grammar grows.
 
 ### Why Pydantic for contracts?
 
-Pydantic v2 compiles to JSON Schema natively. JSON Schema is the validation format that LLM structured outputs already use (Anthropic tool_use, OpenAI function calling). Pydantic is the bridge between the language's type system and the LLM's output constraints.
+Pydantic v2 compiles to JSON Schema natively. JSON Schema is the validation format that LLM structured outputs already use (Anthropic tool_use, OpenAI function calling). Pydantic is the bridge between the language's type system and the LLM's output constraints in the emitted `python` project.
 
 ### Why not depend on Guidance, Outlines, or Instructor?
 
 These libraries solve the problem of constraining a *single LLM call* — Guidance and Outlines at the token level, Instructor at the API level with retry. They are excellent at what they do, but they operate one layer below us.
 
-Our CONTRACT primitive needs validation, not constrained decoding. For API-based targets (`claude-cli`, `python`), validation is trivial: JSON Schema check or Pydantic model. No need for a dependency. For local model targets (future), Outlines or Guidance would be genuinely necessary to constrain at the tokenizer level — impossible to rewrite reasonably.
+Our CONTRACT primitive needs validation, not constrained decoding. For API-based targets (`claude-cli`, `python`, `mcp-server`, `go`), validation is trivial: a JSON Schema check or a Pydantic model. No dependency needed. For local-model targets (future), Outlines or Guidance would be genuinely necessary to constrain at the tokenizer level.
 
-Strategy: **no dependency on day 1, pluggable interface for day N.** The emitter uses a `ContractValidator` abstraction. Early implementations are inline (jsonschema, Pydantic). Future local-model emitters can plug in Outlines or Guidance behind the same interface.
+Strategy: **no dependency today, keep the door open for day N.** Validation is currently inline per target — JSON Schema for API-based targets, Pydantic v2 in the emitted `python` project. There is no `ContractValidator` abstraction in the compiler yet; if local-model targets ever need token-level constraints, a pluggable validator interface (behind which Outlines or Guidance could sit) is the natural place to add one.
 
 This follows principle #2: minimum code that solves the problem, nothing speculative.
 
@@ -132,5 +112,6 @@ This follows principle #2: minimum code that solves the problem, nothing specula
 - **It does not call LLMs.** Emitters generate prompts and schemas. The runtime calls the LLM.
 - **It does not manage state at runtime.** It generates the state-passing scaffolding. The runtime manages the actual state.
 - **It does not constrain LLM decoding.** It emits schemas. The runtime (or a lib like Outlines) enforces them.
+- **It does not infer, optimize, or route.** `MODE`/`LANG` are taken as written; there is no optimizer pass, no batching, no model routing, no implicit step insertion.
 
 The compiler is a pure function: `.clio` in, project out.
