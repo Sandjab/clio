@@ -73,9 +73,9 @@ def validate_per_file(
 ) -> None:
     """Phase 2: per-file integrity checks.
 
-    - EXPOSE FLOW must declare TAKES and GIVES (E_VIS_003).
+    - EXPOSE FLOW must declare TAKES and GIVES.
     - The same name cannot be both EXPOSE FLOW and EXPOSE CONTRACT
-      in the same file (E_VIS_004).
+      in the same file.
     - RESOURCES blocks only allowed in the entry file (E_MOD_001).
     - TEST blocks only allowed in the entry file (E_MOD_002).
 
@@ -195,10 +195,10 @@ def validate_imports(
     """Phase 4: every FROM ... IMPORT X resolves to an exposed symbol.
 
     Distinguishes:
-      E_RES_003 — symbol is declared in the target file but not exposed.
-      E_RES_004 — symbol is not declared in the target file at all.
-      E_RES_005 — same local name imported from two files (or twice from same file).
-      E_RES_006 — imported name clashes with a local FLOW/CONTRACT declaration.
+      - symbol is declared in the target file but not exposed.
+      - symbol is not declared in the target file at all.
+      - same local name imported from two files (or twice from same file).
+      - imported name clashes with a local FLOW/CONTRACT declaration.
     """
     for path, program in parsed.items():
         seen_imports: dict[str, str] = {}  # local_name → first source path string
@@ -213,7 +213,7 @@ def validate_imports(
                         all_declared.add(d.name)
             for item in imp.items:
                 local_name = item.alias or item.name
-                # E_RES_005: duplicate local name across import statements
+                # duplicate local name across import statements
                 if local_name in seen_imports:
                     raise CompileError(
                         f"{path}:{item.line}:{item.col}: "
@@ -221,7 +221,7 @@ def validate_imports(
                         f"use AS to disambiguate"
                     )
                 seen_imports[local_name] = imp.path
-                # E_RES_003 / E_RES_004: symbol must be exposed
+                # symbol must be exposed
                 if item.name in child_exposed:
                     continue
                 if item.name in all_declared:
@@ -234,7 +234,7 @@ def validate_imports(
                     f"{item.name!r} not found in {imp.path!r}"
                 )
 
-        # E_RES_006: imported name clashes with a local FLOW/CONTRACT/STEP declaration.
+        # imported name clashes with a local FLOW/CONTRACT/STEP declaration.
         # StepDecl matters because resolve_name (builder.py) checks imported_scope
         # before local_renames, so an import would silently shadow a local STEP.
         local_decl_names: set[str] = set()
