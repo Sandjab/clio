@@ -19,7 +19,7 @@ STEP classify_ticket
 |---|---|---|
 | `exact` | Deterministic — code, shell, REST call, anything with a name the compiler can reach | "Load this CSV", "Call this API", "Run this regex" |
 | `judgment` | Stochastic — invoked via an LLM | "Summarise this", "Decide the category", "Score relevance" |
-| `auto` | Compiler decides (parsed, **not yet implemented**) | Phase-2 feature; today acts like the explicit form |
+| ~~`auto`~~ | Not implemented — rejected at parse time | Phase-2 placeholder; use `exact` or `judgment` |
 
 **Rule of thumb:** if a senior engineer can name the function that does it, it's `exact`. If they'd say "ask the model", it's `judgment`.
 
@@ -107,13 +107,7 @@ A contract turns a stochastic LLM output into something deterministic code can c
 
 ```
 CONTRACT classified_ticket
-  SHAPE:  {
-    id:            int,
-    category:      enum(bug|billing|feature|account|other),
-    priority:      enum(low|medium|high|urgent),
-    team:          enum(engineering|finance|product|support),
-    urgency_score: float
-  }
+  SHAPE: {id: int, category: enum(bug|billing|feature|account|other), priority: enum(low|medium|high|urgent), team: enum(engineering|finance|product|support), urgency_score: float}
   ASSERT: 0.0 <= urgency_score <= 1.0
 ```
 
