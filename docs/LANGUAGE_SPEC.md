@@ -42,15 +42,15 @@ Adds OpenProse-inspired surface features without touching execution semantics:
 
 ## v0.2 changes
 
-Adds per-step **`impl:`** block (EXACT implementations: code, REST, shell, SQL, MCP tool) and per-step **`invoke:`** block (JUDGMENT invocations: CLI, API). Both are optional and backward-compatible — v0.1 files parse unchanged. Defaults can be set at the `RESOURCES` level and overridden per step.
+Adds per-step **`impl:`** block (EXACT implementations: code, REST, shell, SQL, MCP tool) and per-step **`invoke:`** block (JUDGMENT invocations: CLI, API). Both are optional and backward-compatible — v0.1 files parse unchanged.
 
 Also lifts `FOR EACH <var> IN <collection>:` from spec-only to implemented control flow.
 
 ### Implementation status (as of v0.2)
 
-| Feature | Parser | IR | python target | claude-cli target | mcp-server target | go target (v0.20) |
-|---|---|---|---|---|---|---|
-| `LANG:` per step | ✅ | ✅ | ignored (still emits Python on every EXACT) | ignored | ignored | only `go` or `auto` accepted (E_GO_001) |
+| Feature | Parser | IR | python target | claude-cli target | mcp-server target |
+|---|---|---|---|---|---|
+| `LANG:` per step | ✅ | ✅ | ignored (still emits Python on every EXACT) | ignored | ignored |
 | `impl.mode: code` | ✅ | ✅ | (default behavior — Python stub) | (default behavior — Python stub) | (default behavior — Python stub) |
 | `impl.mode: rest` (`method`/`url`/`response_path`/`timeout`) | ✅ | ✅ | ✅ `requests.request(...)` | ✅ standalone Python step with `requests` | ✅ `requests.request(...)` |
 | `impl.rest.query` / `impl.rest.headers` (templated dicts) | ✅ | ✅ | ✅ `params=` / `headers=` with `${var}` + `env:NAME` | ✅ same | ✅ same |
@@ -73,6 +73,8 @@ Also lifts `FOR EACH <var> IN <collection>:` from spec-only to implemented contr
 | `MATCH x: CASE ...` (v0.7) | ✅ | ✅ | ✅ `match/case` | ❌ rejected | ✅ `match/case` |
 | `WHILE <cond> MAX N:` (v0.7) | ✅ | ✅ | ✅ bounded `for/break` | ❌ rejected | ✅ bounded `for/break` |
 | `FLOW.TAKES` / `FLOW.GIVES` (v0.16) | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+(per-target status for all six targets, including `go`, `claude-skill`, and `langgraph`: see [docs/manual/04-targets.md](manual/04-targets.md#cross-target-feature-support))
 
 Where the table says *rejected at compile time*, the emitter raises a clear `ValueError` / `NotImplementedError` rather than producing silent or broken code.
 
@@ -163,7 +165,7 @@ Inline function in the target language.
 ```
 STEP parse_csv
   MODE:    exact
-  TAKES:   file: Path
+  TAKES:   file: str
   GIVES:   rows: List<Row>
   impl:
     mode:  code
@@ -271,7 +273,7 @@ Shell command with templated arguments. Output captured from stdout.
 ```
 STEP extract_pdf
   MODE:    exact
-  TAKES:   file: Path
+  TAKES:   file: str
   GIVES:   text: str
   impl:
     mode:    shell
@@ -401,7 +403,7 @@ STEP search_docs
 
 ### JUDGMENT invocation: `invoke:` block
 
-The `invoke:` block describes how a `JUDGMENT` step calls its LLM. It is optional; if omitted, falls back to `RESOURCES.invoke` (or compiler defaults if neither is set).
+The `invoke:` block describes how a `JUDGMENT` step calls its LLM. It is optional; if omitted, the emitter uses built-in defaults.
 
 #### `invoke.mode: cli`
 
@@ -432,9 +434,9 @@ STEP classify
   invoke:
     mode:        api
     protocol:    openai                    # anthropic | openai | bedrock | vertex
-    base_url:    http://litellm:4000       # optional for native providers; required for proxies / local servers
-    model:       gemini-1.5-pro            # opaque — endpoint validates
-    auth:        env:LITELLM_KEY           # env:VAR | aws-profile:NAME | gcp-sa:PATH | none
+    base_url:    "http://litellm:4000"     # optional for native providers; required for proxies / local servers
+    model:       "gemini-1.5-pro"          # opaque — endpoint validates
+    auth:        "env:LITELLM_KEY"          # "env:VAR" | "aws-profile:NAME" | "gcp-sa:PATH" | none
     temperature: 0.0                       # optional
     max_tokens:  1024                      # optional
     timeout:     60s                       # optional
@@ -474,8 +476,6 @@ FLOW <name>
 **Semantics of `TAKES`:**
 - Declared names are seeded into the chain's input scope before walking. This allows the chain's first item to be `FOR EACH`, `IF`, `WHILE`, or `MATCH` over an external input — these forms previously failed to compile because the auto-promote path only inspected first-position `StepCall`s.
 - When `TAKES:` is declared, the first-step `StepCall` auto-promote (v0.15.1) is **disabled** for this FLOW. Any identifier kwarg in the chain that is not produced upstream and is not in `TAKES` is rejected at compile time with `line:col`.
-- `clio compile --kwargs '{...}'` validates declared inputs structurally at parse time, not runtime.
-
 **Semantics of `GIVES`:**
 - Each declared field must match a field present in the *effective state* after the last chain item executes, with a structurally-equivalent type (subset coverage: the last step may produce additional state fields; only the declared subset is exposed externally).
 - A missing field in the state — or a type mismatch — is rejected at compile time with `line:col`.
@@ -758,8 +758,6 @@ Flow-level resources and defaults.
 RESOURCES
   target:       claude-cli | python | mcp-server | langgraph | claude-skill | go   # required
   models:       [<model>, <model>, ...]         # required for the claude-cli target
-  impl:         <impl-block>                    # default impl for all exact steps in this flow
-  invoke:       <invoke-block>                  # default invoke for all judgment steps in this flow
   mcp_servers:  {<name>: <server-spec>, ...}    # MCP servers callable from impl.mcp_tool steps
   databases:    {<name>: <db-spec>, ...}        # databases callable from impl.sql steps
 ```
@@ -855,33 +853,6 @@ RESOURCES
 - Mixing extra unknown fields (e.g. `connection:` from the v0.2 inline form, `port:`, `host:`) is a parse-time error — the v0.11 form takes only `driver` and `url`.
 
 **Cross-target invariant:** the SQL string, the `:name` binding mapping, the auto-mapping rule (column ↔ `GIVES` field), and the DML-vs-SELECT detection are identical across `python` and `mcp-server` — only the connection caching layer differs.
-
-#### Override semantics for `impl` and `invoke`
-
-`RESOURCES.impl` and `RESOURCES.invoke` provide flow-wide defaults. A step's own `impl:` or `invoke:` block performs a **shallow merge** over the corresponding default, key by key. Nested objects (e.g. `headers`, `args`) are *replaced* on conflict, not deep-merged.
-
-Example. If
-
-```
-RESOURCES
-  invoke:
-    mode:     api
-    protocol: anthropic
-    model:    haiku
-    temperature: 0.0
-```
-
-and a step declares
-
-```
-  invoke:
-    model: opus
-    max_tokens: 4096
-```
-
-the effective configuration is `{mode: api, protocol: anthropic, model: opus, temperature: 0.0, max_tokens: 4096}`.
-
-A step may also switch `mode` entirely — e.g. one step uses `mode: api` while the rest of the flow uses `mode: cli` — at which point the only inherited keys are those that make sense in both modes (typically none, so an explicit override of `mode` should re-declare all required fields).
 
 ## Control flow
 
@@ -1093,6 +1064,8 @@ same STEP is a compile error (redundant double-abort).
   `def _rescue_<step>(state)` helper containing the body. `abort` is
   rendered as `raise FlowAborted("msg")`.
 - **mcp-server** ✓ — async mirror with `_session=_session` threading.
+- **claude-skill** ✓ — RESCUE body emitted as a helper script invoked from main.
+- **go** ✓ — RESCUE body emitted as a `rescue<Step>()` helper func (v0.23).
 - **langgraph** ✗ — rejects at compile time. Cyclic edges, state
   reducers, and multi-step branches all need to land together; planned
   for the multi-step branches sprint.

@@ -16,7 +16,7 @@
 [![Version](https://img.shields.io/badge/Version-v0.23.0-green.svg)](https://github.com/Sandjab/clio/releases/tag/v0.23.0)
 [![Visitors](https://komarev.com/ghpvc/?username=sandjab-clio&label=Visitors&color=0e75b6&style=flat)](https://github.com/Sandjab/clio)
 
-CLIO is a declarative language that compiles hybrid LLM/code programs into executable projects. You describe *what* you want — the compiler decides *what runs as code and what runs as an LLM*, then emits a project you can run directly.
+CLIO is a declarative language that compiles hybrid LLM/code programs into executable projects. You describe *what* you want and mark each step `exact` (deterministic code) or `judgment` (needs an LLM) — the compiler emits a project you can run directly.
 
 ```
 STEP detect_churn
@@ -24,7 +24,6 @@ STEP detect_churn
   GIVES:     risks: List<{client: str, risk: enum(low|mid|high), reason: str}>
   MODE:      judgment
   CACHE:     ttl(24h)
-  VALIDATE:  each risk.reason cites a column from customers
   ON_FAIL:   retry(3) then escalate
 ```
 
@@ -38,19 +37,19 @@ Existing tools each solve a piece: DSPy optimizes prompts, LangGraph orchestrate
 
 Three primitives:
 
-- **STEP** — an atomic unit of work. Declares inputs, outputs, and a `MODE`: `exact` (deterministic code), `judgment` (needs an LLM), or `auto` (compiler decides).
-- **CONTRACT** — a typed shape guarantee (`SHAPE`, `ASSERT`, `CONFIDENCE`) that makes stochastic LLM output composable with deterministic code downstream.
+- **STEP** — an atomic unit of work. Declares inputs, outputs, and a `MODE`: `exact` (deterministic code) or `judgment` (needs an LLM).
+- **CONTRACT** — a typed shape guarantee (`SHAPE`, `ASSERT`) that makes stochastic LLM output composable with deterministic code downstream.
 - **FLOW** — a directed graph of steps with control flow (`FOR EACH`, `WHILE`, `IF`, `MATCH/CASE`) and failure strategies (`retry`, `fallback`, `escalate`).
   - `FOR EACH ... PARALLEL AS <name>:` — fan a STEP over a collection in parallel, collect typed results.
 
-A compiler parses `.clio` files into an intermediate representation, optimizes it (batching, context budgeting, model routing), and emits a runnable project for a chosen target.
+A compiler parses `.clio` files into an intermediate representation, validates and type-checks it, and emits a runnable project for a chosen target.
 
 ```mermaid
 flowchart LR
     src[".clio source"] --> parse["Parser → AST"]
     parse --> ir["IR Builder<br/><sub>resolve contracts, fallbacks,<br/>type-check edges</sub>"]
     ir --> emit["Emitter<br/><sub>per target</sub>"]
-    emit --> proj["Runnable project<br/><sub>bash / Python / Docker / ...</sub>"]
+    emit --> proj["Runnable project<br/><sub>bash / Python / Go / MCP server / ...</sub>"]
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full pipeline and IR build passes.
@@ -67,7 +66,8 @@ The same `.clio` source compiles to different targets:
 | `langgraph`    | LangGraph StateGraph (single-step IF / MATCH branches, sequential chain only — multi-step branches deferred) |
 | `claude-skill` | Claude Code skill directory (`SKILL.md` + `scripts/` + `schemas/` + `prompts/`); LLM-host-orchestrated, no external runtime |
 | `go`           | Go module (`flow.Run` package + `cmd/<flow>/main.go`); single static binary, Anthropic judgment, goroutine-parallel FOR EACH |
-| `rust` / `docker` | *(planned)* not yet implemented; the emitter interface is target-agnostic, only the dispatch is missing |
+
+Additional targets (`rust`, `docker`) are planned but not yet implemented; the emitter interface is target-agnostic, so adding one requires only a new emitter module.
 
 ## Quick start
 
@@ -187,7 +187,7 @@ See [`examples/`](examples/) for the full set: `mvp.clio` (above), `entities.cli
 ```
 clio/
   parser/          # .clio source → AST
-  ir/              # intermediate representation, optimization
+  ir/              # intermediate representation (validated, type-checked)
   emitters/        # IR → target project
   cli.py           # entry point
 tests/

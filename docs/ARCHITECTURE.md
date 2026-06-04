@@ -34,9 +34,9 @@ The IR Builder transforms the AST into a directed graph of steps with typed edge
 
 `MODE` and `LANG` are carried through verbatim as parsed — the builder does not infer them, and it inserts no implicit steps.
 
-**Graph** (`ir/graph.py`): the flow as a DAG of StepIR nodes. Each node holds its resolved contract, mode, lang, and connections. Since v0.17, `FlowGraph` also carries `flows` (every parsed `FlowIR`, not only the main one) and `exposed_flow_names` (those not called by a sibling — used by the `mcp-server` emitter to decide which FLOWs surface as tools). A call that resolves to a signed FLOW (one with both `TAKES` and `GIVES`) produces a `FlowCallIR` node — distinct from the regular `CallIR` for STEP invocations.
+**Graph** (`ir/graph.py`): the flow as a DAG of StepIR nodes. Each node holds its resolved contract, mode, lang, and connections. Since v0.17, `FlowGraph` also carries `flows` (every parsed `FlowIR`, not only the main one) and `exposed_flow_names` (those marked `EXPOSE` in the entry file — used by the `mcp-server` emitter to decide which FLOWs surface as tools). A call that resolves to a signed FLOW (one with both `TAKES` and `GIVES`) produces a `FlowCallIR` node — distinct from the regular `CallIR` for STEP invocations.
 
-**Contracts** (`ir/contracts.py`): a single `type_to_json_schema` function that converts a CONTRACT's type expression into JSON Schema (an ASSERT predicate, when present, rides along as `x-clio-assert`). No Pydantic and no code generation happen at this layer — emitters embed the schema, and the `python` target's Pydantic models are produced by that emitter.
+**Contracts** (`ir/contracts.py`): a single `type_to_json_schema` function that converts a CONTRACT's SHAPE type expression into JSON Schema. The IR Builder (`builder.py`) then attaches the ASSERT predicate (when present) as `x-clio-assert` on the schema. No Pydantic and no code generation happen at this layer — emitters embed the schema, and the `python` target's Pydantic models are produced by that emitter.
 
 The IR build runs in passes. For the multi-file case, `build_ir` first validates and flattens the parsed files (resolver functions + `_flatten_to_program`, see [Multi-file resolution](#multi-file-resolution-v018)); then `_build_ir_single` builds the graph:
 
@@ -76,7 +76,7 @@ class BaseEmitter(ABC):
     ) -> None: ...
 ```
 
-Emitters depend only on the IR — never on the parser or builder internals. They are **not**, however, strictly isolated from one another: several share rendering logic through `_*_helpers` modules (e.g. `_python_helpers`, `_mcp_helpers`, `_go_helpers`), and the `langgraph` emitter delegates to `PythonEmitter` for the per-step code it reuses. Adding a new target = adding a new emitter file in `emitters/` (plus any helper module it needs).
+Emitters depend only on the IR and shared type nodes (`TypeExpr` subtypes from `parser/ast_nodes`) — never on parser logic or builder internals. They are **not**, however, strictly isolated from one another: several share rendering logic through `_*_helpers` modules (e.g. `_python_helpers`, `_mcp_helpers`, `_go_helpers`), and the `langgraph` emitter delegates to `PythonEmitter` for the per-step code it reuses. Adding a new target = adding a new emitter file in `emitters/` (plus any helper module it needs).
 
 ## Key design decisions
 
