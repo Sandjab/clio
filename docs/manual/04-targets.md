@@ -98,6 +98,8 @@ Each `STEP` becomes a node function `(state: State) -> dict`. The State is a `Ty
 
 **Don't use when (v0):**
 - You need `FOR EACH` (any kind) — rejected at compile time. Send-API support is planned for v0.7. Use `--target python` today.
+- You need `WHILE` — rejected at compile time (cyclic edges + state reducers deferred to v0.8). Use `--target python` or `--target mcp-server`.
+- You need `impl.mode: sql` — rejected at compile time in v0.11. Use `--target python` or `--target mcp-server`.
 - You need `invoke.api.openai/bedrock/vertex` — only `anthropic` is wired in v0. Use `--target python`.
 - You need `invoke.mode: cli` — LangGraph runs server-side. Use `--target claude-cli`.
 - You need `ON_FAIL escalate` or `fallback(<step>)` — only `retry(N)` and `abort(...)` are wired in v0. Use `--target python` for the full retry chain.
@@ -159,7 +161,7 @@ You get a `go.mod`, a `contracts/` package (Go structs with `json` tags), `steps
 - You need OpenAI / Bedrock / Vertex (only `invoke.api.anthropic` is wired — E_GO_005, E_GO_003).
 - You need `impl.mode: sql / mcp_tool` (deferred — E_GO_009/010, tracked for v0.24).
 - You need a multi-GIVES sub-flow as a `FOR EACH PARALLEL` body (E_GO_006 — single-GIVES parallel and all sequential composition are supported).
-- You need `--from-step N` resume (deferred — E_GO_011).
+- You need `--from-step N` resume (not implemented — the Go binary re-runs the full flow without error).
 - You need structured JSONL logging (`CLIO_LOG=1`) — silent no-op; use `--target python`.
 
 See [`docs/COMPILATION_TARGETS.md`](../COMPILATION_TARGETS.md#target-go) for the full layout and refused-combo table.
@@ -190,7 +192,7 @@ See [`docs/COMPILATION_TARGETS.md`](../COMPILATION_TARGETS.md#target-go) for the
 | `FOR EACH PARALLEL` body = sub-flow (v0.17) | ❌ rejected | ✅ | ✅ asyncio.gather | ❌ rejected (v0; v0.7 via Send) | ⚠️ linear sub-flow only | ✅ single-GIVES, terminal-only (typed downstream consumption of the collector → v0.24; multi-GIVES → E_GO_006) |
 | mcp-server multi-tool (multi-FLOW source, v0.17) | n/a | n/a | ✅ one tool per uncalled signed FLOW | n/a | n/a | n/a |
 | `TEST` blocks (v0.15) | ⚠️ ignored | ✅ pytest emitted | ⚠️ ignored | ⚠️ ignored | ⚠️ ignored | ❌ E_GO_012 |
-| `--from-step N` resume | ❌ | ✅ | ❌ | ❌ (use LangGraph checkpointers) | ❌ | ❌ E_GO_011 |
+| `--from-step N` resume | ❌ | ✅ | ❌ | ❌ (use LangGraph checkpointers) | ❌ | ⚠️ not implemented (re-runs full flow) |
 | JSONL logging (`CLIO_LOG=1`) | ❌ | ✅ | ✅ | ⏸ delegated to LangSmith | ❌ | ⏸ silent no-op |
 | `clio graph --format html` | n/a (graph is target-independent) | n/a | n/a | n/a | n/a | n/a |
 
