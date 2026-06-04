@@ -11,7 +11,7 @@ clio compile <source.clio> --target <target> --output <dir>
 | Flag | Required | Default | Notes |
 |---|:-:|---|---|
 | `<source.clio>` | yes | — | Path to the `.clio` file. |
-| `--target` | yes | — | One of `claude-cli`, `python`, `mcp-server`, `langgraph`, `claude-skill`. |
+| `--target` | yes | — | One of `claude-cli`, `python`, `mcp-server`, `langgraph`, `claude-skill`, `go`. |
 | `--output` | yes | — | Directory to write the project into. Created if missing. **Overwrites** existing files. |
 | `--flow` | no  | — | (v0.15) Select a FLOW by name when the source declares more than one. Single-FLOW files don't need it. |
 
@@ -32,7 +32,7 @@ clio compile examples/entities.clio --target langgraph --output ./out
 clio check <source.clio>
 ```
 
-Parses + builds the IR. Exits 0 on success (silent), prints the error and exits 1 on failure.
+Parses + builds the IR. Exits 0 on success and prints `ok`, prints the error and exits 1 on failure.
 
 Use this in CI to fail fast on syntax/type errors before invoking compile.
 
@@ -91,7 +91,7 @@ clio gen --from-file desc.txt [--output flow.clio] [--model claude-sonnet-4-6]
 | `--output` | no | stdout | Where to write the generated `.clio`. |
 | `--model` | no | `claude-sonnet-4-6` | Anthropic model id. |
 
-The generated source is **always** validated by `check` before being written. If validation fails, the LLM is asked to fix it (up to 3 retries) before falling back to printing the raw output to stderr.
+The generated source is **always** validated by `check` before being written. If validation fails, the LLM is asked to fix it (1 retry) before falling back to printing the raw output to stderr.
 
 ## `import` — recover a `.clio` from a Claude Code skill (v0.19)
 
@@ -145,7 +145,7 @@ clio import ~/.claude/skills/my-skill --output my-skill.clio
 ## `doctor` — environment diagnostic (v0.15)
 
 ```
-clio doctor [<source.clio>]
+clio doctor [<source.clio>] [--flow <name>] [--migrate-v018] [--write]
 ```
 
 Checks the host before you compile or run. Without arguments: Python version,
@@ -154,9 +154,17 @@ compiles it and inspects `RESOURCES.mcp_servers` (commands on PATH) and
 `RESOURCES.databases` (URLs parsable, env vars present). Exits **1** if any
 check is FAIL, **0** otherwise.
 
+| Flag | Notes |
+|---|---|
+| `--flow <name>` | Select a FLOW by name when the source declares more than one. |
+| `--migrate-v018` | Propose (or apply with `--write`) the v0.17 → v0.18 `EXPOSE` migration. |
+| `--write` | Write migration changes back to the source file (use with `--migrate-v018`). |
+
 ```bash
 clio doctor                                  # generic checks
 clio doctor examples/critical_pipeline.clio  # plus flow-specific checks
+clio doctor examples/pipe.clio --migrate-v018         # propose EXPOSE migration
+clio doctor examples/pipe.clio --migrate-v018 --write # apply it in-place
 ```
 
 ## `status` — last run summary (v0.15)
@@ -166,9 +174,9 @@ clio status [--state-file PATH] [--log-file PATH] [--limit N]
 ```
 
 Reads a `python` target's `state.json` (cwd or `CLIO_STATE_FILE`) and tails
-the last N events from a `CLIO_LOG_FILE` JSONL log. Useful for "what was the
-last run, where did it stop, what events did it emit" without writing custom
-tooling.
+the last N events from a `CLIO_LOG_FILE` JSONL log. `--limit` defaults to **10**.
+Useful for "what was the last run, where did it stop, what events did it emit"
+without writing custom tooling.
 
 ```bash
 clio status

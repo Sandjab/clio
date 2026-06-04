@@ -6,11 +6,11 @@ Each target is an emitter module that transforms the IR graph into a runnable pr
 
 | Target | Status | Output | Why / Use case | IMPORT (v0.18) | Effort |
 |---|---|---|---|---|---|
-| `claude-cli` | Implemented | Claude Code project (bash + `claude -p` subprocess) | Prototype + reference target | ❌ E_CLI_001 | — |
+| `claude-cli` | Implemented | Claude Code project (bash + `claude -p` subprocess) | Prototype + reference target | ❌ (deferred) | — |
 | `python` | Implemented | Python package (Anthropic SDK + Pydantic v2) | Production-grade Python deployment | ✅ | — |
 | `claude-skill` | Implemented | Claude Code skill directory (`SKILL.md` + `scripts/` + `schemas/` + `prompts/`) | Turn a `.clio` into an LLM-host-orchestrated skill; no external runtime or API key needed after install | ✅ | — |
 | `mcp-server` | Implemented | MCP server, each FLOW exposed as a tool with sampling-based judgment | Native Anthropic ecosystem integration; turn a `.clio` into a structured MCP tool | ✅ | — |
-| `langgraph` | Candidate | LangGraph graph (nodes = STEPs, state = CONTRACTs) | Adoption by existing LangChain users; positions CLIO as a meta-language | ✅ | Medium |
+| `langgraph` | Implemented | LangGraph graph (nodes = STEPs, state = CONTRACTs) | Adoption by existing LangChain users; positions CLIO as a meta-language | ✅ | Medium |
 | `local` | Future | Same as `python`, with Ollama/vLLM | Offline / data-privacy constraints | ✅ (planned) | High (Outlines/Guidance) |
 | `rust` | Future | Cargo async project | Performance-critical `exact` steps | planned | High |
 | `go` | Implemented | Go module (package `flow.Run` + `cmd/<flow>/main.go`) | Single static binary, no runtime to install; concurrent `exact` steps via goroutines | ✅ | — |
@@ -57,7 +57,7 @@ Each target is an emitter module that transforms the IR graph into a runnable pr
 
 **Contract validation**: hooks in `.claude/hooks.json` run a validation script after each judgment step. Validation is a simple `python -m jsonschema` call against the emitted `.schema.json` — no external lib beyond the stdlib-adjacent `jsonschema` package. If validation fails, the hook triggers the ON_FAIL strategy.
 
-**Logging**: not instrumented in v0.4. Use `--target python` or
+**Logging**: not instrumented. Use `--target python` or
 `--target mcp-server` for observable runs.
 
 ---
@@ -134,7 +134,7 @@ state and skips items 1..N. Path via `CLIO_STATE_FILE` env var.
 
 Produces a runnable MCP (Model Context Protocol) server. Each `EXPOSE FLOW` in
 the entry file (v0.18+) becomes a tool registered with the official `mcp` Python
-SDK. The entry file must expose at least one FLOW (E_MCP_001). Prior to v0.18,
+SDK. The entry file must expose at least one FLOW (E_MCP_001; this guard fires only when `target: mcp-server` is declared in the source — it is bypassed when the target is selected via the `--target mcp-server` flag at compile time). Prior to v0.18,
 every signed FLOW not called by a sibling was implicitly exposed — sources relying
 on that heuristic must be migrated (see `docs/manual/06-migration-v018.md`).
 Judgment steps are handled by the MCP client via `sampling/createMessage` — the
@@ -382,7 +382,7 @@ The following are rejected at compile time with a clear error code and a pointer
 - A **multi-GIVES sub-flow used as a `FOR EACH PARALLEL` body** — a single typed slice collector cannot hold multiple GIVES fields (E_GO_006). Single-GIVES parallel and all sequential composition are supported.
 - `impl.mode: sql` — deferred to v0.24 (E_GO_009).
 - `impl.mode: mcp_tool` — deferred to v0.24 (E_GO_010).
-- `--from-step N` resume — deferred (E_GO_011).
+- `--from-step N` resume — not implemented (the Go binary re-runs the full flow without error; use `--target python` for incremental re-runs).
 - `TEST` blocks — deferred (E_GO_012).
 
 ### Inherited features
@@ -419,7 +419,7 @@ Structured JSONL logging is a silent no-op for the Go target (the `clio_runtime/
 
 ### Resume
 
-`--from-step N` resume is deferred (E_GO_011). The Go binary runs the full flow on each invocation. For incremental re-runs on a long pipeline, compile to `--target python` today.
+`--from-step N` resume is not implemented. The Go binary runs the full flow on each invocation without error. For incremental re-runs on a long pipeline, compile to `--target python` today.
 
 ---
 

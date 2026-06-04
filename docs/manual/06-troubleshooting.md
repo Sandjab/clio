@@ -4,11 +4,11 @@ Errors you're likely to hit, organised by where they happen in the pipeline.
 
 ## At parse time (`clio check` / `clio compile`)
 
-### `ParseError: target 'rust' is not supported (valid targets: claude-cli, python, mcp-server, langgraph, claude-skill)`
+### `ParseError: target 'rust' is not supported (valid targets: claude-cli, python, mcp-server, langgraph, claude-skill, go)`
 
 Your `RESOURCES target:` value isn't recognised. The valid values are listed in the error message itself.
 
-**Fix:** change `target: rust` to one of `claude-cli`, `python`, `mcp-server`, `langgraph`, or `claude-skill`. The `target:` field is informational — the `--target` CLI flag at compile time is what actually selects the emitter.
+**Fix:** change `target: rust` to one of `claude-cli`, `python`, `mcp-server`, `langgraph`, `claude-skill`, or `go`. The `target:` field is informational — the `--target` CLI flag at compile time is what actually selects the emitter.
 
 ### `ParseError: RESOURCES with target: claude-cli requires a 'models' field`
 
@@ -485,11 +485,11 @@ Use the bundled `scripts/_validate.py` to check the return value against `schema
 
 **Fix**: compile to `--target python` or `--target mcp-server`. MCP tool support for Go is tracked for v0.24.
 
-### E_GO_011 — `ValueError: target=go does not support --from-step resume`
+### Go `--from-step N` silently re-runs the whole flow
 
-**Cause**: you passed `--from-step N` to the Go binary (or tried to configure resume in the flow). State-file resume for the Go target is deferred.
+**Cause**: `--from-step N` resume is **not implemented** for the Go target. Unlike the Python target, the Go binary does not refuse the flag — it re-runs the full flow from the start, without error.
 
-**Fix**: compile to `--target python` for `--from-step N` resume. Go resume is on the backlog.
+**Fix**: compile to `--target python` for `--from-step N` resume. Go resume is on the backlog (issue #83).
 
 ### E_GO_012 — `ValueError: target=go does not support TEST blocks`
 
@@ -523,11 +523,11 @@ The LLM returned a value out of the declared range. The contract validator caugh
 
 **Fix:** if it happens chronically, sharpen the prompt — make the contract's range constraint explicit in the JSON schema the model sees.
 
-### `[clio] resume requested (start_at=N) but state.json missing`
+### `[clio] resume requested (start_at=N) but <path> missing`
 
-You ran `<entrypoint> --from-step N` but there's no `state.json` in the cwd (or where `CLIO_STATE_FILE` points).
+You ran `<entrypoint> --from-step N` but the state file (default `state.json` in cwd, or the path from `CLIO_STATE_FILE`) does not exist.
 
-**Fix:** run the flow from scratch first to produce a `state.json`, *then* resume.
+**Fix:** run the flow from scratch first to produce the state file, *then* resume.
 
 ### `ANTHROPIC_API_KEY not set`
 
@@ -758,10 +758,12 @@ EXPOSE FLOW classify_article
 If you're migrating from v0.17, run `clio doctor --migrate-v018` to apply
 the v0.17 heuristic (any signed FLOW not called by a sibling) automatically.
 
-### E_CLI_001 — `ValueError: target=claude-cli does not support FROM … IMPORT`
+### `error: target 'claude-cli' does not support cross-file imports (deferred to a future release)`
 
 The `claude-cli` emitter produces a self-contained bash project; multi-file
-resolution is deferred for this target.
+resolution is deferred for this target. The error is printed to stderr and the
+process exits with code 1 (not a Python exception — it is caught before
+compilation begins).
 
 **Fix:** compile to `--target python`, `--target mcp-server`,
 `--target claude-skill`, or `--target langgraph` instead. If you must use
