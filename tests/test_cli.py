@@ -448,3 +448,17 @@ def test_cli_compile_python_does_not_write_sidecar(tmp_path):
     # Sidecar is a claude-skill specific convention; other emitters MUST NOT
     # create a `.clio/` directory.
     assert not (out / ".clio").exists()
+
+
+def test_check_reports_lexerror_not_traceback(tmp_path, capsys):
+    """A lexer error (inconsistent indentation) must surface as `error: …` with exit
+    code 1 — not propagate as an uncaught `LexError` traceback."""
+    src = tmp_path / "bad.clio"
+    src.write_text("STEP a\n  MODE: exact\n TAKES: x: int\n")
+
+    rc = main(["check", str(src)])
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error:")
+    assert "inconsistent indentation" in err
