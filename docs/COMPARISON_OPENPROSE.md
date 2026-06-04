@@ -2,7 +2,7 @@
 
 A side-by-side reading of [CLIO](../README.md) and [openprose/prose](https://github.com/openprose/prose). Both projects target the same problem — durable, versionable, composable LLM workflows — but with **opposite philosophies**.
 
-- **CLIO** is a real compiler: `.clio` → executable code (Python / bash / MCP server / Claude skill). The compiler knows whether each step is `EXACT` (nameable code: REST / SQL / shell / MCP tool / binary) or `JUDGMENT` (LLM-by-prompt), and emits the right binding.
+- **CLIO** is a real compiler: `.clio` → executable code (Python / bash / MCP server / Claude skill). The compiler knows whether each step is `EXACT` (nameable code: REST / SQL / shell / MCP tool / code) or `JUDGMENT` (LLM-by-prompt), and emits the right binding.
 - **OpenProse** is a contract format interpreted by the LLM agent itself. The host agent (Claude Code, Codex, …) **is** the runtime. No code is emitted. Wiring happens by semantic match between `### Requires` and `### Ensures` (the "Forme" container).
 
 ## Comparison grid
@@ -14,21 +14,21 @@ A side-by-side reading of [CLIO](../README.md) and [openprose/prose](https://git
 | **Runtime** | Python / bash / MCP — deterministic | LLM agent (Claude Code, Codex, …) |
 | **Wiring** | Explicit: `step_a -> step_b(arg=x)` | Implicit: Forme matches `### Requires` ↔ `### Ensures` by meaning |
 | **Type system** | Pydantic v2 + JSON Schema, `enum(...)`, `str(max=200)`, records | Natural language: `report: concise answer with sources` |
-| **EXACT vs JUDGMENT** | **Central primitive.** Compiler knows whether to emit a REST / SQL / shell / MCP / binary call or an LLM-prompt invocation | Everything is a subagent (each service = one `spawn_session`) |
+| **EXACT vs JUDGMENT** | **Central primitive.** Compiler knows whether to emit a REST / SQL / shell / MCP tool / code call or an LLM-prompt invocation | Everything is a subagent (each service = one `spawn_session`) |
 | **Control flow** | `IF / ELSE` with `and`/`or`, `MATCH / CASE`, `WHILE MAX N`, `FOR EACH PARALLEL` — validated at parse time | ProseScript with natural-language conditions (`if review has critical concerns:`) |
 | **Validation** | Parse-time (with `<file>:<line>:<col>`) + runtime (Pydantic / JSON Schema) | LLM "judges" conformance to the contract |
 | **Persistence** | `state.json` + `--from-step N` (resume) | `runs/{id}/`, `state/`, `state/agents/`, `state/responsibilities/` |
 | **Observability** | JSONL events, OTel-mappable (`CLIO_LOG=1`) | `runs/{id}/vm.log.md` + `prose status` |
 | **Cache** | Deterministic, SHA256(prompt+schema+model), `ttl(24h)` | No deterministic cache (LLM-replay only) |
-| **Multi-target** | python, claude-cli, mcp-server, claude-skill, langgraph (5 shipped) | Single target: the host agent |
+| **Multi-target** | python, claude-cli, mcp-server, claude-skill, langgraph, go (6 shipped) | Single target: the host agent |
 | **Failure / recovery** | `ON_FAIL: retry(3) then escalate then fallback(x)` + `RESCUE` (`abort` / `RESUME`) | `### Errors` declarative + contract-driven retry |
-| **Tests** | 1000+ pytest tests *of the compiler* | `kind: test` native, with `### Expects` / `### Expects Not` in natural language |
+| **Tests** | 1281+ pytest tests *of the compiler* | `kind: test` native, with `### Expects` / `### Expects Not` in natural language |
 | **Dependencies** | Zero external (each `.clio` self-contained) | `prose install` + `prose.lock` + `deps/` (git-native) |
 | **Reusable units** | `STEP` / `CONTRACT` reused manually across files | `kind: pattern` (slots + config + delegation), `std/` and `co/` packages |
 | **External ingestion** | No abstraction | `kind: gateway` (cron, webhook, HTTP route) |
 | **Standing goals** | None (run-once flows) | `kind: responsibility` + Reactor (event-driven continuity) |
 | **Stack** | Python 3.12+ | TypeScript CLI wrapper + skill |
-| **Maturity** | v0.19, 1067+ tests, 5 targets shipped, cross-file imports + skill ↔ `.clio` round-trip | Beta, ~19 open issues, MIT |
+| **Maturity** | v0.23.0, 1281+ tests, 6 targets shipped, cross-file imports + skill ↔ `.clio` round-trip | Beta, ~19 open issues, MIT |
 
 ## Deep similarities
 
@@ -40,12 +40,12 @@ A side-by-side reading of [CLIO](../README.md) and [openprose/prose](https://git
 
 ## What CLIO does — and OpenProse does not
 
-1. **Real multi-target compiler** (Python SDK, bash via `claude-cli`, MCP server, Claude skill, LangGraph `StateGraph`).
-2. **EXACT vs JUDGMENT distinction** — the central primitive. `impl: rest / sql / shell / mcp_tool / binary` vs `invoke: cli / api / embedded / mcp_sampling`. OpenProse routes *everything* through a subagent.
+1. **Real multi-target compiler** (Python SDK, bash via `claude-cli`, MCP server, Claude skill, LangGraph `StateGraph`, Go module).
+2. **EXACT vs JUDGMENT distinction** — the central primitive. `impl: code / rest / shell / mcp_tool / sql` vs `invoke: cli / api`. OpenProse routes *everything* through a subagent.
 3. **Formal type system** — `List<{client: str, risque: enum(low|mid|high)}>` with Pydantic validation. OpenProse: prose-only contracts.
 4. **Parse-time validation with line numbers** — errors like `<file>:<line>:<col>` instead of "the LLM didn't like it".
 5. **Deterministic hash-keyed cache** + TTL — guaranteed reproducibility.
-6. **First-class concrete backends**: SQL (sqlite / postgres / mysql), REST with retry / `Retry-After`, MCP tool, shell, binary.
+6. **First-class concrete backends**: SQL (sqlite / postgres / mysql), REST with retry / `Retry-After`, MCP tool, shell, inline code.
 7. **`FOR EACH PARALLEL`** with `ThreadPoolExecutor` / `asyncio.gather`, cap = 10.
 8. **`clio graph --format html`** — interactive viewer with side panel inspection per step.
 9. **`clio gen`** — NL → `.clio` (assisted authoring).
@@ -81,7 +81,7 @@ Both are defensible.
 
 ## Cross-pollination — what CLIO adopts from OpenProse
 
-This document drives a concrete sprint (PR `feat/openprose-inspired-improvements`):
+This document drove a concrete sprint (PR `feat/openprose-inspired-improvements`, merged):
 
 | Idea borrowed | CLIO change |
 |---|---|

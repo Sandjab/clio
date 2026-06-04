@@ -14,7 +14,7 @@ It is meant as an anchor against scope drift: when a feature request looks like 
 | **Program form** | Imperative Python code | JSON in a database + visual canvas | **Declarative text file** (`.clio`) |
 | **Typing** | TypedDict on state, opt-in `with_structured_output` | None (JSON between nodes) | **CONTRACT first-class**, validated at compile time |
 | **Code/LLM distinction** | None (everything is a Python node) | None (an OpenAI node among 400) | **EXACT/JUDGMENT** structurally encoded in the language |
-| **Execution targets** | The LangGraph runtime, period | The n8n server, period | **Multi-target** (claude-cli, python, planned: temporal, mcp-server, …) |
+| **Execution targets** | The LangGraph runtime, period | The n8n server, period | **Multi-target** (claude-cli, python, mcp-server, langgraph, claude-skill, go — shipped; temporal, step-functions — aspirational) |
 | **What you ship** | An app that depends on LangGraph | A workflow inside an n8n instance | **A standalone project** (no CLIO dependency at runtime) |
 | **Integration library** | LangChain (very rich) | 400+ pre-wired nodes | **None** (assumed weakness — see plan) |
 | **Visual / no-code** | No (LangGraph Studio in addition) | Yes (canvas) | No (and probably never, by design) |
@@ -29,7 +29,7 @@ It is meant as an anchor against scope drift: when a feature request looks like 
 
 LangGraph and n8n are runtimes: you install their engine, you run it, your workflow lives inside it. The day you decommission them, you rewrite.
 
-CLIO compiles to a project **you own**. Emitted code is idiomatic Python (or bash, or Rust…) with **no runtime dependency on CLIO itself**. If you throw the compiler away tomorrow, the emitted project still runs. It is a **scaffolding + ownership** model: the compiler bootstraps, the code is yours.
+CLIO compiles to a project **you own**. Emitted code is idiomatic Python (or bash, or Go…) with **no runtime dependency on CLIO itself**. If you throw the compiler away tomorrow, the emitted project still runs. It is a **scaffolding + ownership** model: the compiler bootstraps, the code is yours.
 
 ### 2. The program is a reviewable text artifact
 
@@ -49,16 +49,16 @@ This is the deepest differentiator.
   - route models per step (cost/quality tradeoffs)
   - cache differentially (judgment hash includes prompt+model, exact does not)
   - generate appropriate retry/fallback (not the same meaning for a pure call vs. an LLM call)
-  - perform static cost analysis ("this flow will cost ~$0.04 per run")
-  - eventually batch compatible judgments, do automatic model routing
+  - *(planned)* perform static cost analysis ("this flow will cost ~$0.04 per run")
+  - *(planned)* batch compatible judgments, do automatic model routing
 
 Neither competitor can do this because neither *knows* what is stochastic vs. deterministic.
 
 ### 4. Multi-target from a single source
 
-A `.clio` can compile to `claude-cli` (fast prototype), `python` (deployment), `mcp-server` (tool exposed to Claude Desktop), `temporal` (durable production), `step-functions` (AWS-native). **One source, several runtimes.**
+A `.clio` can compile to `claude-cli` (fast prototype), `python` (deployment), `mcp-server` (tool exposed to Claude Desktop), `langgraph` (bridge to LangChain stacks), `claude-skill` (Claude Code skill), `go` (native Go module). **One source, several runtimes.** Durable-execution targets (`temporal`, `step-functions`) are aspirational — not yet built.
 
-LangGraph is single-runtime. n8n is single-runtime. Neither can take your workflow and redeploy it as an MCP server or a Temporal workflow without a full rewrite.
+LangGraph is single-runtime. n8n is single-runtime. Neither can take your workflow and redeploy it as an MCP server or a Go module without a full rewrite.
 
 ### 5. CONTRACT as a primitive, not an annotation
 
@@ -82,7 +82,7 @@ LangGraph and n8n are the most common reference points by *audience*, but a smal
 | **Form** | DSL files (`.baml`) compiled to client SDKs (Python / TS / Ruby / Go) for typed LLM functions | Embedded query language (Python superset); programs run inside the LMQL interpreter | **DSL files** (`.clio`) compiled to standalone projects, no CLIO at runtime |
 | **Unit of composition** | A typed *function* (input schema → LLM call → output schema) | A *prompt program* with constraints, control flow, and decoding directives | A **STEP** that may be EXACT (deterministic code/REST/shell) or JUDGMENT (LLM-by-prompt) |
 | **Code/LLM distinction** | Implicit — every BAML function is a JUDGMENT call | Implicit — every LMQL program is a JUDGMENT prompt | **Explicit primitive**: EXACT vs JUDGMENT is a compile-time MODE on each step |
-| **Targets** | Client SDKs in fixed languages, plus a runtime reference | The LMQL Python interpreter | **Multi-target** by design: `claude-cli`, `python`, planned `mcp-server`, `temporal`, … |
+| **Targets** | Client SDKs in fixed languages, plus a runtime reference | The LMQL Python interpreter | **Multi-target** by design: `claude-cli`, `python`, `mcp-server`, `langgraph`, `claude-skill`, `go` shipped; `temporal` aspirational |
 | **Pipeline scope** | One typed function per file; composition happens in the host language | One program with constraints and decoding control | **Whole pipelines** in the language: `FOR EACH`, `CACHE`, `ON_FAIL`, `RESOURCES` |
 | **Runtime dependency** | Generated client + BAML runtime at inference time | LMQL interpreter | **None** — emitted projects compile to standalone Python or bash with provider SDKs only |
 
@@ -92,7 +92,7 @@ Against both BAML and LMQL, three things pull CLIO apart:
 
 1. **Compiler, not runtime.** BAML's generated SDK depends on BAML at request time (its own typed-function runtime); LMQL programs run inside the LMQL interpreter. CLIO emits a runnable project — you ship Python or bash, not a CLIO call. The day CLIO is gone, your generated project still runs.
 
-2. **Multi-target from one source.** BAML's targets are SDK *languages* (Python, TS, Ruby, Go) for the same use case (typed LLM functions). LMQL has one target: its interpreter. CLIO's targets are *deployment shapes* (a Claude Code project, a Python package, a future MCP server, a future Temporal workflow) — the same `.clio` becomes a different artifact for a different runtime context.
+2. **Multi-target from one source.** BAML's targets are SDK *languages* (Python, TS, Ruby, Go) for the same use case (typed LLM functions). LMQL has one target: its interpreter. CLIO's targets are *deployment shapes* (a Claude Code project, a Python package, an MCP server, a LangGraph StateGraph, a Go module — shipped; a Temporal workflow — aspirational) — the same `.clio` becomes a different artifact for a different runtime context.
 
 3. **EXACT/JUDGMENT as a language primitive, not a convention.** In BAML and LMQL the LLM call is the unit; deterministic code lives outside, in the host language. In CLIO the language *separates* deterministic steps (REST, shell, code, SQL — the compiler can name the function) from LLM-by-prompt steps (validated against a CONTRACT). This split is checked at compile time and drives optimizations (the compiler may batch judgment steps, route models, cache differently per mode) that BAML and LMQL cannot make because their model erases the distinction.
 
@@ -247,7 +247,7 @@ A **bridge target** is an emitter whose primary value is not production deployme
 
 **Pre-ship conditions — all satisfied.**
 1. ✅ `python` shipped W2 short-term (structured JSON-line logging via `CLIO_LOG=1`) and W5 short-term (`--from-step N` flag on emitted projects) **before** langgraph instrumentation diverged. The canonical `python` target retains the full runtime; langgraph delegates explicitly.
-2. ✅ `docs/manual/04-targets.md` documents langgraph as one of five targets with its scope and trade-offs; `README.md` "current" line lists it without elevating it above `python`. CLI surface treats all targets symmetrically.
+2. ✅ `docs/manual/04-targets.md` documents langgraph as one of six targets with its scope and trade-offs; `README.md` "current" line lists it without elevating it above `python`. CLI surface treats all targets symmetrically.
 3. ✅ `tests/test_emitters/test_langgraph.py` covers the linear-flow round-trip plus boundary rejections (FOR EACH, openai/bedrock/vertex, escalate/fallback). Bridge stays narrower than `python`, not wider.
 
 ### General principle for bridge targets
