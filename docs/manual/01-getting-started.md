@@ -53,7 +53,7 @@ Three things to notice:
 uv run python -m clio check hello.clio
 ```
 
-No output = the file parsed and type-checked. If something's wrong, you'll get a `ParseError` with the exact line.
+`ok` = the file parsed and type-checked. If something's wrong, you'll get `error: line L:C: …` with the exact location.
 
 ## Visualise it
 
