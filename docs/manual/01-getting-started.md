@@ -108,7 +108,7 @@ cat state.json   # the result of the flow
 ## Three lessons in this 5-minute walk
 
 1. **CLIO source is declarative.** You said *what*, not *how to glue it together*.
-2. **The compiler decides what runs as code vs LLM** based on `MODE`. Same `.clio` file can compile to Python, MCP server, or Claude Code orchestration depending on `--target`.
+2. **`MODE` tells the compiler what to emit**: `exact` → deterministic code (a stub you fill in), `judgment` → an LLM call (you choose the mode). Same `.clio` file can compile to Python, MCP server, or Claude Code orchestration depending on `--target`.
 3. **The output is a real project.** No CLIO runtime to install at deploy time — just the emitted files plus their declared dependencies (Pydantic, Anthropic SDK if needed, etc.).
 
 Next step: [the language tour](02-language-tour.md) for a deeper look at `STEP`, `CONTRACT`, and `FLOW`.
