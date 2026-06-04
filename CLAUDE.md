@@ -73,7 +73,7 @@ The system has 3 layers:
 ```
 
 - **Parser**: reads `.clio` source, produces an IR (a typed AST of STEPs, CONTRACTs, FLOWs)
-- **IR**: the internal graph — target-independent, validated, optimizable
+- **IR**: the internal graph — target-independent, validated, immutable
 - **Emitter**: takes the IR and emits a project for a specific target
 
 Each compilation target is a separate emitter module. Emitters are independent. Adding a new target = adding a new emitter. The parser and IR don't change.
@@ -112,7 +112,7 @@ clio/
     expressions.py
     ast_nodes.py
   ir/                 # AST → IR graph (validated, target-independent)
-    builder.py        # build the FlowGraph (4 passes)
+    builder.py        # build the FlowGraph (multi-pass)
     graph.py          # FlowGraph + FlowIR / StepIR / FlowCallIR
     resolver.py       # cross-file FROM…IMPORT resolution (v0.18)
     contracts.py      # type_to_json_schema (CONTRACT shape → JSON Schema)
