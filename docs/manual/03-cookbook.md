@@ -190,8 +190,7 @@ lowercase keywords `and` / `or` with optional parentheses. `and` binds
 tighter than `or`, so:
 
 ```
-IF (report.confidence < 0.7 or report.confidence > 0.9)
-   and report.category == "bug":
+IF (report.confidence < 0.7 or report.confidence > 0.9) and report.category == "bug":
     human_review(report)
 ELSE:
     auto_route(report)
@@ -597,8 +596,9 @@ skill-out/
     01_greet.py               # NotImplementedError stub — fill the body here
     _validate.py              # bundled JSON Schema helper
     _cache_key.py             # bundled SHA256 cache-key helper
-  schemas/
-    01_greet.input.json       # JSON Schema for step TAKES
+  .clio/                      # sidecar added by v0.19 for `clio import` round-trip
+    source.clio               # verbatim source
+    manifest.json             # per-file SHA-256 hashes
 ```
 
 **After compilation — fill the stubs:**
@@ -723,19 +723,28 @@ STEP draft
   TAKES:  article: str
   GIVES:  draft:   str
   MODE:   judgment
-  invoke: {mode: api, protocol: anthropic, model: sonnet}
+  invoke:
+    mode:     api
+    protocol: anthropic
+    model:    sonnet
 
 STEP judge
   TAKES:  article: str, draft: str
   GIVES:  review:  verdict
   MODE:   judgment
-  invoke: {mode: api, protocol: anthropic, model: haiku}
+  invoke:
+    mode:     api
+    protocol: anthropic
+    model:    haiku
 
 STEP refine
   TAKES:  article: str, draft: str, review: verdict
   GIVES:  draft:   str
   MODE:   judgment
-  invoke: {mode: api, protocol: anthropic, model: sonnet}
+  invoke:
+    mode:     api
+    protocol: anthropic
+    model:    sonnet
 
 FLOW refine_loop
     draft(article=article)
@@ -1011,7 +1020,7 @@ embedded JSON Schema.
 **Scope (v0.23)**: REST + shell impl bodies and FLOW composition (sub-flow
 calls) are supported. Still deferred — each fails at compile time with a
 remediation pointer: OpenAI judgment (E_GO_005), `impl.mode {sql, mcp_tool}`
-(E_GO_009/010, tracked for v0.24), `--from-step` RESUME (E_GO_011), TEST
+(E_GO_009/010, tracked for v0.24), `--from-step` RESUME (not implemented), TEST
 blocks (E_GO_012), and a multi-GIVES sub-flow used as a `FOR EACH PARALLEL`
 body (E_GO_006). See `docs/manual/06-troubleshooting.md` for each.
 
@@ -1037,7 +1046,10 @@ STEP tally
   TAKES: text: str
   GIVES: stats: word_stats
   MODE:  judgment
-  invoke: { mode: api, protocol: anthropic, model: haiku }
+  invoke:
+    mode:     api
+    protocol: anthropic
+    model:    haiku
 ```
 
 The compiler renders `Dict<str, int>` as `dict[str, int]` (Pydantic) or
@@ -1084,12 +1096,7 @@ schema level — no runtime `ASSERT` needed for bounds.
 
 ```
 CONTRACT measurement
-  SHAPE: {
-    label:   str(min=1, max=80),
-    count:   int(min=0, max=1000),
-    ratio:   float(min=0.0, max=1.0),
-    price:   float(precision=2)
-  }
+  SHAPE: {label: str(min=1, max=80), count: int(min=0, max=1000), ratio: float(min=0.0, max=1.0), price: float(precision=2)}
 ```
 
 **Renderings**:
@@ -1120,7 +1127,7 @@ CONTRACT measurement
   composition for ASSERT bodies is still planned.
 - **`not` keyword in conditions** — for now invert by flipping the
   operator (`==` ↔ `!=`, `<` ↔ `>=`).
-- **`auto` MODE routing** — parsed, runtime decision not yet implemented.
+- **`auto` MODE routing** — not implemented; rejected at parse time. Use `exact` or `judgment` today.
 - **`.FAILS` postfix in IF conditions** — specced for failure-aware branching; for a multi-step failure handler today, see [recipe #10](#10-critical-llm-pipeline-with-on_fail--rescue).
 
 When these land, this page gets new recipes. (See [the changelog](../../CHANGELOG.md) for what's recently moved out of "not yet".)
