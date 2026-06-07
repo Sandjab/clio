@@ -1,0 +1,39 @@
+CONTRACT risk
+  SHAPE: {level: enum(low|mid|high), score: float}
+
+CONTRACT progress
+  SHAPE: {done: bool, score: float}
+
+STEP assess
+  TAKES: x: str
+  GIVES: r: risk
+  MODE:  exact
+
+STEP archive
+  TAKES: x: str
+  GIVES: archived: bool
+  MODE:  exact
+
+STEP flag
+  TAKES: x: str
+  GIVES: flagged: bool
+  MODE:  exact
+
+STEP refine
+  TAKES: x: str
+  GIVES: p: progress
+  MODE:  exact
+
+FLOW pipeline
+  assess(x="in")
+  -> MATCH r.level:
+       CASE low:  archive(x="in")
+       CASE mid:  flag(x="in")
+       CASE high: flag(x="in")
+  -> IF r.score > 0.5:
+       flag(x="in")
+  ELSE:
+       archive(x="in")
+  -> refine(x="in")
+  -> WHILE p.done != true MAX 3:
+       refine(x="in")

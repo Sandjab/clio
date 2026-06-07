@@ -1,0 +1,13 @@
+CONTRACT risk
+  SHAPE: {level: enum(low|mid|high), score: float}
+
+STEP archive
+  TAKES: x: str
+  GIVES: archived: bool
+  MODE:  exact
+
+FLOW pipeline
+  TAKES: items: List<risk>
+  FOR EACH a IN items:
+    IF a.level == high:
+      archive(x="in")

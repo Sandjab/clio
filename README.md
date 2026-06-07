@@ -73,6 +73,7 @@ The same `.clio` source compiles to different targets:
 | `langgraph`    | LangGraph StateGraph (single-step IF / MATCH branches, sequential chain only — multi-step branches deferred) |
 | `claude-skill` | Claude Code skill directory (`SKILL.md` + `scripts/` + `schemas/` + `prompts/`); LLM-host-orchestrated, no external runtime |
 | `go`           | Go module (`flow.Run` package + `cmd/<flow>/main.go`); single static binary, Anthropic judgment, goroutine-parallel FOR EACH |
+| `swift`        | Swift package (SwiftPM); zero external SPM dependencies, URLSession Anthropic client, `withThrowingTaskGroup` parallel FOR EACH, macOS + Linux |
 
 Additional targets (`rust`, `docker`) are planned but not yet implemented; the emitter interface is target-agnostic, so adding one requires only a new emitter module.
 

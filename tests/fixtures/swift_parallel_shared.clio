@@ -1,0 +1,19 @@
+STEP settings
+  GIVES: threshold: float
+  MODE:  exact
+
+STEP load
+  TAKES: file: str
+  GIVES: items: List<str>
+  MODE:  exact
+
+STEP classify
+  TAKES: item: str, threshold: float
+  GIVES: label: str
+  MODE:  exact
+
+FLOW pipeline
+  settings()
+  -> load(file="in.csv")
+  -> FOR EACH item IN items PARALLEL AS labels:
+       classify(item=item, threshold=threshold)

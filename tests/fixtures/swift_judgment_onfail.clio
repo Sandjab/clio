@@ -1,0 +1,17 @@
+STEP detect
+  TAKES: x: str
+  GIVES: y: str
+  MODE:  judgment
+  ON_FAIL: retry(2) then escalate then fallback(naive) then abort("detection exhausted")
+
+STEP naive
+  TAKES: x: str
+  GIVES: y: str
+  MODE:  exact
+
+FLOW pipeline
+  detect(x="hi")
+
+RESOURCES
+  target: swift
+  models: [haiku]

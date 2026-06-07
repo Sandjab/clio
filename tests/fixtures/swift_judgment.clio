@@ -1,0 +1,11 @@
+CONTRACT sentiment_result
+  SHAPE: {label: enum(positive|negative|neutral), confidence: float}
+  ASSERT: confidence >= 0.0
+
+STEP analyze
+  TAKES: text: str
+  GIVES: result: sentiment_result
+  MODE:  judgment
+
+FLOW classifier
+  analyze(text="Great product!")
