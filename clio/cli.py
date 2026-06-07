@@ -22,7 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     compile_p.add_argument("source")
     compile_p.add_argument(
         "--target", required=True,
-        choices=["claude-cli", "python", "mcp-server", "langgraph", "claude-skill", "go"],
+        choices=["claude-cli", "python", "mcp-server", "langgraph", "claude-skill", "go", "swift"],
     )
     compile_p.add_argument("--output", required=True)
     compile_p.add_argument(
@@ -149,6 +149,13 @@ def _cmd_compile(source: str, target: str, output: str, flow: str | None = None)
     elif target == "go":
         from clio.emitters.go import GoEmitter
         GoEmitter().emit(graph, out_path, source_path=src_resolved)
+    elif target == "swift":
+        from clio.emitters.swift import SwiftEmitter
+        try:
+            SwiftEmitter().emit(graph, out_path, source_path=src_resolved)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
     else:
         return 2
     return 0
