@@ -491,3 +491,26 @@ def test_E_SWIFT_013_rest_multipart_body_refused(tmp_path: Path, capsys: object)
     assert rc != 0
     captured = capsys.readouterr()  # type: ignore[attr-defined]
     assert "E_SWIFT_013" in captured.err
+
+
+def _read_tree(root: Path) -> dict[str, str]:
+    """Return {relative_path: content} for all files under root."""
+    result: dict[str, str] = {}
+    for p in sorted(root.rglob("*")):
+        if p.is_file():
+            result[str(p.relative_to(root))] = p.read_text()
+    return result
+
+
+def test_golden_swift_minimal(tmp_path: Path) -> None:
+    """Full-tree comparison against the committed golden snapshot."""
+    out = tmp_path / "out"
+    _compile(FIXTURES / "swift_minimal.clio", out)
+    assert _read_tree(out) == _read_tree(EXPECTED_SWIFT / "swift_minimal")
+
+
+def test_golden_swift_contract(tmp_path: Path) -> None:
+    """Full-tree comparison against the committed golden snapshot."""
+    out = tmp_path / "out"
+    _compile(FIXTURES / "swift_contract.clio", out)
+    assert _read_tree(out) == _read_tree(EXPECTED_SWIFT / "swift_contract")
