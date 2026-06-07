@@ -210,6 +210,15 @@ enum Validate {
     }
 
     private static func cmpOk(_ l: Any?, _ r: Any?, op: String) -> Bool {
+        // Bool does not bridge to NSNumber on Linux; handle it before the
+        // toDouble path so cross-platform bool comparisons work.
+        if let lb = l as? Bool, let rb = r as? Bool {
+            switch op {
+            case "==": return lb == rb
+            case "!=": return lb != rb
+            default:   return false
+            }
+        }
         if let lf = toDouble(l), let rf = toDouble(r) {
             switch op {
             case "==": return lf == rf

@@ -222,6 +222,15 @@ enum Validate {
     }
 
     private static func cmpOk(_ l: Any?, _ r: Any?, op: String) -> Bool {
+        // Bool does not bridge to NSNumber on Linux; handle it before the
+        // toDouble path so cross-platform bool comparisons work.
+        if let lb = l as? Bool, let rb = r as? Bool {
+            switch op {
+            case "==": return lb == rb
+            case "!=": return lb != rb
+            default:   return false
+            }
+        }
         if let lf = toDouble(l), let rf = toDouble(r) {
             switch op {
             case "==": return lf == rf
@@ -343,13 +352,21 @@ enum Anthropic {
                     return
                 }
                 do {
-                    guard
-                        let json = try JSONSerialization.jsonObject(with: data)
-                            as? [String: Any],
-                        let content = json["content"] as? [[String: Any]],
-                        let first = content.first,
-                        let text = first["text"] as? String
-                    else {
+                    guard let json = try JSONSerialization.jsonObject(with: data)
+                            as? [String: Any] else {
+                        let preview = String(data: data.prefix(200), encoding: .utf8)
+                            ?? "<non-UTF8>"
+                        throw AnthropicError(
+                            message: "Anthropic: response is not a JSON object: \(preview)")
+                    }
+                    // Surface API-level error messages before attempting to parse content.
+                    if let errObj = json["error"] as? [String: Any],
+                       let errMsg = errObj["message"] as? String {
+                        throw AnthropicError(message: "Anthropic API error: \(errMsg)")
+                    }
+                    guard let content = json["content"] as? [[String: Any]],
+                          let first = content.first,
+                          let text = first["text"] as? String else {
                         let preview = String(data: data.prefix(200), encoding: .utf8)
                             ?? "<non-UTF8>"
                         throw AnthropicError(
@@ -598,6 +615,11 @@ enum Cache {
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: entry) else { return }
         try? data.write(to: tmp)
+        // moveItem fails if the destination exists; remove a stale entry first
+        // so a refreshed cache value (e.g. after TTL expiry) overwrites it.
+        if FileManager.default.fileExists(atPath: final.path) {
+            try? FileManager.default.removeItem(at: final)
+        }
         try? FileManager.default.moveItem(at: tmp, to: final)
     }
 

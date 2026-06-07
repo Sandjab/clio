@@ -71,13 +71,21 @@ enum Anthropic {
                     return
                 }
                 do {
-                    guard
-                        let json = try JSONSerialization.jsonObject(with: data)
-                            as? [String: Any],
-                        let content = json["content"] as? [[String: Any]],
-                        let first = content.first,
-                        let text = first["text"] as? String
-                    else {
+                    guard let json = try JSONSerialization.jsonObject(with: data)
+                            as? [String: Any] else {
+                        let preview = String(data: data.prefix(200), encoding: .utf8)
+                            ?? "<non-UTF8>"
+                        throw AnthropicError(
+                            message: "Anthropic: response is not a JSON object: \(preview)")
+                    }
+                    // Surface API-level error messages before attempting to parse content.
+                    if let errObj = json["error"] as? [String: Any],
+                       let errMsg = errObj["message"] as? String {
+                        throw AnthropicError(message: "Anthropic API error: \(errMsg)")
+                    }
+                    guard let content = json["content"] as? [[String: Any]],
+                          let first = content.first,
+                          let text = first["text"] as? String else {
                         let preview = String(data: data.prefix(200), encoding: .utf8)
                             ?? "<non-UTF8>"
                         throw AnthropicError(

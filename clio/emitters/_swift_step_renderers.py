@@ -172,7 +172,12 @@ def render_judgment_step_swift(
 
     # --- ON_FAIL chain analysis -------------------------------------------
     retry_count, fallback_step_name, abort_msg = _on_fail_chain_parts(step)
-    has_on_fail = retry_count > 0
+    # An ON_FAIL chain applies whenever it exists, even without retry(N):
+    # abort-only or fallback-only chains still need the post-loop handler.
+    has_on_fail = step.on_fail is not None
+    # The loop runs at least once so the fallback/abort post-loop logic executes
+    # even with retry_count == 0 (abort-only or fallback-only chains).
+    attempts = max(1, retry_count)
     # When the chain is retry-only (no fallback/abort), the post-loop path is
     # `throw lastError`, so lastError must be tracked + written. With a
     # fallback/abort post-loop, lastError is never read — tracking it would
@@ -244,7 +249,7 @@ def render_judgment_step_swift(
                 f'    var lastError: Error = AnthropicError(message: "{step.name}: all retries exhausted")'
             )
         lines += [
-            f"    for attempt in 0..<{retry_count} {{",
+            f"    for attempt in 0..<{attempts} {{",
             "        if attempt > 0 {",
             "            try await Task.sleep(nanoseconds: UInt64(1 << (attempt - 1)) * 1_000_000_000)",
             "        }",

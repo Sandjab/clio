@@ -68,6 +68,11 @@ enum Cache {
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: entry) else { return }
         try? data.write(to: tmp)
+        // moveItem fails if the destination exists; remove a stale entry first
+        // so a refreshed cache value (e.g. after TTL expiry) overwrites it.
+        if FileManager.default.fileExists(atPath: final.path) {
+            try? FileManager.default.removeItem(at: final)
+        }
         try? FileManager.default.moveItem(at: tmp, to: final)
     }
 

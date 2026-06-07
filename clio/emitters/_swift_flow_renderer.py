@@ -95,9 +95,14 @@ def _swift_condition_expr(
         access = f"{state_field}.{condition.field}"
     elif step is not None and step.gives is not None:
         swift_type = _type_to_swift(step.gives.type, contracts_by_name)
-        access = f'(state["{state_field}"] as! {swift_type}).{condition.field}'
+        # Optional types (rendered ending in '?') need optional chaining '?.'
+        dot = "?." if swift_type.endswith("?") else "."
+        access = f'(state["{state_field}"] as! {swift_type}){dot}{condition.field}'
     elif state_field in take_types:
-        access = f'(state["{state_field}"] as! {take_types[state_field]}).{condition.field}'
+        take_type = take_types[state_field]
+        # Optional types (rendered ending in '?') need optional chaining '?.'
+        dot = "?." if take_type.endswith("?") else "."
+        access = f'(state["{state_field}"] as! {take_type}){dot}{condition.field}'
     else:
         # Unknown state field — fallback (should not occur after IR validation).
         access = f'state["{state_field}"]'
@@ -110,9 +115,13 @@ def _swift_condition_expr(
     elif condition.literal_kind == "bool":
         lit = "true" if condition.literal_value else "false"
     elif condition.literal_kind == "ident":
-        # Enum ident — rendered as a Swift string literal (same as Go).
-        escaped = str(condition.literal_value).replace("\\", "\\\\").replace('"', '\\"')
-        lit = f'"{escaped}"'
+        # The 'null' ident renders as the Swift nil literal, not a string.
+        if condition.literal_value == "null":
+            lit = "nil"
+        else:
+            # Enum ident — rendered as a Swift string literal (same as Go).
+            escaped = str(condition.literal_value).replace("\\", "\\\\").replace('"', '\\"')
+            lit = f'"{escaped}"'
     else:
         # str — Swift interpreted string literal.
         escaped = str(condition.literal_value).replace("\\", "\\\\").replace('"', '\\"')
@@ -150,6 +159,9 @@ def _swift_kwarg_value(
             return f'state["{ref}"] as! {take_types[ref]}'
         # Unknown ref — untyped fallback (should not occur after IR validation).
         return f'state["{ref}"]'
+    # A None value (null literal) renders as the Swift nil literal.
+    if value is None:
+        return "nil"
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int):
@@ -297,11 +309,16 @@ def _render_chain_item(
             scrutinee = f"{item.state_field}.{item.sub_field}"
         elif step is not None and step.gives is not None:
             swift_type = _type_to_swift(step.gives.type, contracts_by_name)
-            scrutinee = f'(state["{item.state_field}"] as! {swift_type}).{item.sub_field}'
+            # Optional types (rendered ending in '?') need optional chaining '?.'
+            dot = "?." if swift_type.endswith("?") else "."
+            scrutinee = f'(state["{item.state_field}"] as! {swift_type}){dot}{item.sub_field}'
         elif item.state_field in take_types:
+            take_type = take_types[item.state_field]
+            # Optional types (rendered ending in '?') need optional chaining '?.'
+            dot = "?." if take_type.endswith("?") else "."
             scrutinee = (
-                f'(state["{item.state_field}"] as! {take_types[item.state_field]})'
-                f".{item.sub_field}"
+                f'(state["{item.state_field}"] as! {take_type})'
+                f"{dot}{item.sub_field}"
             )
         else:
             scrutinee = f'state["{item.state_field}"]'

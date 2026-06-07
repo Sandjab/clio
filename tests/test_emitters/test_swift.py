@@ -929,3 +929,212 @@ def test_swift_foreach_over_state_field_still_accepted(tmp_path: Path) -> None:
     out = tmp_path / "out"
     rc = _compile(FIXTURES / "swift_foreach_seq.clio", out)
     assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# Gemini review fixes (A, B, C, D, G, I)
+# ---------------------------------------------------------------------------
+
+
+def test_fix_a_optional_chaining_condition_dot(tmp_path: Path) -> None:
+    """Defensive: when a GIVES/TAKE type renders to a Swift Optional (ends
+    with '?'), the condition renderer must use '?.' not '.' for field access.
+
+    Reachability note: the IR validator rejects IF/WHILE conditions on Optional
+    contract types (only non-optional ContractRef passes the field-access check),
+    so this path is currently unreachable from CLIO source.  The fix is applied
+    defensively — the renderer is correct regardless.  This test exercises the
+    renderer logic directly via string-match rather than parse+compile."""
+    # Simulate a step that GIVES an Optional type (e.g. "Risk?").
+    # Build a minimal fake StepIR with Optional gives to drive the renderer.
+    from dataclasses import dataclass
+
+    from clio.emitters._swift_flow_renderer import _swift_condition_expr
+    from clio.ir.graph import ConditionIR
+
+    class FakeOptType:
+        """Mimics an Optional swift type whose _type_to_swift returns 'Risk?'."""
+
+    @dataclass
+    class MinimalFieldIR:
+        name: str
+        type: object
+
+    # Patch _type_to_swift to return "Risk?" for our fake type.
+    from clio.emitters import _swift_flow_renderer as renderer
+    original = renderer._type_to_swift
+
+    def patched(t: object, contracts: object) -> str:
+        if isinstance(t, FakeOptType):
+            return "Risk?"
+        return original(t, contracts)  # type: ignore[arg-type]
+
+    renderer._type_to_swift = patched  # type: ignore[assignment]
+    try:
+        fake_gives = MinimalFieldIR(name="result", type=FakeOptType())
+        # Minimal StepIR-like object sufficient for _swift_condition_expr.
+        fake_step = type("FakeStep", (), {"gives": fake_gives})()
+        state_field_to_step = {"result": fake_step}
+
+        cond = ConditionIR(
+            step_name="result",
+            field="level",
+            op="==",
+            literal_value="high",
+            literal_kind="ident",
+        )
+        result = _swift_condition_expr(cond, set(), state_field_to_step, {}, {})
+        # Must use '?.' not '.' because the type ends with '?'
+        assert "?." in result, f"expected '?.' for Optional type, got: {result!r}"
+        assert "(state[\"result\"] as! Risk?)?." in result
+    finally:
+        renderer._type_to_swift = original  # type: ignore[assignment]
+
+
+def test_fix_a_non_optional_still_uses_plain_dot(tmp_path: Path) -> None:
+    """Regression guard: non-Optional types must still use '.' not '?.'."""
+    from clio.emitters._swift_flow_renderer import _swift_condition_expr
+    from clio.ir.graph import ConditionIR
+
+    class FakeNonOptType:
+        pass
+
+    from clio.emitters import _swift_flow_renderer as renderer
+    original = renderer._type_to_swift
+
+    def patched(t: object, contracts: object) -> str:
+        if isinstance(t, FakeNonOptType):
+            return "Risk"
+        return original(t, contracts)  # type: ignore[arg-type]
+
+    renderer._type_to_swift = patched  # type: ignore[assignment]
+    try:
+        fake_gives = type("FakeFieldIR", (), {"name": "result", "type": FakeNonOptType()})()
+        fake_step = type("FakeStep", (), {"gives": fake_gives})()
+        state_field_to_step = {"result": fake_step}
+
+        cond = ConditionIR(
+            step_name="result",
+            field="level",
+            op="==",
+            literal_value="high",
+            literal_kind="ident",
+        )
+        result = _swift_condition_expr(cond, set(), state_field_to_step, {}, {})
+        assert "?." not in result, f"non-Optional type must not use '?.', got: {result!r}"
+        assert "(state[\"result\"] as! Risk)." in result
+    finally:
+        renderer._type_to_swift = original  # type: ignore[assignment]
+
+
+def test_fix_b_null_condition_emits_nil(tmp_path: Path) -> None:
+    """Defensive: 'null' ident in a condition RHS renders as Swift nil.
+
+    Reachability note: the IR builder currently treats 'null' as an ident
+    (literal_kind='ident', literal_value='null'), so the condition renderer
+    was emitting the string \"null\" rather than nil.  The fix is applied at
+    the renderer level so the emitted Swift is correct regardless."""
+    from clio.emitters._swift_flow_renderer import _swift_condition_expr
+    from clio.ir.graph import ConditionIR
+
+    cond = ConditionIR(
+        step_name="r",
+        field="level",
+        op="==",
+        literal_value="null",
+        literal_kind="ident",
+    )
+    # With no step/take type context the fallback branch fires.
+    result = _swift_condition_expr(cond, set(), {}, {}, {})
+    assert "nil" in result, f"'null' ident must render as nil, got: {result!r}"
+    assert '"null"' not in result, f"'null' must NOT render as string literal, got: {result!r}"
+
+
+def test_fix_b_none_kwarg_emits_nil(tmp_path: Path) -> None:
+    """Defensive: Python None value in a kwarg renders as Swift nil.
+
+    Reachability note: CLIO source cannot currently produce a Python None in
+    a kwarg value — 'null' in kwargs is parsed as '@null' (a state ref).
+    The guard is applied defensively in _swift_kwarg_value."""
+    from clio.emitters._swift_flow_renderer import _swift_kwarg_value
+    result = _swift_kwarg_value(None, {}, {}, {})
+    assert result == "nil", f"Python None must render as nil, got: {result!r}"
+
+
+def test_fix_c_anthropic_swift_error_surface(tmp_path: Path) -> None:
+    """Emitted Anthropic.swift parses the API error object and surfaces the
+    message when the API returns an error body instead of a content array."""
+    from clio.emitters._swift_runtime_templates import render_runtime_anthropic_swift
+    src = render_runtime_anthropic_swift()
+    # Must check for error object with message before attempting content access.
+    assert 'json["error"] as? [String: Any]' in src
+    assert '"Anthropic API error: ' in src
+    # The content access is still required, as a fallback after error check.
+    assert 'json["content"] as? [[String: Any]]' in src
+
+
+def test_fix_d_cache_store_overwrite_guard(tmp_path: Path) -> None:
+    """Emitted Cache.swift contains the fileExists/removeItem guard before
+    moveItem so that a refreshed cache entry after TTL expiry always wins."""
+    from clio.emitters._swift_runtime_templates import render_runtime_cache_swift
+    src = render_runtime_cache_swift()
+    # The guard must appear before the moveItem call.
+    exists_pos = src.index("fileExists(atPath: final.path)")
+    remove_pos = src.index("removeItem(at: final)")
+    move_pos = src.index("moveItem(at: tmp, to: final)")
+    assert exists_pos < remove_pos < move_pos, (
+        "fileExists guard must precede removeItem, which must precede moveItem"
+    )
+
+
+def test_fix_g_validate_swift_bool_branch(tmp_path: Path) -> None:
+    """Emitted Validate.swift contains an explicit Bool branch at the top of
+    cmpOk() before the toDouble path, for Linux cross-platform compatibility."""
+    from clio.emitters._swift_runtime_templates import render_runtime_validate_swift
+    src = render_runtime_validate_swift()
+    # The Bool branch must appear before the toDouble branch in cmpOk.
+    bool_pos = src.index("let lb = l as? Bool, let rb = r as? Bool")
+    double_pos = src.index("if let lf = toDouble(l), let rf = toDouble(r)")
+    assert bool_pos < double_pos, (
+        "Bool branch must precede toDouble branch in cmpOk"
+    )
+
+
+def test_fix_i_onfail_abort_only_emits_throw(tmp_path: Path) -> None:
+    """ON_FAIL: abort("boom") without retry must emit the throw statement.
+
+    A chain without retry(N) still applies: has_on_fail keys off
+    step.on_fail being present, and attempts = max(1, retry_count) = 1, so the
+    loop runs once and the abort fires post-loop. Without this the abort would
+    be silently dropped and the simple no-ON_FAIL path would run instead."""
+    out = tmp_path / "out"
+    rc = _compile(FIXTURES / "swift_onfail_abort_only.clio", out)
+    assert rc == 0
+    step_src = (out / "Sources/ClioFlow/Steps/Step01_detect.swift").read_text()
+    # The custom abort message must appear.
+    assert 'throw AnthropicError(message: "boom")' in step_src, (
+        "abort-only ON_FAIL must emit custom throw"
+    )
+    # The loop must run exactly once (attempts=1).
+    assert "for attempt in 0..<1" in step_src, (
+        "abort-only ON_FAIL must emit loop with 1 attempt"
+    )
+    # The simple no-ON_FAIL path must not appear (no plain Anthropic.complete outside a loop).
+    lines = step_src.splitlines()
+    for line in lines:
+        if "for attempt in" in line:
+            break
+    else:
+        raise AssertionError("no retry loop found in emitted step")
+
+
+def test_fix_i_existing_onfail_unaffected(tmp_path: Path) -> None:
+    """Regression guard: an existing ON_FAIL with retry(2) + fallback + abort
+    still emits the correct loop bound (0..<2, not 0..<1)."""
+    out = tmp_path / "out"
+    rc = _compile(FIXTURES / "swift_judgment_onfail.clio", out)
+    assert rc == 0
+    step_src = (out / "Sources/ClioFlow/Steps/Step01_detect.swift").read_text()
+    assert "for attempt in 0..<2" in step_src, "retry(2) must emit 0..<2 loop bound"
+    assert "step_naive(" in step_src, "fallback step must still be emitted"
+    assert "detection exhausted" in step_src, "abort message must still be emitted"

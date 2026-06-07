@@ -1,0 +1,12 @@
+STEP detect
+  TAKES: x: str
+  GIVES: y: str
+  MODE:  judgment
+  ON_FAIL: abort("boom")
+
+FLOW pipeline
+  detect(x="hi")
+
+RESOURCES
+  target: swift
+  models: [haiku]
