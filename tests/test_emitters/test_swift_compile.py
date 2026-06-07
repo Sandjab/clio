@@ -117,6 +117,27 @@ def test_swift_judgment_cache_builds(tmp_path: Path) -> None:
     assert proc.returncode == 0, proc.stderr
 
 
+@pytest.mark.skipif(swift_missing, reason="swift toolchain not on PATH")
+def test_swift_judgment_onfail_builds(tmp_path: Path) -> None:
+    """swift build must succeed — and emit NO warnings — on a judgment flow with
+    an ON_FAIL chain (retry + fallback).
+
+    The fresh tmp_path means this is a clean build that compiles every source,
+    so a regression that reintroduces a `lastError written but never read`
+    (or `fbOut unused`) warning would surface here."""
+    out = tmp_path / "out"
+    _compile(FIXTURES / "swift_judgment_onfail.clio", out)
+    proc = subprocess.run(
+        ["swift", "build"],
+        cwd=out,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "warning:" not in (proc.stdout + proc.stderr), proc.stdout + proc.stderr
+
+
 @pytest.mark.skipif(swift_missing or swiftc_missing, reason="swift/swiftc toolchain not on PATH")
 def test_sha256_known_vector(tmp_path: Path) -> None:
     """sha256Hex("abc") equals the FIPS 180-4 known test vector.

@@ -427,10 +427,13 @@ class _Parser:
                 self.advance()
                 self.expect(TokenType.COLON)
                 value_tok = self.expect(TokenType.KEYWORD)
-                if value_tok.value not in {"claude-cli", "python", "mcp-server", "langgraph", "claude-skill", "go"}:
+                _valid_targets = {
+                    "claude-cli", "python", "mcp-server", "langgraph", "claude-skill", "go", "swift",
+                }
+                if value_tok.value not in _valid_targets:
                     raise ParseError(
                         f"target {value_tok.value!r} is not supported "
-                        "(valid targets: claude-cli, python, mcp-server, langgraph, claude-skill, go)",
+                        "(valid targets: claude-cli, python, mcp-server, langgraph, claude-skill, go, swift)",
                         value_tok.line, value_tok.col,
                     )
                 target = value_tok.value

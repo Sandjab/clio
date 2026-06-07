@@ -42,21 +42,37 @@ def _collect_reachable_steps(graph: FlowGraph) -> list[StepIR]:
     handlers.  Dedups by step name, preserving first-seen order so step
     file numbering is deterministic.  FlowCallIR nodes are skipped (they
     reference a flow, not a step).
+
+    ON_FAIL fallback steps are also collected for each visited step so that
+    the generated fallback call in the judgment renderer compiles.  Go skips
+    this and its fallback code would not compile; we follow on_fail to keep
+    emitted Swift valid.
     """
     steps_by_name = {s.name: s for s in graph.steps if isinstance(s, StepIR)}
     seen: set[str] = set()
     ordered: list[StepIR] = []
 
+    def collect_step(step: StepIR) -> None:
+        """Add step (and its on_fail fallbacks, recursively) to ordered."""
+        if step.name in seen:
+            return
+        seen.add(step.name)
+        ordered.append(step)
+        # Follow ON_FAIL fallback chain so the referenced step file is emitted.
+        if step.on_fail is not None:
+            for strategy in step.on_fail.strategies:
+                if strategy.kind == "fallback":
+                    fb = strategy.fallback_step
+                    if fb is not None:
+                        collect_step(fb)
+
     def visit_chain(items: tuple) -> None:  # type: ignore[type-arg]
         for it in items:
             if isinstance(it, CallIR):
-                if it.step_name in seen:
-                    continue
                 step = steps_by_name.get(it.step_name)
                 if step is None:
                     continue
-                seen.add(it.step_name)
-                ordered.append(step)
+                collect_step(step)
             elif isinstance(it, IfBlockIR):
                 visit_chain(it.then_body)
                 visit_chain(it.else_body)

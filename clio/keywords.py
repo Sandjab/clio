@@ -49,6 +49,7 @@ class Keyword(StrEnum):
     PYTHON = "python"
     RUST = "rust"
     GO = "go"
+    SWIFT = "swift"
     NODE = "node"
     BASH = "bash"
     AUTO = "auto"

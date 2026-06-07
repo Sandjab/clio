@@ -516,6 +516,54 @@ def test_E_SWIFT_013_rest_multipart_body_refused(tmp_path: Path, capsys: object)
     assert "E_SWIFT_013" in captured.err
 
 
+# ---------------------------------------------------------------------------
+# P2.3 — ON_FAIL chain: retry / escalate / fallback / abort
+# ---------------------------------------------------------------------------
+
+
+def test_swift_judgment_onfail_emits_retry_loop(tmp_path: Path) -> None:
+    """The detect step emits the retry loop, Task.sleep, fallback call, and abort message."""
+    out = tmp_path / "out"
+    rc = _compile(FIXTURES / "swift_judgment_onfail.clio", out)
+    assert rc == 0
+
+    steps_dir = out / "Sources/ClioFlow/Steps"
+
+    detect_src = (steps_dir / "Step01_detect.swift").read_text()
+    assert "for attempt in 0..<2" in detect_src, "retry loop not emitted"
+    assert "Task.sleep" in detect_src, "exponential backoff sleep not emitted"
+    assert "step_naive(" in detect_src, "fallback call to step_naive not emitted"
+    assert "detection exhausted" in detect_src, "abort message not emitted"
+
+    # naive must be emitted as Step02_naive.swift even though it's not in the flow chain
+    assert (steps_dir / "Step02_naive.swift").exists(), "fallback step file not emitted"
+
+
+def test_swift_judgment_onfail_abort_message_is_escaped(tmp_path: Path) -> None:
+    """A quote inside an abort() message is escaped so the emitted Swift string
+    literal stays valid. Without escaping `"a "quote" b"` would not compile."""
+    src = tmp_path / "esc.clio"
+    src.write_text(
+        "STEP detect\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  judgment\n"
+        '  ON_FAIL: retry(2) then abort("a \\"quote\\" b")\n'
+        "\n"
+        "FLOW pipeline\n"
+        '  detect(x="hi")\n'
+        "\n"
+        "RESOURCES\n"
+        "  target: swift\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    rc = _compile(src, out)
+    assert rc == 0
+    detect_src = (out / "Sources/ClioFlow/Steps/Step01_detect.swift").read_text()
+    assert 'throw AnthropicError(message: "a \\"quote\\" b")' in detect_src
+
+
 def _read_tree(root: Path) -> dict[str, str]:
     """Return {relative_path: content} for all files under root."""
     result: dict[str, str] = {}
