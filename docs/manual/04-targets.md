@@ -1,6 +1,6 @@
 # Compilation targets
 
-CLIO emits a runnable project for **one of six targets** today, selected via `--target`:
+CLIO emits a runnable project for **one of seven targets** today, selected via `--target`:
 
 | Target | Output | Best for |
 |---|---|---|
@@ -10,6 +10,7 @@ CLIO emits a runnable project for **one of six targets** today, selected via `--
 | `langgraph` | Python package whose `flow.py` builds a `langgraph.graph.StateGraph` | Bridging into LangChain ecosystems; using LangGraph's runtime features (persistence, human-in-the-loop) with CLIO-defined logic |
 | `claude-skill` | Claude Code skill directory (`SKILL.md` + `scripts/` + `schemas/` + `prompts/`) | LLM-host-orchestrated skills; ship a flow as a Claude Code skill with no external runtime or API key after install |
 | `go` | Go module (`flow.Run` package + `cmd/<flow>/main.go`) | Single static binary, no runtime to install; Go exact steps + Anthropic judgment |
+| `swift` | Swift package (SwiftPM, zero external SPM deps, macOS + Linux) | Native Swift binary; URLSession Anthropic client; `withThrowingTaskGroup` parallel FOR EACH |
 
 The `RESOURCES.target:` field in the `.clio` source is **informational** — the `--target` flag at compile time is what actually selects the emitter.
 
@@ -166,35 +167,70 @@ You get a `go.mod`, a `contracts/` package (Go structs with `json` tags), `steps
 
 See [`docs/COMPILATION_TARGETS.md`](../COMPILATION_TARGETS.md#target-go) for the full layout and refused-combo table.
 
+### `swift`
+
+```bash
+uv run python -m clio compile flow.clio --target swift --output ./swift-out
+cd swift-out && swift build
+.build/debug/<flow_name> --kwargs '{"file": "input.txt"}'
+```
+
+Or build a release binary:
+
+```bash
+cd swift-out && swift build -c release
+.build/release/<flow_name> --kwargs '{"file": "input.txt"}'
+```
+
+You get a **two-target** `Package.swift` (a library `ClioFlow` plus an executable named after the flow). `Sources/<flow_name>/` holds just `Main.swift` (the `@main` entry that parses `--kwargs` and calls `Flow.run(kwargs:)`); the library target `Sources/ClioFlow/` holds `Flow.swift` (the `public enum Flow` orchestrator), `Contracts.swift`, the per-step files under `Steps/`, and a `Runtime/` directory with zero-dependency pure-Swift implementations of the Anthropic URLSession client, JSON Schema validator, and SHA256-keyed cache. `Contracts.swift` and the `Runtime/*` files are emitted only when the flow needs them (contracts / judgment / cache respectively).
+
+**Use when:**
+
+- You want a native Swift binary on macOS or Linux with no Python interpreter, no Go toolchain, and no external SPM package dependencies.
+- Your exact steps are in Swift (or `LANG: auto`) and you want the orchestrator to match.
+- You need concurrent iteration (`FOR EACH PARALLEL`) backed by `withThrowingTaskGroup`.
+
+**Don't use when (MVP scope):**
+
+- You need `impl.mode: rest` or `impl.mode: shell` — deferred to Phase 4; use `--target python` or `--target go`.
+- You need FLOW composition (sub-flow calls) or `RESCUE`/`RESUME` — deferred to Phase 5; use `--target python` or `--target go`.
+- You need OpenAI / Bedrock / Vertex (only `invoke.api.anthropic` is wired — E_SWIFT_005, E_SWIFT_003).
+- You need `impl.mode: sql` or `impl.mode: mcp_tool` — deferred (E_SWIFT_009/010).
+- You need a multi-GIVES sub-flow as a `FOR EACH PARALLEL` body — this needs FLOW composition (Phase 5) first, so the `E_SWIFT_006` code reserved for it is dormant in the MVP. Single-GIVES parallel bodies and all sequential FOR EACH are supported.
+- You need `--from-step N` resume (not implemented — the Swift binary re-runs the full flow; use `--target python`).
+
+See [`docs/COMPILATION_TARGETS.md`](../COMPILATION_TARGETS.md#target-swift) for the full layout and refused-combo table.
+
 ## Cross-target feature support
 
-| Feature | claude-cli | python | mcp-server | langgraph | claude-skill | go |
-|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| `MODE: exact` (code stub) | ✅ | ✅ | ✅ | ✅ | ✅ (`scripts/NN.py` stub) | ✅ (Go stub) |
-| `MODE: exact` + `LANG: go / auto` | ⚠️ LANG ignored (always Python stub) | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ✅ |
-| `MODE: exact` + `LANG: python / bash / rust / node` | ⚠️ LANG ignored (always Python stub) | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ❌ E_GO_001 |
-| `MODE: exact` + `impl.shell` | ✅ | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ✅ os/exec |
-| `MODE: exact` + `impl.shell` + `parse: json` | ⚠️ silently ignored | ✅ | ✅ | ✅ | ✅ | ✅ json.Unmarshal |
-| `MODE: exact` + `impl.rest` | ✅ (uses `requests` at runtime) | ✅ | ✅ | ✅ | ✅ | ✅ net/http + retry (json/raw bodies only; form/file/multipart → E_GO_013) |
-| `MODE: judgment` + `invoke: cli` (default) | ✅ | ❌ rejected | ❌ rejected | ❌ rejected | ✅ host-driven | ❌ E_GO_002 |
-| `MODE: judgment` + `invoke.api.anthropic` | (uses `RESOURCES.models` chain) | ✅ | ❌ rejected | ✅ | ✅ host-driven | ✅ |
-| `MODE: judgment` + `invoke.api.openai` | ❌ | ✅ | ❌ | ❌ rejected (v0) | ✅ host-driven | ❌ E_GO_005 |
-| `MODE: judgment` + `invoke.api.bedrock`/`vertex` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ E_GO_003 |
-| `CACHE: ttl(...)` | ✅ | ✅ | ✅ | ✅ (reuses python runtime) | ⚠️ documented in `SKILL.md`; helper bundled | ✅ |
-| `ON_FAIL: retry(N)` | ✅ | ✅ | ✅ | ✅ via `RetryPolicy` | ⚠️ documented in `SKILL.md` (host-followed) | ✅ |
-| `ON_FAIL: escalate / fallback` | ✅ | ✅ | ✅ minimum-compliance | ❌ rejected (v0) | ⚠️ documented in `SKILL.md` | ✅ |
-| `ON_FAIL: abort` | ✅ | ✅ | ✅ | ✅ | ⚠️ documented in `SKILL.md` | ✅ |
-| `RESCUE` + `step.error.*` + `RESUME` | ❌ rejected | ✅ | ✅ | ❌ rejected | ⚠️ documented in `SKILL.md` | ✅ |
-| `FOR EACH` (sequential) | ✅ | ✅ | ✅ | ❌ rejected (v0; v0.7) | ✅ | ✅ |
-| `FOR EACH ... PARALLEL AS` | ❌ rejected | ✅ ThreadPool | ✅ asyncio.gather | ❌ rejected (v0; v0.7 via Send) | ⚠️ serialised with warning | ✅ errgroup |
-| `FLOW.TAKES` / `FLOW.GIVES` (v0.16, optional) | ✅ README section | ✅ typed `run()` | ✅ inputSchema / outputSchema | ✅ State subset | ✅ SKILL.md Inputs / Outputs | ✅ typed `Run()` |
-| **FLOW composition** (sub-flow callable, v0.17) | ❌ rejected | ✅ `run_<name>()` | ✅ + multi-tool | ✅ sub-`StateGraph` | ⚠️ documented in SKILL.md (linear-only, `scripts/sub_<name>.py`) | ✅ `run<Name>()` func |
-| `FOR EACH PARALLEL` body = sub-flow (v0.17) | ❌ rejected | ✅ | ✅ asyncio.gather | ❌ rejected (v0; v0.7 via Send) | ⚠️ linear sub-flow only | ✅ single-GIVES, terminal-only (typed downstream consumption of the collector → v0.24; multi-GIVES → E_GO_006) |
-| mcp-server multi-tool (multi-FLOW source, v0.17) | n/a | n/a | ✅ one tool per uncalled signed FLOW | n/a | n/a | n/a |
-| `TEST` blocks (v0.15) | ⚠️ ignored | ✅ pytest emitted | ⚠️ ignored | ⚠️ ignored | ⚠️ ignored | ❌ E_GO_012 |
-| `--from-step N` resume | ❌ | ✅ | ❌ | ❌ (use LangGraph checkpointers) | ❌ | ⚠️ not implemented (re-runs full flow) |
-| JSONL logging (`CLIO_LOG=1`) | ❌ | ✅ | ✅ | ⏸ delegated to LangSmith | ❌ | ⏸ silent no-op |
-| `clio graph --format html` | n/a (graph is target-independent) | n/a | n/a | n/a | n/a | n/a |
+| Feature | claude-cli | python | mcp-server | langgraph | claude-skill | go | swift |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| `MODE: exact` (code stub) | ✅ | ✅ | ✅ | ✅ | ✅ (`scripts/NN.py` stub) | ✅ (Go stub) | ✅ (Swift stub) |
+| `MODE: exact` + `LANG: swift / auto` | ⚠️ LANG ignored | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ❌ E_GO_001 | ✅ |
+| `MODE: exact` + `LANG: go / auto` | ⚠️ LANG ignored (always Python stub) | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ✅ | ❌ E_SWIFT_001 |
+| `MODE: exact` + `LANG: python / bash / rust / node` | ⚠️ LANG ignored (always Python stub) | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ❌ E_GO_001 | ❌ E_SWIFT_001 |
+| `MODE: exact` + `impl.shell` | ✅ | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ✅ os/exec | ❌ Phase 4 |
+| `MODE: exact` + `impl.shell` + `parse: json` | ⚠️ silently ignored | ✅ | ✅ | ✅ | ✅ | ✅ json.Unmarshal | ❌ Phase 4 |
+| `MODE: exact` + `impl.rest` | ✅ (uses `requests` at runtime) | ✅ | ✅ | ✅ | ✅ | ✅ net/http + retry (json/raw bodies only; form/file/multipart → E_GO_013) | ❌ Phase 4 |
+| `MODE: judgment` + `invoke: cli` (default) | ✅ | ❌ rejected | ❌ rejected | ❌ rejected | ✅ host-driven | ❌ E_GO_002 | ❌ E_SWIFT_002 |
+| `MODE: judgment` + `invoke.api.anthropic` | (uses `RESOURCES.models` chain) | ✅ | ❌ rejected | ✅ | ✅ host-driven | ✅ | ✅ URLSession |
+| `MODE: judgment` + `invoke.api.openai` | ❌ | ✅ | ❌ | ❌ rejected (v0) | ✅ host-driven | ❌ E_GO_005 | ❌ E_SWIFT_005 |
+| `MODE: judgment` + `invoke.api.bedrock`/`vertex` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ E_GO_003 | ❌ E_SWIFT_003 |
+| `CACHE: ttl(...)` | ✅ | ✅ | ✅ | ✅ (reuses python runtime) | ⚠️ documented in `SKILL.md`; helper bundled | ✅ | ✅ (keys byte-identical with python + go) |
+| `ON_FAIL: retry(N)` | ✅ | ✅ | ✅ | ✅ via `RetryPolicy` | ⚠️ documented in `SKILL.md` (host-followed) | ✅ | ✅ (exponential backoff via `Task.sleep`) |
+| `ON_FAIL: escalate / fallback` | ✅ | ✅ | ✅ minimum-compliance | ❌ rejected (v0) | ⚠️ documented in `SKILL.md` | ✅ | ✅ fallback; escalate no-op |
+| `ON_FAIL: abort` | ✅ | ✅ | ✅ | ✅ | ⚠️ documented in `SKILL.md` | ✅ | ✅ |
+| `RESCUE` + `step.error.*` + `RESUME` | ❌ rejected | ✅ | ✅ | ❌ rejected | ⚠️ documented in `SKILL.md` | ✅ | ❌ Phase 5 |
+| `FOR EACH` (sequential) | ✅ | ✅ | ✅ | ❌ rejected (v0; v0.7) | ✅ | ✅ | ✅ |
+| `FOR EACH ... PARALLEL AS` | ❌ rejected | ✅ ThreadPool | ✅ asyncio.gather | ❌ rejected (v0; v0.7 via Send) | ⚠️ serialised with warning | ✅ errgroup | ✅ withThrowingTaskGroup (cap 10) |
+| `FLOW.TAKES` / `FLOW.GIVES` (v0.16, optional) | ✅ README section | ✅ typed `run()` | ✅ inputSchema / outputSchema | ✅ State subset | ✅ SKILL.md Inputs / Outputs | ✅ typed `Run()` | ✅ typed `Flow.run(kwargs:)` |
+| **FLOW composition** (sub-flow callable, v0.17) | ❌ rejected | ✅ `run_<name>()` | ✅ + multi-tool | ✅ sub-`StateGraph` | ⚠️ documented in SKILL.md (linear-only, `scripts/sub_<name>.py`) | ✅ `run<Name>()` func | ❌ Phase 5 |
+| `FOR EACH PARALLEL` body = sub-flow (v0.17) | ❌ rejected | ✅ | ✅ asyncio.gather | ❌ rejected (v0; v0.7 via Send) | ⚠️ linear sub-flow only | ✅ single-GIVES, terminal-only (typed downstream consumption of the collector → v0.24; multi-GIVES → E_GO_006) | ❌ Phase 5 (needs FLOW composition; `E_SWIFT_006` reserved/dormant until then) |
+| mcp-server multi-tool (multi-FLOW source, v0.17) | n/a | n/a | ✅ one tool per uncalled signed FLOW | n/a | n/a | n/a | n/a |
+| `TEST` blocks (v0.15) | ⚠️ ignored | ✅ pytest emitted | ⚠️ ignored | ⚠️ ignored | ⚠️ ignored | ❌ E_GO_012 | ❌ E_SWIFT_012 |
+| `--from-step N` resume | ❌ | ✅ | ❌ | ❌ (use LangGraph checkpointers) | ❌ | ⚠️ not implemented (re-runs full flow) | ⚠️ not implemented (re-runs full flow) |
+| JSONL logging (`CLIO_LOG=1`) | ❌ | ✅ | ✅ | ⏸ delegated to LangSmith | ❌ | ⏸ silent no-op | ❌ not emitted |
+| `clio graph --format html` | n/a (graph is target-independent) | n/a | n/a | n/a | n/a | n/a | n/a |
 
 ## A common workflow: `python` for production, `claude-cli` for sketches
 
@@ -206,6 +242,6 @@ A `.clio` file is target-independent (modulo the limitations above). A common pa
 4. **Bridge** to `--target langgraph` if you need to plug into LangChain runtime features (checkpointers, human-in-the-loop, streaming). Subset features today, full parity is planned (not yet shipped).
 5. **Ship as a Claude Code skill** with `--target claude-skill` when the audience is Claude Code users who want a zero-runtime install (no API key, no Python env).
 
-The same source compiles all six (within each target's scope).
+The same source compiles all seven (within each target's scope).
 
 Next: [CLI reference](05-cli-reference.md) for every command and flag.

@@ -74,7 +74,7 @@ Also lifts `FOR EACH <var> IN <collection>:` from spec-only to implemented contr
 | `WHILE <cond> MAX N:` (v0.7) | ✅ | ✅ | ✅ bounded `for/break` | ❌ rejected | ✅ bounded `for/break` |
 | `FLOW.TAKES` / `FLOW.GIVES` (v0.16) | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-(per-target status for all six targets, including `go`, `claude-skill`, and `langgraph`: see [docs/manual/04-targets.md](manual/04-targets.md#cross-target-feature-support))
+(per-target status for all seven targets, including `swift`, `go`, `claude-skill`, and `langgraph`: see [docs/manual/04-targets.md](manual/04-targets.md#cross-target-feature-support))
 
 Where the table says *rejected at compile time*, the emitter raises a clear `ValueError` / `NotImplementedError` rather than producing silent or broken code.
 
@@ -234,7 +234,7 @@ Five forms, hybrid syntax:
 
 It is a parse error to combine forms (e.g. `body: {form: ..., multipart: ...}`).
 
-> **`target: go` limitation.** The Go emitter supports the **JSON** and **Raw** body forms only. **File**, **Form**, and **Multipart** bodies are refused at compile time with `E_GO_013` — use `--target python` for those. (The other targets support all five forms.)
+> **`target: go` limitation.** The Go emitter supports the **JSON** and **Raw** body forms only. **File**, **Form**, and **Multipart** bodies are refused at compile time with `E_GO_013` — use `--target python` for those. (The other implemented targets support all five forms, except `target: swift` which defers `impl.mode: rest` entirely to Phase 4 — use `--target python` or `--target go` for REST steps today.)
 
 ##### `retry`
 
@@ -586,7 +586,13 @@ collector) is refused at compile time with `E_GO_006`; single-GIVES
 parallel and all sequential composition compile cleanly. The single-GIVES
 go collector is **terminal-only**: it is produced, but typed downstream
 consumption (`aggregate(xs=results)` or `FOR EACH x IN results`) fails the
-`go build` and is deferred to v0.24.
+`go build` and is deferred to v0.24. On `target: swift`, FLOW composition
+is deferred to Phase 5 — a `FOR EACH PARALLEL` body that is a sub-flow
+call is therefore also unsupported in the current MVP. A `FOR EACH PARALLEL`
+body that is a plain step call is supported; its single-GIVES collector is
+**terminal-only** (same limitation as `target: go`): `clio compile` emits
+without error, but typed downstream consumption of the collector does not
+compile under `swift build`.
 
 ### Target support for sub-flow composition
 
@@ -597,6 +603,7 @@ consumption (`aggregate(xs=results)` or `FOR EACH x IN results`) fails the
 | `claude-skill`  | yes (sub-flow → standalone script invoked from main)                  |
 | `langgraph`     | yes (sub-flow → compiled sub-`StateGraph`)                            |
 | `go`            | yes (sub-flow → `run<Name>()` func; single-GIVES parallel bodies are terminal-only — typed downstream consumption deferred to v0.24; multi-GIVES PARALLEL refused — E_GO_006) |
+| `swift`         | **no** — deferred to Phase 5; use `--target python` or `--target go` |
 | `claude-cli`    | **no** — compile-time error (deferred to a later release)             |
 
 ### IMPORT and EXPOSE (v0.18)
@@ -756,7 +763,7 @@ Flow-level resources and defaults.
 
 ```
 RESOURCES
-  target:       claude-cli | python | mcp-server | langgraph | claude-skill | go   # required
+  target:       claude-cli | python | mcp-server | langgraph | claude-skill | go | swift   # required
   models:       [<model>, <model>, ...]         # required for the claude-cli target
   mcp_servers:  {<name>: <server-spec>, ...}    # MCP servers callable from impl.mcp_tool steps
   databases:    {<name>: <db-spec>, ...}        # databases callable from impl.sql steps
@@ -1066,6 +1073,7 @@ same STEP is a compile error (redundant double-abort).
 - **mcp-server** ✓ — async mirror with `_session=_session` threading.
 - **claude-skill** ✓ — RESCUE body emitted as a helper script invoked from main.
 - **go** ✓ — RESCUE body emitted as a `rescue<Step>()` helper func (v0.23).
+- **swift** ✗ — rejects at compile time (deferred to Phase 5); use `--target python` or `--target go`.
 - **langgraph** ✗ — rejects at compile time. Cyclic edges, state
   reducers, and multi-step branches all need to land together; planned
   for the multi-step branches sprint.

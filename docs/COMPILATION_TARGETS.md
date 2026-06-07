@@ -14,6 +14,7 @@ Each target is an emitter module that transforms the IR graph into a runnable pr
 | `local` | Future | Same as `python`, with Ollama/vLLM | Offline / data-privacy constraints | ✅ (planned) | High (Outlines/Guidance) |
 | `rust` | Future | Cargo async project | Performance-critical `exact` steps | planned | High |
 | `go` | Implemented | Go module (package `flow.Run` + `cmd/<flow>/main.go`) | Single static binary, no runtime to install; concurrent `exact` steps via goroutines | ✅ | — |
+| `swift` | Implemented | Swift package (SwiftPM); zero external SPM dependencies | Native Swift binary (macOS + Linux), URLSession Anthropic client, `withThrowingTaskGroup` parallel FOR EACH | ❌ (deferred) | — |
 | `docker` | Future | Multi-stage Dockerfile + compose | Mixed-language flows | planned | Medium |
 | `hybrid` | Future | Claude CLI + precompiled binaries for `exact` | Heavy `exact` within CLI orchestration | planned | Medium |
 | `fastapi` | Candidate | HTTP server (FLOW = endpoint, CONTRACT = `response_model`) | Deploy a `.clio` as a microservice | planned | Low–Medium |
@@ -420,6 +421,109 @@ Structured JSONL logging is a silent no-op for the Go target (the `clio_runtime/
 ### Resume
 
 `--from-step N` resume is not implemented. The Go binary runs the full flow on each invocation without error. For incremental re-runs on a long pipeline, compile to `--target python` today.
+
+---
+
+## `target: swift`
+
+Produces a **two-target** Swift package (a library `ClioFlow` plus an executable named after the flow) that builds with `swift build` on macOS and Linux. **Zero external SPM dependencies** — all runtime code is vendored pure Swift.
+
+### Layout
+
+```
+output/
+  Package.swift                 # SPM manifest with two targets:
+                                #   .target(name: "ClioFlow")
+                                #   .executableTarget(name: "<flow_name>", dependencies: ["ClioFlow"])
+  Sources/
+    <flow_name>/
+      Main.swift                # @main executable entry: parses --kwargs JSON, calls Flow.run(kwargs:)
+    ClioFlow/
+      Flow.swift                # orchestrator: public enum Flow { @MainActor public static func run(kwargs: [String: Any]) async throws -> [String: Any] }
+      Contracts.swift           # (only if contracts) Codable + Sendable structs, one per CONTRACT, with static let jsonSchema + validate()
+      Steps/
+        Step01_<exact_step>.swift     # typed stub: func step_<name>(_ input: ...)  → fatalError("fill me in")
+        Step02_<judgment_step>.swift  # auto-generated: URLSession Anthropic call + cache + ON_FAIL chain
+      Runtime/
+        Anthropic.swift         # (only if judgment) zero-dep URLSession client; #if canImport(FoundationNetworking) for Linux
+        Validate.swift          # (only if contracts) hand-rolled JSON Schema + x-clio-assert walker (matches python/go semantics)
+        Cache.swift             # (only if CACHE) SHA256-keyed on-disk cache; keys byte-identical with python and go targets
+        SHA256.swift            # (only if CACHE) vendored pure-Swift SHA256 (no CryptoKit dependency)
+```
+
+`Flow.swift`, `Contracts.swift`, `Steps/`, and `Runtime/` all live under `Sources/ClioFlow/` (the library target). Only `Main.swift` lives under `Sources/<flow_name>/` (the executable target). The `Runtime/*` and `Contracts.swift` files are emitted conditionally — `Anthropic.swift` only when the flow has a judgment step, `Validate.swift`/`Contracts.swift` only when it declares a CONTRACT, `Cache.swift`/`SHA256.swift` only when a step uses `CACHE`.
+
+### Use
+
+```bash
+swift build
+.build/debug/<flow_name> --kwargs '{"file": "input.txt"}'
+```
+
+Or build a release binary:
+
+```bash
+swift build -c release
+.build/release/<flow_name> --kwargs '{"file": "input.txt"}'
+```
+
+- **FOR EACH PARALLEL:** emits `withThrowingTaskGroup` with a concurrency cap of 10 and ordered collect.
+
+### Refused combinations (MVP scope)
+
+The following are rejected at compile time with a clear error code and a pointer to the appropriate alternative:
+
+- `LANG: python` / `bash` / `rust` / `node` / `go` on an exact step — only `swift` or `auto` accepted (E_SWIFT_001).
+- `invoke.mode: cli` — no `claude -p` subprocess in a Swift binary (E_SWIFT_002).
+- `invoke.api.bedrock` / `vertex` — not wired (E_SWIFT_003).
+- `invoke.api.openai` — OpenAI-compat SDK not wired; use `--target python` (E_SWIFT_005).
+- A **multi-GIVES sub-flow used as a `FOR EACH PARALLEL` body** — reserved code `E_SWIFT_006`. This refusal is **dormant** today: a multi-GIVES sub-flow requires more than one FLOW, which is already refused earlier (FLOW composition — Phase 5). The code is held in reserve and only becomes reachable once FLOW composition ships. You will not encounter `E_SWIFT_006` in the current MVP.
+- `impl.mode: sql` — deferred (E_SWIFT_009).
+- `impl.mode: mcp_tool` — deferred (E_SWIFT_010).
+- `TEST` blocks — deferred (E_SWIFT_012).
+- `impl.rest` with a `form`/`file`/`multipart` body — only `json` and `raw` body forms are supported; others refused at compile time (E_SWIFT_013).
+- `impl.mode: rest` (json/raw) — deferred to Phase 4; use `--target python` or `go` for now.
+- `impl.mode: shell` — deferred to Phase 4; use `--target python` or `go` for now.
+- **FLOW composition** (multiple FLOWs / sub-flow calls / `FlowCallIR`) — deferred to Phase 5; use `--target python` or `go`.
+- `RESCUE` / `RESUME` handlers — deferred to Phase 5; use `--target python` or `go`.
+- `FOR EACH <var> IN <loop_variable>:` (iterating over a loop variable from an enclosing FOR EACH) — deferred; use `--target python` or `go`.
+
+### Inherited features (MVP scope)
+
+These work identically across macOS and Linux without restriction:
+
+- `IF / ELSE`, `MATCH / CASE` (with synthesized exhaustive `default`), `WHILE ... MAX N:` — emits idiomatic Swift `if/else`, `switch`, bounded `for/break`.
+- `FOR EACH ... IN ...:` (sequential) — emits `for item in state[...] as! [...]`.
+- `FOR EACH ... PARALLEL AS <collector>:` — emits `withThrowingTaskGroup` fan-out with a 10-task concurrency cap and ordered collect.
+- `CACHE: ttl(...)` — SHA256-keyed on-disk layout **byte-identical** with the `python` and `go` targets (same key derivation: SHA256 of step + model + prompt + schema); `.cache/` directories are interchangeable across targets.
+- `ON_FAIL: retry(N) then escalate then fallback(...) then abort(...)` — `retry(N)` (exponential backoff with `Task.sleep`), `fallback(step)`, and `abort(msg)` are emitted; `escalate` is a **no-op** (single model per emission, same as `target: go`).
+- `CONTRACT` — emitted as a `Codable, Sendable` struct with `static let jsonSchema` and a `validate()` method backed by the hand-rolled `Runtime/Validate.swift` JSON Schema + `x-clio-assert` walker (parity with `clio/runtime/validate.py` and `clio_runtime/validate/validate.go`).
+
+### Known limitation
+
+A `FOR EACH ... PARALLEL AS <collector>` result is **terminal-only** on `target: swift`: `clio compile` emits the package without error (exit 0), but typed downstream consumption of the collector (`aggregate(xs=results)` or `FOR EACH x IN results`) does not compile under `swift build`. Use `--target python` or `go` if you need to feed the collected list into a downstream step.
+
+### Cache layout interchangeable with `python` and `go`
+
+All three targets read/write `<output>/.cache/<step_name>/<sha256>.json` with the same key derivation. Switching targets between runs preserves cache hits.
+
+### Model name mapping
+
+`RESOURCES.models` short names map to Anthropic API model IDs at emit time (same mapping as the `python` and `go` targets):
+
+| CLIO short | Anthropic ID |
+|------------|--------------|
+| `haiku`    | `claude-haiku-4-5-20251001` |
+| `sonnet`   | `claude-sonnet-4-6` |
+| `opus`     | `claude-opus-4-7` |
+
+### Logging
+
+Structured JSONL logging is not emitted by the Swift target. To get `CLIO_LOG=1` structured events, compile to `--target python` or `--target mcp-server`.
+
+### Resume
+
+`--from-step N` resume is not implemented. The Swift binary runs the full flow on each invocation without error. For incremental re-runs on a long pipeline, compile to `--target python` today.
 
 ---
 
