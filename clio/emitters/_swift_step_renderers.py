@@ -7,7 +7,7 @@ lives in _swift_flow_renderer.py.
 from __future__ import annotations
 
 from clio.emitters._shared_utils import _model_id
-from clio.emitters._swift_helpers import _type_to_swift
+from clio.emitters._swift_helpers import _cache_ttl_seconds, _type_to_swift
 from clio.ir.graph import ApiInvokeIR, ContractIR, FlowGraph, StepIR
 from clio.parser.ast_nodes import ContractRef
 
@@ -82,19 +82,21 @@ def render_judgment_step_swift(
 ) -> str:
     """Render a single judgment step as a Swift source file in ClioFlow/Steps/.
 
-    Body shape (Phase 2 — no cache, no ON_FAIL chain):
+    Body shape (Phase 2 — with optional CACHE, no ON_FAIL chain):
       1. JSON-encode the In struct to build the user-turn prompt.
-      2. Call Anthropic.complete(model:system:prompt:maxTokens:) — the
+      2. Cache lookup (if CACHE: on or CACHE: ttl(…)) — return cached Out on hit.
+      3. Call Anthropic.complete(model:system:prompt:maxTokens:) — the
          zero-dep URLSession client in Sources/ClioFlow/Runtime/Anthropic.swift.
-      3. Decode the returned text into the typed Out struct via JSONDecoder.
-      4. If GIVES is a direct ContractRef, call .validate() on the field.
-      5. Return Out.
+      4. Decode the returned text into the typed Out struct via JSONDecoder.
+      5. If GIVES is a direct ContractRef, call .validate() on the field.
+      6. Cache store (if CACHE configured) — atomic write to disk.
+      7. Return Out.
 
     Model resolution (mirrors render_judgment_step_go):
       step.invoke.model (ApiInvokeIR) > graph.resources.models[0] > "haiku"
 
-    The system prompt text is byte-identical to the Python/Go targets so
-    model behaviour is consistent across compilation targets.
+    Cache key derivation is byte-identical to clio/runtime/cache.py and
+    clio_runtime/cache/cache.go: SHA256(step + "\\n" + model + "\\n" + prompt + "\\n" + "").
     """
     prefix = _step_struct_prefix(idx, step.name)
     in_src, out_src = _step_in_out_struct(step, contracts, idx)
@@ -108,13 +110,23 @@ def render_judgment_step_swift(
         model_short = "haiku"
     model = _model_id(model_short)
 
+    # --- cache configuration ----------------------------------------------
+    cache_ttl = _cache_ttl_seconds(step.cache)
+    has_cache = cache_ttl != 0  # None (permanent) or positive int → has cache
+
     # --- contract validation path -----------------------------------------
-    # Validate only when GIVES is a *direct* ContractRef — the ContractIR
-    # struct emitted in Contracts.swift has a .validate() method. List<C>,
-    # Optional<C>, etc. are skipped in Phase 2 (cache/ON_FAIL scope).
     needs_validate = step.gives is not None and isinstance(
         step.gives.type, ContractRef
     )
+
+    # --- cache blocks -------------------------------------------------------
+    # ttlSeconds argument in Swift: nil for permanent, Int literal for TTL.
+    if cache_ttl is None:
+        ttl_arg = "nil"
+    elif has_cache:
+        ttl_arg = str(cache_ttl)
+    else:
+        ttl_arg = ""  # unused when has_cache is False
 
     lines: list[str] = [
         "import Foundation",
@@ -134,16 +146,38 @@ def render_judgment_step_swift(
             '"Process this input and return JSON matching the output schema.'
             "\\n\\nInput:\\n\\(inJSON)\""
         ),
-        "    // 2. JSON-only system prompt (matches python/go targets).",
+    ]
+
+    if has_cache:
+        lines += [
+            "    // 2. Cache lookup.",
+            "    let cacheDir = Cache.cacheDirFromEnv()",
+            (
+                f'    let cacheKey = Cache.key(step: "{step.name}", model: "{model}",'
+                f" prompt: prompt, schema: \"\")"
+            ),
+            (
+                "    if let hit = Cache.lookup("
+                f'cacheDir: cacheDir, stepName: "{step.name}", '
+                f"key: cacheKey, ttlSeconds: {ttl_arg}),"
+            ),
+            "       let hitData = hit.data(using: .utf8),",
+            f"       let cached = try? JSONDecoder().decode({prefix}_Out.self, from: hitData) {{",
+            "        return cached",
+            "    }",
+        ]
+
+    lines += [
+        "    // 3. JSON-only system prompt (matches python/go targets).",
         f'    let system = "{_SWIFT_SYSTEM_PROMPT}"',
-        "    // 3. Call Anthropic.",
+        "    // 4. Call Anthropic.",
         "    let raw = try await Anthropic.complete(",
         f'        model: "{model}",',
         "        system: system,",
         "        prompt: prompt,",
         "        maxTokens: 8192",
         "    )",
-        "    // 4. Decode response into typed Out struct.",
+        "    // 5. Decode response into typed Out struct.",
         "    guard let rawData = raw.data(using: .utf8) else {",
         f'        throw AnthropicError(message: "{step.name}: response is not valid UTF-8")',
         "    }",
@@ -153,8 +187,20 @@ def render_judgment_step_swift(
     if needs_validate:
         assert step.gives is not None
         lines += [
-            "    // 5. Validate contract.",
+            "    // 6. Validate contract.",
             f"    try out.{step.gives.name}.validate()",
+        ]
+
+    if has_cache:
+        lines += [
+            "    // 7. Store in cache.",
+            "    if let storeData = try? JSONEncoder().encode(out),",
+            "       let storeStr = String(data: storeData, encoding: .utf8) {",
+            (
+                f'        Cache.store(cacheDir: cacheDir, stepName: "{step.name}",'
+                f' key: cacheKey, model: "{model}", response: storeStr)'
+            ),
+            "    }",
         ]
 
     lines += [

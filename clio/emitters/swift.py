@@ -5,6 +5,7 @@ from pathlib import Path
 
 from clio.emitters._swift_flow_renderer import render_flow_swift
 from clio.emitters._swift_helpers import (
+    _flow_uses_cache,
     _flow_uses_judgment,
     _swift_module_name,
     render_contracts_swift,
@@ -14,6 +15,8 @@ from clio.emitters._swift_helpers import (
 )
 from clio.emitters._swift_runtime_templates import (
     render_runtime_anthropic_swift,
+    render_runtime_cache_swift,
+    render_runtime_sha256_swift,
     render_runtime_validate_swift,
 )
 from clio.emitters._swift_step_renderers import (
@@ -135,3 +138,10 @@ class SwiftEmitter(BaseEmitter):
             runtime_dir = clio_flow_dir / "Runtime"
             runtime_dir.mkdir(parents=True, exist_ok=True)
             (runtime_dir / "Anthropic.swift").write_text(render_runtime_anthropic_swift())
+
+        # Sources/ClioFlow/Runtime/SHA256.swift + Cache.swift (emitted when ≥1 cached step)
+        if _flow_uses_cache(graph):
+            runtime_dir = clio_flow_dir / "Runtime"
+            runtime_dir.mkdir(parents=True, exist_ok=True)
+            (runtime_dir / "SHA256.swift").write_text(render_runtime_sha256_swift())
+            (runtime_dir / "Cache.swift").write_text(render_runtime_cache_swift())

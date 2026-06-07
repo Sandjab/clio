@@ -1,0 +1,8 @@
+STEP summarize
+  TAKES: text: str
+  GIVES: summary: str
+  MODE:  judgment
+  CACHE: ttl(24h)
+
+FLOW summarizer
+  summarize(text="Hello world")

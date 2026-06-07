@@ -6,6 +6,7 @@ import json
 from clio.emitters._shared_utils import _collect_contract_refs, _shape_from_schema, _to_class_name
 from clio.ir.graph import (
     ApiInvokeIR,
+    CacheConfigIR,
     CliInvokeIR,
     ContractIR,
     FlowCallIR,
@@ -130,6 +131,38 @@ def _flow_uses_judgment(graph: FlowGraph) -> bool:
     Mirrors _go_helpers._flow_uses_judgment — scans graph.steps so judgment
     in a sub-flow still triggers Anthropic.swift emission."""
     return any(isinstance(s, StepIR) and s.mode == "judgment" for s in graph.steps)
+
+
+def _cache_ttl_seconds(cache: CacheConfigIR | None) -> int | None:
+    """Resolve a CacheConfigIR to a TTL in seconds, None (permanent), or 0 (no cache).
+
+    Return values:
+      0    — CACHE: off or no CACHE directive (skip cache blocks entirely)
+      None — CACHE: on  (permanent; nil ttlSeconds in Swift)
+      int  — CACHE: ttl(Xh/Xm/Xs) converted to seconds
+
+    Logic mirrors _go_step_renderers._cache_ttl_seconds exactly.
+    """
+    if cache is None or cache.mode == "off":
+        return 0
+    if cache.mode == "on":
+        return None  # permanent
+    # mode == "ttl"
+    if cache.ttl_seconds is not None:
+        return cache.ttl_seconds
+    return 0
+
+
+def _flow_uses_cache(graph: FlowGraph) -> bool:
+    """True if any judgment step in the graph has an active CACHE directive.
+
+    Used to gate emission of SHA256.swift and Cache.swift."""
+    return any(
+        isinstance(s, StepIR)
+        and s.mode == "judgment"
+        and _cache_ttl_seconds(s.cache) != 0
+        for s in graph.steps
+    )
 
 
 def _walk_chain_swift(
