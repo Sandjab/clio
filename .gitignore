@@ -222,3 +222,8 @@ testprojects/
 
 # scheduled-tasks runner lock file (runtime artifact, stale across sessions)
 .claude/scheduled_tasks.lock
+
+# internal design docs (brainstorming specs + implementation plans) — kept local,
+# never published now that the repo is public (the docs/superpowers/ tree was
+# removed in #101; this prevents accidental re-commit of those AI-workflow artifacts)
+docs/superpowers/
