@@ -585,3 +585,17 @@ def test_golden_swift_contract(tmp_path: Path) -> None:
     out = tmp_path / "out"
     _compile(FIXTURES / "swift_contract.clio", out)
     assert _read_tree(out) == _read_tree(EXPECTED_SWIFT / "swift_contract")
+
+
+def test_golden_swift_judgment(tmp_path: Path) -> None:
+    """Full-tree comparison against the committed golden snapshot."""
+    out = tmp_path / "out"
+    _compile(FIXTURES / "swift_judgment.clio", out)
+    assert _read_tree(out) == _read_tree(EXPECTED_SWIFT / "swift_judgment")
+
+
+def test_golden_swift_judgment_cache(tmp_path: Path) -> None:
+    """Full-tree comparison against the committed golden snapshot."""
+    out = tmp_path / "out"
+    _compile(FIXTURES / "swift_judgment_cache.clio", out)
+    assert _read_tree(out) == _read_tree(EXPECTED_SWIFT / "swift_judgment_cache")
