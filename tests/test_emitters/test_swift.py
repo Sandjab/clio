@@ -186,6 +186,41 @@ def test_swift_refuses_two_flows(tmp_path: Path, capsys: object) -> None:
     assert "not yet supported" in captured.err.lower()
 
 
+def test_swift_refuses_rescue(tmp_path: Path, capsys: object) -> None:
+    """RESCUE/RESUME is not yet supported (Phase 5).
+
+    A single-flow source with a RESCUE handler uses no feature that is
+    otherwise refused, so without an explicit refusal it would pass the gate
+    and emit step files — but render_flow_swift only walks flow.chain, never
+    flow.rescues, so the handler logic is silently dropped (the protected
+    step's error would propagate instead of running the handler). Refuse it
+    until the Swift RESCUE emitter ships."""
+    src = tmp_path / "rescue.clio"
+    src.write_text(
+        "STEP risky\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE: judgment\n"
+        "\n"
+        "STEP recover\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE: exact\n"
+        "\n"
+        "FLOW pipeline\n"
+        '  risky(x="hi")\n'
+        "\n"
+        "  RESCUE risky:\n"
+        '    -> recover(x="hi")\n'
+        "    -> RESUME(recover.y)\n"
+    )
+    rc = _compile(src, tmp_path / "out")
+    assert rc != 0
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    assert "not yet supported" in captured.err.lower()
+    assert "phase 5" in captured.err.lower()
+
+
 def test_swift_refuses_rest_impl(tmp_path: Path, capsys: object) -> None:
     """impl.mode: rest (json body) is not yet supported (Phase 4).
 

@@ -292,6 +292,17 @@ def validate_graph_for_swift(graph: FlowGraph) -> None:
             "supported (planned for Phase 5); use --target python or go for now"
         )
 
+    # Temporary: RESCUE/RESUME (Phase 5). render_flow_swift only walks
+    # flow.chain, never flow.rescues, so a RESCUE handler would be silently
+    # dropped — the protected step's error would propagate instead of running
+    # the handler. Refuse it until the Swift RESCUE emitter ships.
+    for fl in graph.flows:
+        if fl.rescues:
+            raise ValueError(
+                "swift target: RESCUE/RESUME is not yet supported "
+                "(planned for Phase 5); use --target python or go for now"
+            )
+
     # Walk every flow's chain for non-linear items and FlowCallIR.
     flows_by_name = {f.name: f for f in graph.flows}
     for fl in graph.flows:
