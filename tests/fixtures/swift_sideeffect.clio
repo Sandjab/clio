@@ -1,0 +1,12 @@
+STEP load
+  TAKES: path: str
+  GIVES: data: str
+  MODE:  exact
+
+STEP notify
+  TAKES: x: str
+  MODE:  exact
+
+FLOW pipeline
+  load(path="input.txt")
+  -> notify(x="hello")

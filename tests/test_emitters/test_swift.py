@@ -120,10 +120,10 @@ def test_swift_refuses_shell_impl(tmp_path: Path, capsys: object) -> None:
     assert "not yet supported" in captured.err.lower()
 
 
-def test_swift_refuses_if_block(tmp_path: Path, capsys: object) -> None:
-    """IF/ELSE control flow is not yet supported (Phase 3).
+def test_swift_if_block_compiles(tmp_path: Path) -> None:
+    """IF/ELSE control flow compiles successfully from Phase 3.
 
-    Source uses CONTRACT + LANG: auto so E_SWIFT_001 does not fire first."""
+    Source uses CONTRACT + LANG: auto so E_SWIFT_001 does not fire."""
     src = tmp_path / "if.clio"
     src.write_text(
         "CONTRACT risk_result\n"
@@ -149,9 +149,10 @@ def test_swift_refuses_if_block(tmp_path: Path, capsys: object) -> None:
         '       notify(x="low")\n'
     )
     rc = _compile(src, tmp_path / "out")
-    assert rc != 0
-    captured = capsys.readouterr()  # type: ignore[attr-defined]
-    assert "not yet supported" in captured.err.lower()
+    assert rc == 0
+    flow = (tmp_path / "out" / "Sources" / "ClioFlow" / "Flow.swift").read_text()
+    assert "if " in flow
+    assert "} else {" in flow
 
 
 def test_swift_refuses_two_flows(tmp_path: Path, capsys: object) -> None:
@@ -599,3 +600,31 @@ def test_golden_swift_judgment_cache(tmp_path: Path) -> None:
     out = tmp_path / "out"
     _compile(FIXTURES / "swift_judgment_cache.clio", out)
     assert _read_tree(out) == _read_tree(EXPECTED_SWIFT / "swift_judgment_cache")
+
+
+# ---------------------------------------------------------------------------
+# Phase 3a — IF/ELSE, MATCH/CASE, WHILE control flow
+# ---------------------------------------------------------------------------
+
+
+def test_swift_control_flow_emits_if_match_while(tmp_path: Path) -> None:
+    """The emitted Flow.swift contains switch/case/default, if/else, and a
+    bounded while loop — all from the swift_control_flow.clio fixture."""
+    out = tmp_path / "out"
+    rc = _compile(FIXTURES / "swift_control_flow.clio", out)
+    assert rc == 0
+    flow = (out / "Sources" / "ClioFlow" / "Flow.swift").read_text()
+    assert "switch " in flow
+    assert 'case "low":' in flow
+    assert "default:" in flow
+    assert "if " in flow
+    assert "} else {" in flow
+    assert "while " in flow
+    assert "&& _while" in flow
+
+
+def test_golden_swift_control_flow(tmp_path: Path) -> None:
+    """Full-tree comparison against the committed golden snapshot."""
+    out = tmp_path / "out"
+    _compile(FIXTURES / "swift_control_flow.clio", out)
+    assert _read_tree(out) == _read_tree(EXPECTED_SWIFT / "swift_control_flow")

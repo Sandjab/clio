@@ -138,6 +138,43 @@ def test_swift_judgment_onfail_builds(tmp_path: Path) -> None:
     assert "warning:" not in (proc.stdout + proc.stderr), proc.stdout + proc.stderr
 
 
+@pytest.mark.skipif(swift_missing, reason="swift toolchain not on PATH")
+def test_swift_control_flow_builds(tmp_path: Path) -> None:
+    """swift build must succeed — and emit NO warnings — on a flow with
+    IF/ELSE, MATCH/CASE, and bounded WHILE control flow (Phase 3a)."""
+    out = tmp_path / "out"
+    _compile(FIXTURES / "swift_control_flow.clio", out)
+    proc = subprocess.run(
+        ["swift", "build"],
+        cwd=out,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "warning:" not in (proc.stdout + proc.stderr), proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(swift_missing, reason="swift toolchain not on PATH")
+def test_swift_sideeffect_step_builds_warning_free(tmp_path: Path) -> None:
+    """A side-effect step (TAKES but no GIVES) must build with NO warnings.
+
+    The emitted `let outN = try await step_...(...)` is never read when the
+    step has no GIVES, so without an explicit `_ = outN` discard Swift emits
+    `warning: initialization of immutable value 'outN' was never used`."""
+    out = tmp_path / "out"
+    _compile(FIXTURES / "swift_sideeffect.clio", out)
+    proc = subprocess.run(
+        ["swift", "build"],
+        cwd=out,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "warning:" not in (proc.stdout + proc.stderr), proc.stdout + proc.stderr
+
+
 @pytest.mark.skipif(swift_missing or swiftc_missing, reason="swift/swiftc toolchain not on PATH")
 def test_sha256_known_vector(tmp_path: Path) -> None:
     """sha256Hex("abc") equals the FIPS 180-4 known test vector.
