@@ -1,0 +1,14 @@
+STEP load
+  TAKES: file: str
+  GIVES: rows: List<str>
+  MODE:  exact
+
+STEP summarize
+  TAKES: rows: List<str>
+  GIVES: summary: str
+  MODE:  exact
+
+FLOW minimal
+  TAKES: file: str
+  load(file=file)
+    -> summarize(rows)

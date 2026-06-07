@@ -30,3 +30,12 @@ def test_swift_refuses_source_without_flow(tmp_path: Path) -> None:
     src.write_text("STEP only\n  TAKES: x: str\n  GIVES: y: str\n  MODE: exact\n")
     rc = _compile(src, tmp_path / "out")
     assert rc != 0   # E_SWIFT_004
+
+
+def test_swift_minimal_emits_steps_and_flow(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _compile(FIXTURES / "swift_minimal.clio", out)
+    assert (out / "Sources/ClioFlow/Steps/Step01_load.swift").exists()
+    flow = (out / "Sources/ClioFlow/Flow.swift").read_text()
+    assert "func run(kwargs: [String: Any]) async throws" in flow
+    assert "try await step_summarize(" in flow
