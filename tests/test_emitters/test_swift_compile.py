@@ -200,6 +200,51 @@ def test_swift_foreach_take_contract_builds(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(swift_missing, reason="swift toolchain not on PATH")
+def test_swift_parallel_foreach_builds(tmp_path: Path) -> None:
+    """swift build must succeed — and emit NO warnings — on a flow with a
+    PARALLEL FOR EACH (Phase 3c: withThrowingTaskGroup + ordered collect).
+
+    Swift 6 strict concurrency checking is the oracle: a data-race-unsafe
+    capture in group.addTask would produce a compile error or warning, so
+    warning-free success proves the Sendable pattern is correct."""
+    out = tmp_path / "out"
+    _compile(FIXTURES / "swift_parallel.clio", out)
+    proc = subprocess.run(
+        ["swift", "build"],
+        cwd=out,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "warning:" not in (proc.stdout + proc.stderr), proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(swift_missing, reason="swift toolchain not on PATH")
+def test_swift_parallel_foreach_shared_state_builds(tmp_path: Path) -> None:
+    """swift build must succeed — and emit NO warnings — on a parallel FOR EACH
+    whose body consumes an upstream state field in addition to the loop var.
+
+    Regression (Fix 1): a kwarg reading `state["..."]` was emitted INSIDE the
+    @Sendable group.addTask closure, capturing the non-Sendable `var state`
+    ([String: Any]). Swift 6 strict concurrency rejected the closure with
+    'closure captures state ... non-sendable'. The fix hoists each non-loop-var,
+    non-literal kwarg to a `let` on the actor BEFORE withThrowingTaskGroup, then
+    references the Sendable local inside the closure."""
+    out = tmp_path / "out"
+    _compile(FIXTURES / "swift_parallel_shared.clio", out)
+    proc = subprocess.run(
+        ["swift", "build"],
+        cwd=out,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "warning:" not in (proc.stdout + proc.stderr), proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(swift_missing, reason="swift toolchain not on PATH")
 def test_swift_sideeffect_step_builds_warning_free(tmp_path: Path) -> None:
     """A side-effect step (TAKES but no GIVES) must build with NO warnings.
 

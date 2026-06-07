@@ -690,8 +690,8 @@ def test_swift_foreach_seq_emits_for_loop(tmp_path: Path) -> None:
     assert 'state["b"]' not in flow
 
 
-def test_swift_foreach_seq_parallel_still_refused(tmp_path: Path, capsys: object) -> None:
-    """Parallel FOR EACH is still refused (Phase 3c); only sequential is supported."""
+def test_swift_foreach_seq_parallel_compiles(tmp_path: Path) -> None:
+    """Parallel FOR EACH now compiles successfully (Phase 3c lifted the refusal)."""
     src = tmp_path / "par.clio"
     src.write_text(
         "STEP detect\n"
@@ -710,10 +710,11 @@ def test_swift_foreach_seq_parallel_still_refused(tmp_path: Path, capsys: object
         "       process(item=item)\n"
     )
     rc = _compile(src, tmp_path / "out")
-    assert rc != 0
-    captured = capsys.readouterr()  # type: ignore[attr-defined]
-    assert "parallel" in captured.err.lower()
-    assert "phase 3c" in captured.err.lower()
+    assert rc == 0
+    flow = (tmp_path / "out" / "Sources" / "ClioFlow" / "Flow.swift").read_text()
+    assert "withThrowingTaskGroup" in flow
+    assert "group.addTask" in flow
+    assert 'state["results"]' in flow
 
 
 def test_golden_swift_foreach_seq(tmp_path: Path) -> None:
@@ -721,3 +722,132 @@ def test_golden_swift_foreach_seq(tmp_path: Path) -> None:
     out = tmp_path / "out"
     _compile(FIXTURES / "swift_foreach_seq.clio", out)
     assert _read_tree(out) == _read_tree(EXPECTED_SWIFT / "swift_foreach_seq")
+
+
+# ---------------------------------------------------------------------------
+# Phase 3c — parallel FOR EACH via withThrowingTaskGroup
+# ---------------------------------------------------------------------------
+
+
+def test_swift_parallel_foreach_emits_task_group(tmp_path: Path) -> None:
+    """Parallel FOR EACH emits withThrowingTaskGroup with cap-10 back-pressure
+    and ordered collect.  The group.addTask closure must NOT reference state."""
+    out = tmp_path / "out"
+    rc = _compile(FIXTURES / "swift_parallel.clio", out)
+    assert rc == 0
+    flow = (out / "Sources" / "ClioFlow" / "Flow.swift").read_text()
+    # TaskGroup is used
+    assert "withThrowingTaskGroup" in flow
+    assert "group.addTask" in flow
+    # Back-pressure cap of 10
+    assert ">= 10" in flow
+    # Ordered collect: (0..<N).map { dict[$0]! }
+    assert "(0..<" in flow
+    assert 'state["labels"]' in flow
+    # No reference to `state` inside the addTask closure (child tasks must not
+    # touch state — [String: Any] is not Sendable)
+    lines = flow.splitlines()
+    in_task = False
+    for line in lines:
+        stripped = line.lstrip()
+        if "group.addTask" in stripped:
+            in_task = True
+        elif in_task and stripped == "}":
+            in_task = False
+        elif in_task:
+            assert "state[" not in line, (
+                f"child task captures state (Sendable violation): {line!r}"
+            )
+
+
+def test_golden_swift_parallel(tmp_path: Path) -> None:
+    """Full-tree comparison against the committed golden snapshot."""
+    out = tmp_path / "out"
+    _compile(FIXTURES / "swift_parallel.clio", out)
+    assert _read_tree(out) == _read_tree(EXPECTED_SWIFT / "swift_parallel")
+
+
+def _addtask_closure_lines(flow: str) -> list[str]:
+    """Return the lines strictly inside each `group.addTask { ... }` closure.
+
+    Used to assert that a parallel-body closure never references `state`."""
+    inside: list[str] = []
+    in_task = False
+    for line in flow.splitlines():
+        stripped = line.lstrip()
+        if "group.addTask" in stripped:
+            in_task = True
+        elif in_task and stripped == "}":
+            in_task = False
+        elif in_task:
+            inside.append(line)
+    return inside
+
+
+def test_swift_parallel_foreach_hoists_shared_state_kwarg(tmp_path: Path) -> None:
+    """A parallel-body kwarg that reads an upstream state field is HOISTED to a
+    `let` on the actor before withThrowingTaskGroup, and the @Sendable closure
+    references the hoisted Sendable local — never `state` directly.
+
+    Why it matters (Fix 1): `var state` is [String: Any], not Sendable. Emitting
+    `state["threshold"] as! Double` inside group.addTask captures `state` and
+    Swift 6 strict concurrency rejects the build."""
+    out = tmp_path / "out"
+    rc = _compile(FIXTURES / "swift_parallel_shared.clio", out)
+    assert rc == 0
+    flow = (out / "Sources" / "ClioFlow" / "Flow.swift").read_text()
+    # The hoisted local is bound on the actor, before the TaskGroup.
+    group_pos = flow.index("withThrowingTaskGroup")
+    hoist_pos = flow.index('state["threshold"] as! Double')
+    assert hoist_pos < group_pos, (
+        "the state read for the hoisted kwarg must precede withThrowingTaskGroup"
+    )
+    # The hoisted local is uniquely named with the call index suffix.
+    assert "let _kw3_threshold = state[\"threshold\"] as! Double" in flow
+    # No `state[` access anywhere inside the addTask closure.
+    for line in _addtask_closure_lines(flow):
+        assert "state[" not in line, (
+            f"child task captures state (Sendable violation): {line!r}"
+        )
+    # The In constructor inside the closure uses the hoisted local + loop var.
+    assert "Step03_classify_In(item: item, threshold: _kw3_threshold)" in flow
+
+
+def test_swift_parallel_foreach_refuses_non_sendable_kwarg(
+    tmp_path: Path, capsys: object
+) -> None:
+    """A parallel-body kwarg whose resolved Swift type contains `Any` (a value
+    that cannot be hoisted as Sendable) is refused fail-loud rather than emitting
+    Swift that fails strict-concurrency checking.
+
+    Here `cfg` is an anonymous record `{a: str, b: int}`, which _type_to_swift
+    maps to `[String: Any]` (non-Sendable). Passing it as an upstream kwarg into
+    a parallel body must be refused, not silently hoisted into an uncompilable
+    `let _kwN_cfg = state["cfg"] as! [String: Any]`."""
+    src = tmp_path / "ns.clio"
+    src.write_text(
+        "STEP load\n"
+        "  GIVES: cfg: {a: str, b: int}\n"
+        "  MODE: exact\n"
+        "\n"
+        "STEP load2\n"
+        "  TAKES: cfg: {a: str, b: int}\n"
+        "  GIVES: items: List<str>\n"
+        "  MODE: exact\n"
+        "\n"
+        "STEP work\n"
+        "  TAKES: item: str, cfg: {a: str, b: int}\n"
+        "  GIVES: out: str\n"
+        "  MODE: exact\n"
+        "\n"
+        "FLOW pipeline\n"
+        "  load()\n"
+        "  -> load2(cfg=cfg)\n"
+        "  -> FOR EACH item IN items PARALLEL AS outs:\n"
+        "       work(item=item, cfg=cfg)\n"
+    )
+    rc = _compile(src, tmp_path / "out")
+    assert rc != 0
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    assert "non-sendable" in captured.err.lower()
+    assert "cfg" in captured.err

@@ -165,20 +165,47 @@ def _flow_uses_cache(graph: FlowGraph) -> bool:
     )
 
 
+def _flow_uses_parallel_foreach(graph: FlowGraph) -> bool:
+    """True if any FLOW chain contains a PARALLEL FOR EACH.
+
+    Parallel FOR EACH emits withThrowingTaskGroup, a Swift Concurrency runtime
+    API that requires macOS 10.15+ / iOS 13+.  The Package.swift platforms
+    clause must declare this minimum to avoid availability warnings."""
+    def _walk(items: tuple) -> bool:  # type: ignore[type-arg]
+        for it in items:
+            if isinstance(it, ForEachIR):
+                if it.parallel:
+                    return True
+                if _walk(it.body):
+                    return True
+            elif isinstance(it, IfBlockIR):
+                if _walk(it.then_body) or _walk(it.else_body):
+                    return True
+            elif isinstance(it, MatchBlockIR):
+                if any(_walk(c.body) for c in it.cases):
+                    return True
+            elif isinstance(it, WhileBlockIR):
+                if _walk(it.body):
+                    return True
+        return False
+
+    return any(_walk(fl.chain) for fl in graph.flows)
+
+
 def _walk_chain_swift(
     items: tuple,  # type: ignore[type-arg]
     flows_by_name: dict[str, FlowIR],
 ) -> None:
     """Recursively walk a FLOW chain and raise on constructs unsupported in
-    Phase 3b.
+    Phase 3c.
 
     Permanent refusals: E_SWIFT_006 (multi-GIVES sub-flow in PARALLEL body).
-    Temporary refusals: parallel FOR EACH (planned for Phase 3c), FlowCallIR
-    (Phase 5).
+    Temporary refusals: FlowCallIR (Phase 5).
 
-    IF/ELSE, MATCH/CASE, WHILE, and sequential FOR EACH are supported from
-    Phase 3a/3b — this walker recurses into their bodies so that nested
-    permanent refusals (E_SWIFT_006, FlowCallIR) are still caught.
+    IF/ELSE, MATCH/CASE, WHILE, sequential FOR EACH, and parallel FOR EACH
+    are all supported from Phase 3a/3b/3c — this walker recurses into their
+    bodies so that nested permanent refusals (E_SWIFT_006, FlowCallIR) are
+    still caught.
 
     The renderer in _swift_flow_renderer.py raises on unsupported item kinds
     as a backstop; this gate fires first with a cleaner message."""
@@ -194,21 +221,23 @@ def _walk_chain_swift(
         elif isinstance(it, ForEachIR):
             if it.parallel:
                 # E_SWIFT_006 (permanent): multi-GIVES sub-flow as PARALLEL body.
-                # Check before the temporary parallel refusal so the stable code
-                # is surfaced even when parallel FOR EACH is otherwise lifted.
+                # Kept as a defensive permanent refusal even though FlowCallIR
+                # bodies are unreachable today (len(graph.flows) > 1 is refused
+                # earlier).  It fires before any other parallel-body validation
+                # so the stable code is always surfaced.
                 if len(it.body) == 1:
                     body0 = it.body[0]
                     if isinstance(body0, FlowCallIR):
                         sub = flows_by_name.get(body0.flow_name)
                         if sub is not None and len(sub.gives) >= 2:
                             raise ValueError(E_SWIFT_006)
-                raise ValueError(
-                    "swift target: parallel FOR EACH is not yet supported "
-                    "(planned for Phase 3c); use --target python or go for now"
-                )
-            # Sequential FOR EACH: recurse into body to catch nested
-            # unsupported constructs (FlowCallIR, parallel FOR EACH, etc.).
-            _walk_chain_swift(it.body, flows_by_name)
+                # Recurse into the parallel body so nested unsupported
+                # constructs (FlowCallIR, etc.) are caught by this gate.
+                _walk_chain_swift(it.body, flows_by_name)
+            else:
+                # Sequential FOR EACH: recurse into body to catch nested
+                # unsupported constructs (FlowCallIR, parallel FOR EACH, etc.).
+                _walk_chain_swift(it.body, flows_by_name)
         elif isinstance(it, FlowCallIR):
             raise ValueError(
                 f"swift target: sub-flow composition (FlowCallIR) is not yet "
@@ -318,11 +347,13 @@ def validate_graph_for_swift(graph: FlowGraph) -> None:
 
 def render_package_swift(graph: FlowGraph) -> str:
     exe = _swift_module_name(graph)
-    # Swift Concurrency runtime APIs (withCheckedThrowingContinuation, etc.)
-    # require macOS 12+ / iOS 15+. Judgment flows call these at runtime, so we
-    # declare a minimum platform.  Exact-only flows have no runtime concurrency
+    # Swift Concurrency runtime APIs require a minimum platform declaration:
+    # - withCheckedThrowingContinuation (judgment flows): macOS 12+
+    # - withThrowingTaskGroup (parallel FOR EACH): macOS 10.15+
+    # We use macOS 12 for both to keep a single consistent minimum.
+    # Exact-only flows without parallel FOR EACH have no runtime concurrency
     # API calls and compile fine without a platforms clause.
-    if _flow_uses_judgment(graph):
+    if _flow_uses_judgment(graph) or _flow_uses_parallel_foreach(graph):
         platforms_clause = "    platforms: [.macOS(.v12)],\n"
     else:
         platforms_clause = ""

@@ -161,6 +161,45 @@ def _swift_kwarg_value(
     return f'"{escaped}"'
 
 
+def _resolve_kwarg_swift_type(
+    ref: str,
+    contracts: dict[str, ContractIR],
+    state_field_to_step: dict[str, StepIR],
+    take_types: dict[str, str],
+) -> str | None:
+    """Return the Swift type of a `@<ref>` kwarg value, or None if unresolvable.
+
+    Mirrors the resolution order in _swift_kwarg_value (step producer, then flow
+    TAKE). The loop-var case is handled by the caller before this is reached.
+    Used by the parallel renderer to decide whether a hoisted local is Sendable.
+    """
+    step = state_field_to_step.get(ref)
+    if step is not None and step.gives is not None:
+        return _type_to_swift(step.gives.type, contracts)
+    if ref in take_types:
+        return take_types[ref]
+    return None
+
+
+def _type_tokens(swift_type: str) -> set[str]:
+    """Split a Swift type expression into its identifier tokens.
+
+    `[String: Any]` -> {'String', 'Any'}; `[Risk]` -> {'Risk'}. Used to detect
+    a bare `Any` (non-Sendable) anywhere inside a composite type."""
+    tokens: set[str] = set()
+    cur = ""
+    for ch in swift_type:
+        if ch.isalnum() or ch == "_":
+            cur += ch
+        else:
+            if cur:
+                tokens.add(cur)
+            cur = ""
+    if cur:
+        tokens.add(cur)
+    return tokens
+
+
 def _render_chain_item(
     item: object,
     call_idx: list[int],
@@ -182,7 +221,8 @@ def _render_chain_item(
     variables. Accumulates across nested FOR EACH blocks.
 
     Supported: CallIR, IfBlockIR, MatchBlockIR, WhileBlockIR, ForEachIR
-    (sequential only — parallel is refused by the gate in _swift_helpers.py).
+    (both sequential and parallel — parallel uses withThrowingTaskGroup with a
+    cap-10 back-pressure and ordered collect).
     Other item types fall through to the backstop ValueError.
     """
     _scope = scope_local or set()
@@ -355,6 +395,150 @@ def _render_chain_item(
         lines.append(f"{indent}}}")
         lines.append("")
         return lines
+
+    if isinstance(item, ForEachIR) and item.parallel:
+        # Parallel FOR EACH — withThrowingTaskGroup with cap-10 back-pressure
+        # and ordered collect via a pre-allocated [Int: ResultType] dictionary.
+        #
+        # Swift 6 Sendable guarantee: group.addTask closures capture only the
+        # loop element (value type or Codable/Sendable struct), _idx{n} (Int),
+        # and hoisted Sendable locals (see the kwarg-hoisting block below).
+        # They do NOT touch `state` ([String: Any] is not Sendable).  All
+        # mutations of _collected{n} happen in the TaskGroup body closure, which
+        # runs on the same actor as the caller (@MainActor for Flow.run).
+        #
+        # Non-single-CallIR body: refused fail-loud here.  In Phase 3c the
+        # reachable body is always a single CallIR step (FlowCallIR is
+        # unreachable because the len(graph.flows) > 1 gate fires first).
+        if len(item.body) != 1 or not isinstance(item.body[0], CallIR):
+            raise ValueError(
+                "swift target: parallel FOR EACH body must be a single step "
+                "call; compound/control-flow bodies are not yet supported — "
+                "use --target python or go for now"
+            )
+        body_call: CallIR = item.body[0]  # type: ignore[assignment]
+        body_step = steps_by_name.get(body_call.step_name)
+        if body_step is None:
+            return []  # unknown step — IR validation should have caught this
+
+        call_idx[0] += 1
+        n = call_idx[0]
+
+        coll_name = item.collection
+        coll_step = state_field_to_step.get(coll_name)
+
+        # Collection cast.
+        # elem_type is not used directly; the Swift compiler infers the loop-var
+        # type from the array cast.  result_type (derived from the body step's
+        # GIVES) drives the TaskGroup return type.
+        if coll_step is not None and coll_step.gives is not None:
+            list_swift_type = _type_to_swift(coll_step.gives.type, contracts_by_name)
+            coll_expr = f'state["{coll_name}"] as! {list_swift_type}'
+        elif coll_name in take_types:
+            coll_expr = f'state["{coll_name}"] as! {take_types[coll_name]}'
+        else:
+            coll_expr = f'state["{coll_name}"] as! [Any]'
+
+        # Result type: what the body step GIVES (one field).
+        result_type = "Any"
+        gives_field = ""
+        if body_step.gives is not None:
+            result_type = _type_to_swift(body_step.gives.type, contracts_by_name)
+            gives_field = body_step.gives.name
+
+        collector = item.collector or "results"
+        body_step_idx = step_to_idx[body_step.name]
+        body_prefix = _step_struct_prefix(body_step_idx, body_step.name)
+
+        # Build kwargs for the In struct constructor inside group.addTask.
+        #
+        # Sendable hoisting (Fix 1): the group.addTask closure is @Sendable and
+        # runs OFF the main actor, so it may NOT capture `state` ([String: Any],
+        # non-Sendable, and a `var`). Any kwarg that reads `state[...]` (an
+        # upstream GIVES/TAKE, i.e. NOT the loop var and NOT a literal) is HOISTED
+        # to a `let` on the actor before withThrowingTaskGroup; the closure then
+        # references that Sendable local. The loop var stays inline (Sendable
+        # element); literals stay inline (Sendable constants).
+        inner_scope = _scope | {item.loop_var}
+        hoist_lines: list[str] = []
+        task_args: list[str] = []
+        for kname, kval in body_call.kwargs:
+            if isinstance(kval, str) and kval.startswith("@"):
+                ref = kval[1:]
+                if ref in inner_scope:
+                    # Loop var (or outer loop var) — Sendable, stays inline.
+                    task_args.append(f"{kname}: {ref}")
+                    continue
+                # Upstream state read — must be hoisted to the actor.
+                swift_val = _swift_kwarg_value(
+                    kval, contracts_by_name, state_field_to_step, take_types, inner_scope
+                )
+                hoisted_type = _resolve_kwarg_swift_type(
+                    ref, contracts_by_name, state_field_to_step, take_types
+                )
+                if hoisted_type is None or "Any" in _type_tokens(hoisted_type):
+                    raise ValueError(
+                        f"swift target: parallel FOR EACH body cannot capture a "
+                        f"non-Sendable value {ref!r} (resolved Swift type "
+                        f"{hoisted_type or 'unknown'!r}); use --target python or "
+                        f"go for now"
+                    )
+                local = f"_kw{n}_{ref}"
+                hoist_lines.append(f"{indent}let {local} = {swift_val}")
+                task_args.append(f"{kname}: {local}")
+            else:
+                # Literal (str/int/float/bool) — Sendable constant, stays inline.
+                swift_val = _swift_kwarg_value(
+                    kval, contracts_by_name, state_field_to_step, take_types, inner_scope
+                )
+                task_args.append(f"{kname}: {swift_val}")
+
+        var = item.loop_var
+        task_return_type = f"(Int, {result_type})"
+        # Indentation levels (base `indent` = 8 spaces for the top-level FLOW):
+        #   group_indent:     body of withThrowingTaskGroup { group in ... }
+        #   for_indent:       body of for ... { ... }
+        #   addtask_indent:   body of group.addTask { ... }
+        group_indent = indent + "    "
+        for_indent = indent + "        "
+        addtask_indent = indent + "            "
+
+        # Collector registration follows Go's pattern: do NOT register for a
+        # step body (only sub-flow bodies are registered in Go, and sub-flows
+        # are unreachable in Phase 3c).  Speculative registration would emit
+        # wrong scalar-typed reads of an array collector downstream.
+
+        par_lines: list[str] = [
+            f"{indent}let _items{n} = {coll_expr}",
+            *hoist_lines,
+            f"{indent}var _collected{n} = [Int: {result_type}](minimumCapacity:"
+            f" _items{n}.count)",
+            f"{indent}try await withThrowingTaskGroup("
+            f"of: {task_return_type}.self) {{ group in",
+            f"{group_indent}var _inflight{n} = 0",
+            f"{group_indent}for (_idx{n}, {var}) in _items{n}.enumerated() {{",
+            f"{for_indent}if _inflight{n} >= 10 {{",
+            f"{for_indent}    if let (_i, _r) = try await group.next() {{",
+            f"{for_indent}        _collected{n}[_i] = _r",
+            f"{for_indent}        _inflight{n} -= 1",
+            f"{for_indent}    }}",
+            f"{for_indent}}}",
+            f"{for_indent}group.addTask {{",
+            f"{addtask_indent}let _in = {body_prefix}_In({', '.join(task_args)})",
+            f"{addtask_indent}let _out = try await step_{body_step.name}(_in)",
+            f"{addtask_indent}return (_idx{n}, _out.{gives_field})",
+            f"{for_indent}}}",
+            f"{for_indent}_inflight{n} += 1",
+            f"{group_indent}}}",
+            f"{group_indent}while let (_i, _r) = try await group.next() {{",
+            f"{group_indent}    _collected{n}[_i] = _r",
+            f"{group_indent}}}",
+            f"{indent}}}",
+            f'{indent}state["{collector}"] = '
+            f"(0..<_items{n}.count).map {{ _collected{n}[$0]! }}",
+            "",
+        ]
+        return par_lines
 
     raise ValueError(
         f"E_SWIFT: {type(item).__name__} not yet supported"
