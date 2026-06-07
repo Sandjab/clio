@@ -39,3 +39,15 @@ def test_swift_minimal_emits_steps_and_flow(tmp_path: Path) -> None:
     flow = (out / "Sources/ClioFlow/Flow.swift").read_text()
     assert "func run(kwargs: [String: Any]) async throws" in flow
     assert "try await step_summarize(" in flow
+
+
+def test_swift_emits_contract_struct_and_validate(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _compile(FIXTURES / "swift_contract.clio", out)
+    contracts_path = out / "Sources/ClioFlow/Contracts.swift"
+    assert contracts_path.exists(), "Contracts.swift was not emitted"
+    contracts = contracts_path.read_text()
+    assert "struct CustomerRisk: Codable" in contracts
+    assert "static let jsonSchema" in contracts
+    assert "func validate() throws" in contracts
+    assert (out / "Sources/ClioFlow/Runtime/Validate.swift").exists()

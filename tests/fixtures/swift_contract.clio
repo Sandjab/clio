@@ -1,0 +1,17 @@
+CONTRACT customer_risk
+  SHAPE:  {client: str, risk: enum(low|mid|high), reason: str(max=300)}
+  ASSERT: len(reason) > 0
+
+STEP load
+  TAKES: file: str
+  GIVES: clients: List<str>
+  MODE:  exact
+
+STEP score
+  TAKES: clients: List<str>
+  GIVES: risk: customer_risk
+  MODE:  exact
+
+FLOW pipeline
+  load(file="customers.csv")
+    -> score(clients)

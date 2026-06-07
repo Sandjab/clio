@@ -29,3 +29,17 @@ def test_swift_minimal_builds(tmp_path: Path) -> None:
         timeout=600,
     )
     assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.skipif(swift_missing, reason="swift toolchain not on PATH")
+def test_swift_contract_builds(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _compile(FIXTURES / "swift_contract.clio", out)
+    proc = subprocess.run(
+        ["swift", "build"],
+        cwd=out,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert proc.returncode == 0, proc.stderr

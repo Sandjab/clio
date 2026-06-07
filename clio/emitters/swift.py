@@ -6,10 +6,12 @@ from pathlib import Path
 from clio.emitters._swift_flow_renderer import render_flow_swift
 from clio.emitters._swift_helpers import (
     _swift_module_name,
+    render_contracts_swift,
     render_main_swift,
     render_package_swift,
     validate_graph_for_swift,
 )
+from clio.emitters._swift_runtime_templates import render_runtime_validate_swift
 from clio.emitters._swift_step_renderers import render_exact_step_swift
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import (
@@ -109,3 +111,11 @@ class SwiftEmitter(BaseEmitter):
         (clio_flow_dir / "Flow.swift").write_text(
             render_flow_swift(graph, step_to_idx)
         )
+
+        # Sources/ClioFlow/Contracts.swift + Sources/ClioFlow/Runtime/Validate.swift
+        contracts_src = render_contracts_swift(graph)
+        if contracts_src is not None:
+            (clio_flow_dir / "Contracts.swift").write_text(contracts_src)
+            runtime_dir = clio_flow_dir / "Runtime"
+            runtime_dir.mkdir(parents=True, exist_ok=True)
+            (runtime_dir / "Validate.swift").write_text(render_runtime_validate_swift())
