@@ -13,7 +13,7 @@
 [![Last commit](https://img.shields.io/github/last-commit/Sandjab/clio)](https://github.com/Sandjab/clio/commits/main)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-%E2%89%A53.12-blue.svg)](https://www.python.org)
-[![Version](https://img.shields.io/badge/Version-v0.23.0-green.svg)](https://github.com/Sandjab/clio/releases/tag/v0.23.0)
+[![Version](https://img.shields.io/badge/Version-v0.24.0-green.svg)](https://github.com/Sandjab/clio/releases/tag/v0.24.0)
 [![Visitors](https://komarev.com/ghpvc/?username=sandjab-clio&label=Visitors&color=0e75b6&style=flat)](https://github.com/Sandjab/clio)
 
 > [!WARNING]
@@ -219,7 +219,7 @@ docs/
 
 ## Current status
 
-**v0.23.0 (current)**: the **`go` target** now compiles `impl.mode: rest` (`net/http`) and `impl.mode: shell` (`os/exec`) steps plus **FLOW composition** (sub-flows emitted as `run<Name>()` functions) — lifting `E_GO_006`/`E_GO_007`/`E_GO_008` to reach feature parity with `target: python` for stdlib-only constructs (Go REST bodies are json/raw; form/file/multipart → `--target python`, `E_GO_013`). On top of the **6 compilation targets** + **`clio import`** + **`Dict<K, V>`** / **`Optional<T>`** / extended primitive constraints from prior releases. **1270 unit tests + 1 xfail + gated e2e (incl. 5 opt-in `e2e_llm`).**
+**v0.24.0 (current)**: the **`swift` target** — a seventh compilation target emitting a **zero-dependency SwiftPM package** (Swift 6, macOS + Linux) at MVP scope: judgment (URLSession Anthropic client), `CACHE` (keys byte-identical with the python/go targets), `CONTRACT`, `ON_FAIL`, `IF`/`MATCH`/`WHILE`, and sequential & parallel `FOR EACH` (`withThrowingTaskGroup`). REST/shell (Phase 4), sub-flow composition + `RESCUE` (Phase 5), and FOR EACH over a loop variable are refused at compile time. On top of the **`go` target** (v0.23: REST/shell/FLOW composition), **`clio import`**, **`Dict<K, V>`** / **`Optional<T>`**, and extended primitive constraints from prior releases — **seven compilation targets** total. **1351 unit tests + 1 xfail + gated e2e (incl. 5 opt-in `e2e_llm`).**
 
 What's in the language today:
 - **Control flow**: sequential chains, `FOR EACH`, `FOR EACH ... PARALLEL AS <name>`, `IF/ELSE` (with `and` / `or` composition since v0.12), `MATCH/CASE/DEFAULT`, `WHILE ... MAX N` (composed conditions in v0.12 too).

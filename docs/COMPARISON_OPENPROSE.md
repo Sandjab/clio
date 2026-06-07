@@ -28,7 +28,7 @@ A side-by-side reading of [CLIO](../README.md) and [openprose/prose](https://git
 | **External ingestion** | No abstraction | `kind: gateway` (cron, webhook, HTTP route) |
 | **Standing goals** | None (run-once flows) | `kind: responsibility` + Reactor (event-driven continuity) |
 | **Stack** | Python 3.12+ | TypeScript CLI wrapper + skill |
-| **Maturity** | v0.23.0, 1281+ tests, 6 targets shipped, cross-file imports + skill ↔ `.clio` round-trip | Beta, ~19 open issues, MIT |
+| **Maturity** | v0.24.0, 1351+ tests, 7 targets shipped, cross-file imports + skill ↔ `.clio` round-trip | Beta, ~19 open issues, MIT |
 
 ## Deep similarities
 
