@@ -4,7 +4,26 @@ from __future__ import annotations
 import json
 
 from clio.emitters._shared_utils import _collect_contract_refs, _shape_from_schema, _to_class_name
-from clio.ir.graph import ContractIR, FlowGraph
+from clio.ir.graph import (
+    ApiInvokeIR,
+    CliInvokeIR,
+    ContractIR,
+    FlowCallIR,
+    FlowGraph,
+    FlowIR,
+    ForEachIR,
+    IfBlockIR,
+    JsonBodyIR,
+    MatchBlockIR,
+    McpToolImplIR,
+    RawBodyIR,
+    RescueBlockIR,
+    RestImplIR,
+    ShellImplIR,
+    SqlImplIR,
+    StepIR,
+    WhileBlockIR,
+)
 from clio.parser.ast_nodes import (
     ConstrainedType,
     ContractRef,
@@ -17,7 +36,53 @@ from clio.parser.ast_nodes import (
     TypeExpr,
 )
 
+# ---------------------------------------------------------------------------
+# Compile-time validation error codes (permanent — stable across releases)
+# ---------------------------------------------------------------------------
+
+E_SWIFT_001 = (
+    "E_SWIFT_001: target: swift can only embed exact step bodies in Swift "
+    "(LANG: swift or LANG: auto). For Python/Go/Bash/etc., use --target "
+    "python or --target go."
+)
+E_SWIFT_002 = (
+    "E_SWIFT_002: target: swift does not subprocess 'claude -p'. Use "
+    "--target python, --target mcp-server, or --target claude-cli."
+)
+E_SWIFT_003 = (
+    "E_SWIFT_003: target: swift ships the Anthropic SDK only. "
+    "Use --target python for Bedrock/Vertex."
+)
 E_SWIFT_004 = "E_SWIFT_004: source declares no FLOW; nothing to orchestrate."
+E_SWIFT_005 = (
+    "E_SWIFT_005: target: swift does not yet support invoke.protocol: openai. "
+    "Use --target python until the Swift OpenAI emitter ships."
+)
+E_SWIFT_006 = (
+    "E_SWIFT_006: target: swift does not support a multi-GIVES sub-flow used "
+    "as a FOR EACH ... PARALLEL body — a single typed Array collector cannot "
+    "hold multiple GIVES fields. Use --target python, or give the sub-flow a "
+    "single GIVES field."
+)
+E_SWIFT_009 = (
+    "E_SWIFT_009: target: swift does not yet support impl.mode: sql. "
+    "Use --target python until the Swift SQL emitter ships."
+)
+E_SWIFT_010 = (
+    "E_SWIFT_010: target: swift does not yet support impl.mode: mcp_tool. "
+    "Use --target python until the Swift MCP emitter ships."
+)
+E_SWIFT_012 = (
+    "E_SWIFT_012: target: swift does not yet emit TEST blocks. "
+    "Use --target python until the Swift TEST emitter ships."
+)
+E_SWIFT_013 = (
+    "E_SWIFT_013: target: swift impl.rest supports json and raw bodies only; "
+    "form/file/multipart are not yet supported — use --target python."
+)
+
+# Langs accepted by the swift target on exact steps (no LANG = None = auto-detect).
+_SWIFT_OK_LANGS: frozenset[str | None] = frozenset({"swift", "auto", None})
 
 _SWIFT_PRIMITIVES: dict[str, str] = {
     "str": "String",
@@ -59,10 +124,149 @@ def _swift_module_name(graph: FlowGraph, default: str = "flow") -> str:
     return cleaned or default
 
 
+def _walk_chain_swift(
+    items: tuple,  # type: ignore[type-arg]
+    flows_by_name: dict[str, FlowIR],
+) -> None:
+    """Recursively walk a FLOW chain and raise on constructs unsupported in
+    Phase 1.
+
+    Permanent refusals: E_SWIFT_006 (multi-GIVES sub-flow in PARALLEL body).
+    Temporary refusals: IF/ELSE, MATCH/CASE, WHILE, FOR EACH, FlowCallIR
+    (all planned for later phases).
+
+    The renderer in _swift_flow_renderer.py raises on non-CallIR as a
+    backstop; this gate fires first with a cleaner message."""
+    for it in items:
+        if isinstance(it, IfBlockIR):
+            raise ValueError(
+                "swift target: IF/ELSE control flow is not yet supported "
+                "(planned for Phase 3); use --target python or go for now"
+            )
+        if isinstance(it, MatchBlockIR):
+            raise ValueError(
+                "swift target: MATCH/CASE control flow is not yet supported "
+                "(planned for Phase 3); use --target python or go for now"
+            )
+        if isinstance(it, WhileBlockIR):
+            raise ValueError(
+                "swift target: WHILE loop is not yet supported "
+                "(planned for Phase 3); use --target python or go for now"
+            )
+        if isinstance(it, ForEachIR):
+            # E_SWIFT_006 (permanent): multi-GIVES sub-flow as PARALLEL body.
+            # Check before the temporary FOR EACH refusal so the stable code
+            # survives Phase 3 when FOR EACH is otherwise lifted.
+            if it.parallel and len(it.body) == 1:
+                body0 = it.body[0]
+                if isinstance(body0, FlowCallIR):
+                    sub = flows_by_name.get(body0.flow_name)
+                    if sub is not None and len(sub.gives) >= 2:
+                        raise ValueError(E_SWIFT_006)
+            raise ValueError(
+                "swift target: FOR EACH iteration is not yet supported "
+                "(planned for Phase 3); use --target python or go for now"
+            )
+        if isinstance(it, FlowCallIR):
+            raise ValueError(
+                f"swift target: sub-flow composition (FlowCallIR) is not yet "
+                f"supported (planned for Phase 5); use --target python or go "
+                f"for now (flow={it.flow_name!r})"
+            )
+        if isinstance(it, RescueBlockIR):
+            _walk_chain_swift(it.body, flows_by_name)
+
+
 def validate_graph_for_swift(graph: FlowGraph) -> None:
-    if graph.flow is None:
+    """Raise ValueError with a clear message if the graph uses any feature
+    outside the supported swift-target scope for Phase 1.
+
+    Permanent refusals use stable E_SWIFT_NNN codes.
+    Temporary refusals describe what phase will lift the restriction.
+
+    Check order: most-specific permanent codes win over broader temporary
+    ones (e.g., invoke checks fire before the general judgment refusal so
+    E_SWIFT_002/003/005 are surfaced even while judgment is unimplemented).
+    """
+    # E_SWIFT_004: no FLOW at all
+    if len(graph.flows) == 0:
         raise ValueError(E_SWIFT_004)
-    # further E_SWIFT_* gates added in a later task
+
+    # E_SWIFT_012: TEST blocks
+    if graph.tests:
+        raise ValueError(E_SWIFT_012)
+
+    for step in graph.steps:
+        if not isinstance(step, StepIR):
+            continue  # guard: graph.steps is tuple[StepIR, ...] but typed loosely
+
+        # E_SWIFT_001: unsupported LANG on an exact step
+        if step.mode == "exact" and step.lang not in _SWIFT_OK_LANGS:
+            raise ValueError(
+                f"{E_SWIFT_001} (step={step.name!r}, lang={step.lang!r})"
+            )
+
+        # invoke checks — permanent, fire before the temporary judgment check
+        # so the stable code is surfaced even while judgment is unimplemented.
+        if isinstance(step.invoke, CliInvokeIR):
+            raise ValueError(E_SWIFT_002)
+        if isinstance(step.invoke, ApiInvokeIR):
+            if step.invoke.protocol in {"bedrock", "vertex"}:
+                raise ValueError(E_SWIFT_003)
+            if step.invoke.protocol == "openai":
+                raise ValueError(E_SWIFT_005)
+
+        # Temporary: judgment mode (Phase 2)
+        if step.mode == "judgment":
+            raise ValueError(
+                f"swift target: judgment mode is not yet supported "
+                f"(planned for Phase 2); use --target python or go for now "
+                f"(step={step.name!r})"
+            )
+
+        # E_SWIFT_009 / E_SWIFT_010: sql and mcp_tool impls (permanent)
+        if isinstance(step.impl, SqlImplIR):
+            raise ValueError(f"{E_SWIFT_009} (step={step.name!r})")
+        if isinstance(step.impl, McpToolImplIR):
+            raise ValueError(f"{E_SWIFT_010} (step={step.name!r})")
+
+        # E_SWIFT_013 (permanent): form/file/multipart REST body.
+        # Checked BEFORE the temporary rest refusal so the stable code
+        # is surfaced and survives Phase 4 when rest is otherwise lifted.
+        if isinstance(step.impl, RestImplIR) and step.impl.body is not None and not (
+            isinstance(step.impl.body, (JsonBodyIR, RawBodyIR))
+        ):
+            raise ValueError(f"{E_SWIFT_013} (step={step.name!r})")
+
+        # Temporary: rest impl (Phase 4)
+        if isinstance(step.impl, RestImplIR):
+            raise ValueError(
+                f"swift target: impl.mode: rest is not yet supported "
+                f"(planned for Phase 4); use --target python or go for now "
+                f"(step={step.name!r})"
+            )
+
+        # Temporary: shell impl (Phase 4)
+        if isinstance(step.impl, ShellImplIR):
+            raise ValueError(
+                f"swift target: impl.mode: shell is not yet supported "
+                f"(planned for Phase 4); use --target python or go for now "
+                f"(step={step.name!r})"
+            )
+
+    # Temporary: sub-flow composition — more than one FLOW (Phase 5)
+    if len(graph.flows) > 1:
+        raise ValueError(
+            "swift target: sub-flow composition (multiple FLOWs) is not yet "
+            "supported (planned for Phase 5); use --target python or go for now"
+        )
+
+    # Walk every flow's chain for non-linear items and FlowCallIR.
+    flows_by_name = {f.name: f for f in graph.flows}
+    for fl in graph.flows:
+        _walk_chain_swift(fl.chain, flows_by_name)
+        for rescue in fl.rescues:
+            _walk_chain_swift(rescue.body, flows_by_name)
 
 
 def render_package_swift(graph: FlowGraph) -> str:
