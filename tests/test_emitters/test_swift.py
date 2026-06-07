@@ -57,10 +57,11 @@ def test_swift_emits_contract_struct_and_validate(tmp_path: Path) -> None:
 # Task 5 — honest phase-1 refusal gate
 # ---------------------------------------------------------------------------
 
-# ---- temporary refusals (will be lifted in later phases) ------------------
+# ---- lifted in Phase 2: anthropic judgment is now supported ---------------
 
-def test_swift_refuses_judgment(tmp_path: Path, capsys: object) -> None:
-    """A judgment-mode step is not yet supported (Phase 2)."""
+def test_swift_judgment_anthropic_default_allowed(tmp_path: Path) -> None:
+    """A judgment-mode step with no invoke block (default Anthropic) compiles
+    from Phase 2 onwards — the temporary refusal was lifted."""
     src = tmp_path / "j.clio"
     src.write_text(
         "STEP s\n"
@@ -72,9 +73,31 @@ def test_swift_refuses_judgment(tmp_path: Path, capsys: object) -> None:
         '  s(x="hi")\n'
     )
     rc = _compile(src, tmp_path / "out")
-    assert rc != 0
-    captured = capsys.readouterr()  # type: ignore[attr-defined]
-    assert "not yet supported" in captured.err.lower()
+    assert rc == 0
+
+
+def test_swift_judgment_emits_anthropic_call(tmp_path: Path) -> None:
+    """Judgment step emits the correct files: step file with Out decode, and
+    Anthropic.swift runtime with the URL and x-api-key header."""
+    out = tmp_path / "out"
+    rc = _compile(FIXTURES / "swift_judgment.clio", out)
+    assert rc == 0
+    # Step file: references Anthropic.complete and decodes into Out struct.
+    step_file = out / "Sources/ClioFlow/Steps/Step01_analyze.swift"
+    assert step_file.exists(), "judgment step file not emitted"
+    step_src = step_file.read_text()
+    assert "Anthropic.complete(" in step_src
+    assert "Step01_analyze_Out.self" in step_src
+    assert "out.result.validate()" in step_src  # ContractRef → validate call
+    # Runtime file: the URL and header live in Anthropic.swift.
+    anthropic_rt = out / "Sources/ClioFlow/Runtime/Anthropic.swift"
+    assert anthropic_rt.exists(), "Anthropic.swift runtime not emitted"
+    rt_src = anthropic_rt.read_text()
+    assert "api.anthropic.com/v1/messages" in rt_src
+    assert "x-api-key" in rt_src
+
+
+# ---- temporary refusals (will be lifted in later phases) ------------------
 
 
 def test_swift_refuses_shell_impl(tmp_path: Path, capsys: object) -> None:

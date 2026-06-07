@@ -124,6 +124,14 @@ def _swift_module_name(graph: FlowGraph, default: str = "flow") -> str:
     return cleaned or default
 
 
+def _flow_uses_judgment(graph: FlowGraph) -> bool:
+    """True if any step in the source is judgment mode.
+
+    Mirrors _go_helpers._flow_uses_judgment — scans graph.steps so judgment
+    in a sub-flow still triggers Anthropic.swift emission."""
+    return any(isinstance(s, StepIR) and s.mode == "judgment" for s in graph.steps)
+
+
 def _walk_chain_swift(
     items: tuple,  # type: ignore[type-arg]
     flows_by_name: dict[str, FlowIR],
@@ -206,8 +214,8 @@ def validate_graph_for_swift(graph: FlowGraph) -> None:
                 f"{E_SWIFT_001} (step={step.name!r}, lang={step.lang!r})"
             )
 
-        # invoke checks — permanent, fire before the temporary judgment check
-        # so the stable code is surfaced even while judgment is unimplemented.
+        # invoke checks — permanent; fire before the dispatch so stable codes
+        # are surfaced even when a new invoke type is added later.
         if isinstance(step.invoke, CliInvokeIR):
             raise ValueError(E_SWIFT_002)
         if isinstance(step.invoke, ApiInvokeIR):
@@ -215,14 +223,8 @@ def validate_graph_for_swift(graph: FlowGraph) -> None:
                 raise ValueError(E_SWIFT_003)
             if step.invoke.protocol == "openai":
                 raise ValueError(E_SWIFT_005)
-
-        # Temporary: judgment mode (Phase 2)
-        if step.mode == "judgment":
-            raise ValueError(
-                f"swift target: judgment mode is not yet supported "
-                f"(planned for Phase 2); use --target python or go for now "
-                f"(step={step.name!r})"
-            )
+        # Anthropic judgment (nil invoke or ApiInvokeIR with protocol anthropic)
+        # is supported from Phase 2 — no refusal here.
 
         # E_SWIFT_009 / E_SWIFT_010: sql and mcp_tool impls (permanent)
         if isinstance(step.impl, SqlImplIR):
@@ -271,11 +273,20 @@ def validate_graph_for_swift(graph: FlowGraph) -> None:
 
 def render_package_swift(graph: FlowGraph) -> str:
     exe = _swift_module_name(graph)
+    # Swift Concurrency runtime APIs (withCheckedThrowingContinuation, etc.)
+    # require macOS 12+ / iOS 15+. Judgment flows call these at runtime, so we
+    # declare a minimum platform.  Exact-only flows have no runtime concurrency
+    # API calls and compile fine without a platforms clause.
+    if _flow_uses_judgment(graph):
+        platforms_clause = "    platforms: [.macOS(.v12)],\n"
+    else:
+        platforms_clause = ""
     return (
         "// swift-tools-version:6.0\n"
         "import PackageDescription\n\n"
         "let package = Package(\n"
         f'    name: "{exe}",\n'
+        f'{platforms_clause}'
         "    targets: [\n"
         '        .target(name: "ClioFlow"),\n'
         f'        .executableTarget(name: "{exe}", dependencies: ["ClioFlow"]),\n'

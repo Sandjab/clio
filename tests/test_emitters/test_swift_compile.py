@@ -43,3 +43,18 @@ def test_swift_contract_builds(tmp_path: Path) -> None:
         timeout=600,
     )
     assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.skipif(swift_missing, reason="swift toolchain not on PATH")
+def test_swift_judgment_builds(tmp_path: Path) -> None:
+    """swift build must succeed on a judgment-only flow (Anthropic URLSession client)."""
+    out = tmp_path / "out"
+    _compile(FIXTURES / "swift_judgment.clio", out)
+    proc = subprocess.run(
+        ["swift", "build"],
+        cwd=out,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert proc.returncode == 0, proc.stderr

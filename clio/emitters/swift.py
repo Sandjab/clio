@@ -5,14 +5,21 @@ from pathlib import Path
 
 from clio.emitters._swift_flow_renderer import render_flow_swift
 from clio.emitters._swift_helpers import (
+    _flow_uses_judgment,
     _swift_module_name,
     render_contracts_swift,
     render_main_swift,
     render_package_swift,
     validate_graph_for_swift,
 )
-from clio.emitters._swift_runtime_templates import render_runtime_validate_swift
-from clio.emitters._swift_step_renderers import render_exact_step_swift
+from clio.emitters._swift_runtime_templates import (
+    render_runtime_anthropic_swift,
+    render_runtime_validate_swift,
+)
+from clio.emitters._swift_step_renderers import (
+    render_exact_step_swift,
+    render_judgment_step_swift,
+)
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import (
     CallIR,
@@ -92,17 +99,20 @@ class SwiftEmitter(BaseEmitter):
         reachable = _collect_reachable_steps(graph)
         step_to_idx = {step.name: i + 1 for i, step in enumerate(reachable)}
 
-        # Sources/ClioFlow/Steps/StepNN_<name>.swift (Phase 1: exact only).
+        # Sources/ClioFlow/Steps/StepNN_<name>.swift
+        # Phase 1: exact steps only; Phase 2: judgment steps (Anthropic) added.
         steps_dir: Path | None = None
         for step in reachable:
-            if step.mode != "exact":
-                continue  # judgment and other modes deferred to later tasks
             if steps_dir is None:
                 steps_dir = output_dir / "Sources" / "ClioFlow" / "Steps"
                 steps_dir.mkdir(parents=True, exist_ok=True)
             idx = step_to_idx[step.name]
             filename = f"Step{idx:02d}_{step.name}.swift"
-            src = render_exact_step_swift(step, contracts_by_name, idx)
+            if step.mode == "exact":
+                src = render_exact_step_swift(step, contracts_by_name, idx)
+            else:
+                # judgment (anthropic) — only supported mode after validate_graph_for_swift
+                src = render_judgment_step_swift(step, contracts_by_name, graph, idx)
             (steps_dir / filename).write_text(src)
 
         # Sources/ClioFlow/Flow.swift
@@ -119,3 +129,9 @@ class SwiftEmitter(BaseEmitter):
             runtime_dir = clio_flow_dir / "Runtime"
             runtime_dir.mkdir(parents=True, exist_ok=True)
             (runtime_dir / "Validate.swift").write_text(render_runtime_validate_swift())
+
+        # Sources/ClioFlow/Runtime/Anthropic.swift (emitted when ≥1 judgment step)
+        if _flow_uses_judgment(graph):
+            runtime_dir = clio_flow_dir / "Runtime"
+            runtime_dir.mkdir(parents=True, exist_ok=True)
+            (runtime_dir / "Anthropic.swift").write_text(render_runtime_anthropic_swift())
