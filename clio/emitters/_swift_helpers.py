@@ -419,9 +419,38 @@ def _json_schema_to_swift(schema: dict) -> str:
     return "Any"
 
 
+def _contract_refs_in_type(t: TypeExpr) -> set[str]:
+    """Return the CONTRACT names referenced anywhere in a TypeExpr tree.
+
+    Mirrors the walk in _shared_utils._collect_contract_refs, but operates on a
+    bare TypeExpr (a flow TAKE/GIVES field type) rather than a StepIR. Used so a
+    contract referenced ONLY by a FLOW take/gives — e.g. `TAKES: List<risk>`
+    accessed via a loop-var condition — still gets its struct emitted."""
+    refs: set[str] = set()
+
+    def walk(ty: TypeExpr) -> None:
+        if isinstance(ty, ContractRef):
+            refs.add(ty.name)
+        elif isinstance(ty, ListType):
+            walk(ty.inner)
+        elif isinstance(ty, DictType):
+            walk(ty.key)
+            walk(ty.value)
+        elif isinstance(ty, OptionalType):
+            walk(ty.inner)
+        elif isinstance(ty, RecordType):
+            for _, fty in ty.fields:
+                walk(fty)
+        elif isinstance(ty, ConstrainedType):
+            walk(ty.base)
+
+    walk(t)
+    return refs
+
+
 def render_contracts_swift(graph: FlowGraph) -> str | None:
     """Render Sources/ClioFlow/Contracts.swift. Returns None when no contracts
-    are referenced by any step in the graph.
+    are referenced by any step or by the FLOW's takes/gives.
 
     Emits one `struct <Name>: Codable, Sendable` per ContractIR, with:
       - fields from the CONTRACT SHAPE (via _json_schema_to_swift)
@@ -431,6 +460,14 @@ def render_contracts_swift(graph: FlowGraph) -> str | None:
     contracts_used: set[str] = set()
     for step in graph.steps:
         contracts_used |= _collect_contract_refs(step)
+    # A contract referenced only by the FLOW signature (e.g. `TAKES: List<risk>`
+    # accessed via a loop/condition, never by a step) is still emitted as a type
+    # in Flow.swift — collect those refs too or Flow.swift won't compile.
+    if graph.flow is not None:
+        for field in graph.flow.takes:
+            contracts_used |= _contract_refs_in_type(field.type)
+        for field in graph.flow.gives:
+            contracts_used |= _contract_refs_in_type(field.type)
     if not contracts_used:
         return None
 

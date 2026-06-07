@@ -174,6 +174,32 @@ def test_swift_foreach_seq_builds(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(swift_missing, reason="swift toolchain not on PATH")
+def test_swift_foreach_take_contract_builds(tmp_path: Path) -> None:
+    """swift build must succeed on a flow whose only reference to a CONTRACT is
+    a `TAKES: List<contract>` accessed via a loop-var condition.
+
+    Regression: render_contracts_swift collected contract refs from
+    graph.steps only, never from the flow's takes/gives — so a contract used
+    solely by a FLOW take produced a Flow.swift that referenced an undefined
+    type ([Risk]) with no Contracts.swift, failing to compile with
+    `cannot find type 'Risk' in scope`."""
+    out = tmp_path / "out"
+    _compile(FIXTURES / "swift_foreach_take.clio", out)
+    assert (out / "Sources/ClioFlow/Contracts.swift").exists(), (
+        "Contracts.swift not emitted for a contract referenced only by a FLOW take"
+    )
+    proc = subprocess.run(
+        ["swift", "build"],
+        cwd=out,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "warning:" not in (proc.stdout + proc.stderr), proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(swift_missing, reason="swift toolchain not on PATH")
 def test_swift_sideeffect_step_builds_warning_free(tmp_path: Path) -> None:
     """A side-effect step (TAKES but no GIVES) must build with NO warnings.
 
