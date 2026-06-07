@@ -16,6 +16,13 @@
 [![Version](https://img.shields.io/badge/Version-v0.23.0-green.svg)](https://github.com/Sandjab/clio/releases/tag/v0.23.0)
 [![Visitors](https://komarev.com/ghpvc/?username=sandjab-clio&label=Visitors&color=0e75b6&style=flat)](https://github.com/Sandjab/clio)
 
+> [!WARNING]
+> ## 🚧 Work in Progress — NOT READY FOR RELEASE
+>
+> This repository is under active development and is shared for transparency only.
+> APIs, the language grammar, and emitted output may change without notice, and
+> nothing here is production-ready. **Do not depend on it yet.**
+
 CLIO is a declarative language that compiles hybrid LLM/code programs into executable projects. You describe *what* you want and mark each step `exact` (deterministic code) or `judgment` (needs an LLM) — the compiler emits a project you can run directly.
 
 ```
