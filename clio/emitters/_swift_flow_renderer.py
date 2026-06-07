@@ -13,6 +13,7 @@ from clio.ir.graph import (
     ConditionIR,
     ContractIR,
     FlowGraph,
+    ForEachIR,
     IfBlockIR,
     MatchBlockIR,
     StepIR,
@@ -45,6 +46,8 @@ def _build_state_field_to_step(graph: FlowGraph) -> dict[str, StepIR]:
                 for case in it.cases:
                     walk(case.body)
             elif isinstance(it, WhileBlockIR):
+                walk(it.body)
+            elif isinstance(it, ForEachIR):
                 walk(it.body)
 
     walk(graph.flow.chain)
@@ -123,10 +126,22 @@ def _swift_kwarg_value(
     contracts: dict[str, ContractIR],
     state_field_to_step: dict[str, StepIR],
     take_types: dict[str, str],
+    scope_local: set[str] | None = None,
 ) -> str:
-    """Render one CallIR kwarg value as a Swift expression."""
+    """Render one CallIR kwarg value as a Swift expression.
+
+    Resolution order for ``@<ref>``:
+      1. Loop variable (scope_local) — bare identifier, no state lookup.
+      2. Step producer (state_field_to_step) — ``state["k"] as! SwiftType``
+      3. Flow TAKE (take_types) — ``state["k"] as! SwiftType``
+      4. Unknown — untyped fallback.
+    """
+    _scope = scope_local or set()
     if isinstance(value, str) and value.startswith("@"):
         ref = value[1:]
+        if ref in _scope:
+            # Loop variable inside FOR EACH — bare identifier, no state lookup.
+            return ref
         step = state_field_to_step.get(ref)
         if step is not None and step.gives is not None:
             swift_type = _type_to_swift(step.gives.type, contracts)
@@ -163,10 +178,11 @@ def _render_chain_item(
     `indent` is the current indentation string (top-level = 8 spaces; each
     nested block level adds 4 more spaces — Swift convention).
     `scope_local` is the set of active loop-variable names; used by the
-    condition renderer to skip the state-dict lookup for loop variables.
-    Empty in Phase 3a (no FOR EACH yet), but threaded through for Phase 3b.
+    condition and kwarg renderers to skip the state-dict lookup for loop
+    variables. Accumulates across nested FOR EACH blocks.
 
-    Supported: CallIR, IfBlockIR, MatchBlockIR, WhileBlockIR.
+    Supported: CallIR, IfBlockIR, MatchBlockIR, WhileBlockIR, ForEachIR
+    (sequential only — parallel is refused by the gate in _swift_helpers.py).
     Other item types fall through to the backstop ValueError.
     """
     _scope = scope_local or set()
@@ -184,7 +200,7 @@ def _render_chain_item(
         in_args: list[str] = []
         for name, val in item.kwargs:
             swift_val = _swift_kwarg_value(
-                val, contracts_by_name, state_field_to_step, take_types
+                val, contracts_by_name, state_field_to_step, take_types, _scope
             )
             in_args.append(f"{name}: {swift_val}")
 
@@ -301,6 +317,41 @@ def _render_chain_item(
                 scope_local=scope_local,
             ))
         lines.append(f"{inner_indent}_while{n} += 1")
+        lines.append(f"{indent}}}")
+        lines.append("")
+        return lines
+
+    if isinstance(item, ForEachIR) and not item.parallel:
+        # Render the collection expression: `state["<coll>"] as! [<ElemType>]`.
+        # The loop variable type is inferred by Swift from the typed array cast.
+        coll_name = item.collection
+        coll_step = state_field_to_step.get(coll_name)
+        if coll_step is not None and coll_step.gives is not None:
+            list_swift_type = _type_to_swift(coll_step.gives.type, contracts_by_name)
+            coll_expr = f'state["{coll_name}"] as! {list_swift_type}'
+        elif coll_name in take_types:
+            coll_expr = f'state["{coll_name}"] as! {take_types[coll_name]}'
+        else:
+            # Unknown collection source — fall back to untyped (should not
+            # happen after IR validation).
+            coll_expr = f'state["{coll_name}"] as! [Any]'
+
+        var = item.loop_var
+        inner_indent = indent + "    "
+        # Accumulate loop_var into scope_local so nested MATCH/IF/kwarg
+        # renderers resolve it as a bare identifier (not a state-dict lookup).
+        inner_scope = _scope | {var}
+        lines = [f"{indent}for {var} in ({coll_expr}) {{"]
+        for sub in item.body:
+            lines.extend(_render_chain_item(
+                sub, call_idx, inner_indent,
+                steps_by_name=steps_by_name,
+                state_field_to_step=state_field_to_step,
+                contracts_by_name=contracts_by_name,
+                take_types=take_types,
+                step_to_idx=step_to_idx,
+                scope_local=inner_scope,
+            ))
         lines.append(f"{indent}}}")
         lines.append("")
         return lines

@@ -156,6 +156,24 @@ def test_swift_control_flow_builds(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(swift_missing, reason="swift toolchain not on PATH")
+def test_swift_foreach_seq_builds(tmp_path: Path) -> None:
+    """swift build must succeed — and emit NO warnings — on a flow with
+    sequential FOR EACH containing nested MATCH and IF on the loop variable
+    (Phase 3b: loop-variable scoping)."""
+    out = tmp_path / "out"
+    _compile(FIXTURES / "swift_foreach_seq.clio", out)
+    proc = subprocess.run(
+        ["swift", "build"],
+        cwd=out,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "warning:" not in (proc.stdout + proc.stderr), proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(swift_missing, reason="swift toolchain not on PATH")
 def test_swift_sideeffect_step_builds_warning_free(tmp_path: Path) -> None:
     """A side-effect step (TAKES but no GIVES) must build with NO warnings.
 

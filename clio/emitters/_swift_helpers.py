@@ -170,14 +170,15 @@ def _walk_chain_swift(
     flows_by_name: dict[str, FlowIR],
 ) -> None:
     """Recursively walk a FLOW chain and raise on constructs unsupported in
-    Phase 3a.
+    Phase 3b.
 
     Permanent refusals: E_SWIFT_006 (multi-GIVES sub-flow in PARALLEL body).
-    Temporary refusals: FOR EACH (planned for Phase 3b), FlowCallIR (Phase 5).
+    Temporary refusals: parallel FOR EACH (planned for Phase 3c), FlowCallIR
+    (Phase 5).
 
-    IF/ELSE, MATCH/CASE, and WHILE are supported from Phase 3a — this walker
-    recurses into their bodies so that nested permanent refusals (E_SWIFT_006,
-    FlowCallIR) are still caught.
+    IF/ELSE, MATCH/CASE, WHILE, and sequential FOR EACH are supported from
+    Phase 3a/3b — this walker recurses into their bodies so that nested
+    permanent refusals (E_SWIFT_006, FlowCallIR) are still caught.
 
     The renderer in _swift_flow_renderer.py raises on unsupported item kinds
     as a backstop; this gate fires first with a cleaner message."""
@@ -191,19 +192,23 @@ def _walk_chain_swift(
         elif isinstance(it, WhileBlockIR):
             _walk_chain_swift(it.body, flows_by_name)
         elif isinstance(it, ForEachIR):
-            # E_SWIFT_006 (permanent): multi-GIVES sub-flow as PARALLEL body.
-            # Check before the temporary FOR EACH refusal so the stable code
-            # survives Phase 3b when FOR EACH is otherwise lifted.
-            if it.parallel and len(it.body) == 1:
-                body0 = it.body[0]
-                if isinstance(body0, FlowCallIR):
-                    sub = flows_by_name.get(body0.flow_name)
-                    if sub is not None and len(sub.gives) >= 2:
-                        raise ValueError(E_SWIFT_006)
-            raise ValueError(
-                "swift target: FOR EACH iteration is not yet supported "
-                "(planned for Phase 3b); use --target python or go for now"
-            )
+            if it.parallel:
+                # E_SWIFT_006 (permanent): multi-GIVES sub-flow as PARALLEL body.
+                # Check before the temporary parallel refusal so the stable code
+                # is surfaced even when parallel FOR EACH is otherwise lifted.
+                if len(it.body) == 1:
+                    body0 = it.body[0]
+                    if isinstance(body0, FlowCallIR):
+                        sub = flows_by_name.get(body0.flow_name)
+                        if sub is not None and len(sub.gives) >= 2:
+                            raise ValueError(E_SWIFT_006)
+                raise ValueError(
+                    "swift target: parallel FOR EACH is not yet supported "
+                    "(planned for Phase 3c); use --target python or go for now"
+                )
+            # Sequential FOR EACH: recurse into body to catch nested
+            # unsupported constructs (FlowCallIR, parallel FOR EACH, etc.).
+            _walk_chain_swift(it.body, flows_by_name)
         elif isinstance(it, FlowCallIR):
             raise ValueError(
                 f"swift target: sub-flow composition (FlowCallIR) is not yet "

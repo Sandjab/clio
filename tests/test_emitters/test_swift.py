@@ -663,3 +663,61 @@ def test_golden_swift_control_flow(tmp_path: Path) -> None:
     out = tmp_path / "out"
     _compile(FIXTURES / "swift_control_flow.clio", out)
     assert _read_tree(out) == _read_tree(EXPECTED_SWIFT / "swift_control_flow")
+
+
+# ---------------------------------------------------------------------------
+# Phase 3b — sequential FOR EACH with loop-variable scoping
+# ---------------------------------------------------------------------------
+
+
+def test_swift_foreach_seq_emits_for_loop(tmp_path: Path) -> None:
+    """Emitted Flow.swift contains a typed for-in loop over the collection.
+
+    The collection cast uses the element-level contract type (RiskAssessment),
+    not an untyped [Any], so the loop variable is strongly typed."""
+    out = tmp_path / "out"
+    rc = _compile(FIXTURES / "swift_foreach_seq.clio", out)
+    assert rc == 0
+    flow = (out / "Sources" / "ClioFlow" / "Flow.swift").read_text()
+    # for-in loop with typed cast on the collection
+    assert "for a in (state[\"assessments\"] as! [RiskAssessment])" in flow
+    # nested MATCH resolves loop var as bare identifier, not state lookup
+    assert "switch a.level" in flow
+    assert 'state["a"]' not in flow
+    # second FOR EACH with IF — loop var used bare
+    assert "for b in (state[\"assessments\"] as! [RiskAssessment])" in flow
+    assert "b.level ==" in flow
+    assert 'state["b"]' not in flow
+
+
+def test_swift_foreach_seq_parallel_still_refused(tmp_path: Path, capsys: object) -> None:
+    """Parallel FOR EACH is still refused (Phase 3c); only sequential is supported."""
+    src = tmp_path / "par.clio"
+    src.write_text(
+        "STEP detect\n"
+        "  TAKES: x: str\n"
+        "  GIVES: items: List<str>\n"
+        "  MODE: exact\n"
+        "\n"
+        "STEP process\n"
+        "  TAKES: item: str\n"
+        "  GIVES: result: str\n"
+        "  MODE: exact\n"
+        "\n"
+        "FLOW pipeline\n"
+        '  detect(x="in")\n'
+        "  -> FOR EACH item IN items PARALLEL AS results:\n"
+        "       process(item=item)\n"
+    )
+    rc = _compile(src, tmp_path / "out")
+    assert rc != 0
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    assert "parallel" in captured.err.lower()
+    assert "phase 3c" in captured.err.lower()
+
+
+def test_golden_swift_foreach_seq(tmp_path: Path) -> None:
+    """Full-tree comparison against the committed golden snapshot."""
+    out = tmp_path / "out"
+    _compile(FIXTURES / "swift_foreach_seq.clio", out)
+    assert _read_tree(out) == _read_tree(EXPECTED_SWIFT / "swift_foreach_seq")
