@@ -1,8 +1,4 @@
-"""target: claude-skill — emits a Claude Code skill directory.
-
-See docs/superpowers/specs/2026-05-14-target-claude-skill-design.md
-for the validated design.
-"""
+"""target: claude-skill — emits a Claude Code skill directory."""
 
 from __future__ import annotations
 

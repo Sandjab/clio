@@ -1,5 +1,4 @@
-"""Tests for the RESCUE primitive (top-level handler attached to a STEP).
-See docs/superpowers/specs/2026-05-10-rescue-handler-design.md."""
+"""Tests for the RESCUE primitive (top-level handler attached to a STEP)."""
 
 import pytest
 
