@@ -195,30 +195,47 @@ def _flow_uses_parallel_foreach(graph: FlowGraph) -> bool:
 def _walk_chain_swift(
     items: tuple,  # type: ignore[type-arg]
     flows_by_name: dict[str, FlowIR],
+    loop_vars: frozenset[str] = frozenset(),
 ) -> None:
     """Recursively walk a FLOW chain and raise on constructs unsupported in
     Phase 3c.
 
     Permanent refusals: E_SWIFT_006 (multi-GIVES sub-flow in PARALLEL body).
-    Temporary refusals: FlowCallIR (Phase 5).
+    Temporary refusals: FlowCallIR (Phase 5); FOR EACH over a loop variable.
 
     IF/ELSE, MATCH/CASE, WHILE, sequential FOR EACH, and parallel FOR EACH
     are all supported from Phase 3a/3b/3c — this walker recurses into their
     bodies so that nested permanent refusals (E_SWIFT_006, FlowCallIR) are
     still caught.
 
+    `loop_vars` is the set of loop-variable names bound by enclosing FOR EACH
+    blocks. A FOR EACH whose collection is one of those names iterates a loop
+    variable (a typed List element), not a state field — but the collection
+    resolver in _swift_flow_renderer only consults state_field_to_step /
+    take_types, so it would emit a runtime-wrong `state["<loopvar>"]` lookup
+    (and an [Any] element that is non-Sendable inside a parallel TaskGroup).
+    We refuse that case fail-loud here, in the gate, where the message is
+    clean and fires before the renderer runs.
+
     The renderer in _swift_flow_renderer.py raises on unsupported item kinds
     as a backstop; this gate fires first with a cleaner message."""
     for it in items:
         if isinstance(it, IfBlockIR):
-            _walk_chain_swift(it.then_body, flows_by_name)
-            _walk_chain_swift(it.else_body, flows_by_name)
+            _walk_chain_swift(it.then_body, flows_by_name, loop_vars)
+            _walk_chain_swift(it.else_body, flows_by_name, loop_vars)
         elif isinstance(it, MatchBlockIR):
             for case in it.cases:
-                _walk_chain_swift(case.body, flows_by_name)
+                _walk_chain_swift(case.body, flows_by_name, loop_vars)
         elif isinstance(it, WhileBlockIR):
-            _walk_chain_swift(it.body, flows_by_name)
+            _walk_chain_swift(it.body, flows_by_name, loop_vars)
         elif isinstance(it, ForEachIR):
+            # Refuse a FOR EACH (seq or parallel) over an enclosing loop var.
+            if it.collection in loop_vars:
+                raise ValueError(
+                    "swift target: FOR EACH over a loop variable is not yet "
+                    "supported (planned later); use --target python or go for "
+                    f"now (collection={it.collection!r})"
+                )
             if it.parallel:
                 # E_SWIFT_006 (permanent): multi-GIVES sub-flow as PARALLEL body.
                 # Kept as a defensive permanent refusal even though FlowCallIR
@@ -231,13 +248,10 @@ def _walk_chain_swift(
                         sub = flows_by_name.get(body0.flow_name)
                         if sub is not None and len(sub.gives) >= 2:
                             raise ValueError(E_SWIFT_006)
-                # Recurse into the parallel body so nested unsupported
-                # constructs (FlowCallIR, etc.) are caught by this gate.
-                _walk_chain_swift(it.body, flows_by_name)
-            else:
-                # Sequential FOR EACH: recurse into body to catch nested
-                # unsupported constructs (FlowCallIR, parallel FOR EACH, etc.).
-                _walk_chain_swift(it.body, flows_by_name)
+            # Recurse into the body with the loop var added to scope so a nested
+            # FOR EACH over THIS loop var (and other unsupported constructs) is
+            # caught.
+            _walk_chain_swift(it.body, flows_by_name, loop_vars | {it.loop_var})
         elif isinstance(it, FlowCallIR):
             raise ValueError(
                 f"swift target: sub-flow composition (FlowCallIR) is not yet "
@@ -245,7 +259,7 @@ def _walk_chain_swift(
                 f"for now (flow={it.flow_name!r})"
             )
         elif isinstance(it, RescueBlockIR):
-            _walk_chain_swift(it.body, flows_by_name)
+            _walk_chain_swift(it.body, flows_by_name, loop_vars)
 
 
 def validate_graph_for_swift(graph: FlowGraph) -> None:

@@ -851,3 +851,81 @@ def test_swift_parallel_foreach_refuses_non_sendable_kwarg(
     captured = capsys.readouterr()  # type: ignore[attr-defined]
     assert "non-sendable" in captured.err.lower()
     assert "cfg" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Fix 2 — FOR EACH over a loop variable is refused (seq + parallel)
+# ---------------------------------------------------------------------------
+
+
+def test_swift_refuses_foreach_over_loop_var_sequential(
+    tmp_path: Path, capsys: object
+) -> None:
+    """A nested sequential FOR EACH whose collection is an outer loop variable
+    is refused fail-loud.
+
+    The collection resolver consults state_field_to_step / take_types but never
+    the loop-var scope, so it would emit `state["row"] as! [Any]` — a runtime
+    lookup of a key that does not exist (`row` is a loop var, not a state field).
+    Refuse rather than emit wrong Swift."""
+    src = tmp_path / "lv.clio"
+    src.write_text(
+        "STEP load\n"
+        "  TAKES: file: str\n"
+        "  GIVES: matrix: List<List<str>>\n"
+        "  MODE: exact\n"
+        "\n"
+        "STEP work\n"
+        "  TAKES: cell: str\n"
+        "  GIVES: out: str\n"
+        "  MODE: exact\n"
+        "\n"
+        "FLOW pipeline\n"
+        '  load(file="in.csv")\n'
+        "  -> FOR EACH row IN matrix:\n"
+        "       FOR EACH cell IN row:\n"
+        "         work(cell=cell)\n"
+    )
+    rc = _compile(src, tmp_path / "out")
+    assert rc != 0
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    assert "for each over a loop variable" in captured.err.lower()
+
+
+def test_swift_refuses_foreach_over_loop_var_parallel(
+    tmp_path: Path, capsys: object
+) -> None:
+    """A nested PARALLEL FOR EACH whose collection is an outer loop variable is
+    refused fail-loud (same gap as sequential, plus the resolved [Any] element
+    would be non-Sendable inside the TaskGroup)."""
+    src = tmp_path / "lvp.clio"
+    src.write_text(
+        "STEP load\n"
+        "  TAKES: file: str\n"
+        "  GIVES: matrix: List<List<str>>\n"
+        "  MODE: exact\n"
+        "\n"
+        "STEP work\n"
+        "  TAKES: cell: str\n"
+        "  GIVES: out: str\n"
+        "  MODE: exact\n"
+        "\n"
+        "FLOW pipeline\n"
+        '  load(file="in.csv")\n'
+        "  -> FOR EACH row IN matrix:\n"
+        "       FOR EACH cell IN row PARALLEL AS outs:\n"
+        "         work(cell=cell)\n"
+    )
+    rc = _compile(src, tmp_path / "out")
+    assert rc != 0
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    assert "for each over a loop variable" in captured.err.lower()
+
+
+def test_swift_foreach_over_state_field_still_accepted(tmp_path: Path) -> None:
+    """Regression guard: the normal case — FOR EACH over a GIVES/TAKE state
+    field, not a loop var — must remain accepted. swift_foreach_seq iterates a
+    GIVES (`assessments`), so it must still compile."""
+    out = tmp_path / "out"
+    rc = _compile(FIXTURES / "swift_foreach_seq.clio", out)
+    assert rc == 0
