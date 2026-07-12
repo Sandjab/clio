@@ -1,9 +1,14 @@
 """target: claude-workflow — emitter tests."""
+import json
 from pathlib import Path
 
 import pytest
 
-from clio.emitters._workflow_helpers import validate_graph_for_workflow
+from clio.emitters._workflow_helpers import (
+    inline_schema,
+    schema_literal,
+    validate_graph_for_workflow,
+)
 from clio.emitters.workflow import WorkflowEmitter
 from clio.ir.graph import (
     ApiInvokeIR,
@@ -23,7 +28,7 @@ from clio.ir.graph import (
     SqlImplIR,
     StepIR,
 )
-from clio.parser.ast_nodes import PrimitiveType
+from clio.parser.ast_nodes import ContractRef, ListType, PrimitiveType, RecordType
 from tests.conftest import assert_valid_js
 
 
@@ -273,3 +278,116 @@ def test_go_lang_fixture_is_refused_end_to_end(tmp_path, capsys):
                "--target", "claude-workflow", "--output", str(tmp_path)])
     assert rc == 1
     assert "E_WF_004" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — self-contained JSON Schema (every $ref dereferenced, E_WF_005)
+# ---------------------------------------------------------------------------
+
+
+def _contract(name: str, schema: dict, line: int = 1) -> ContractIR:
+    return ContractIR(name=name, json_schema=schema, assert_json_ast=None, line=line)
+
+
+def _ref(name: str) -> ContractRef:
+    """ContractRef carries its source position — the parser always has one."""
+    return ContractRef(name=name, line=1, col=1)
+
+
+def test_inline_schema_dereferences_contract_refs():
+    """type_to_json_schema renders a ContractRef as a *file* $ref. The sandbox has
+    no filesystem: nothing can resolve it at run time, so it must be inlined."""
+    verdict = _contract("Verdict", {"type": "object",
+                                    "properties": {"ok": {"type": "boolean"}},
+                                    "required": ["ok"]}, line=3)
+    t = ListType(inner=_ref("Verdict"))
+
+    schema = inline_schema(t, {"Verdict": verdict})
+
+    assert schema == {"type": "array", "items": verdict.json_schema}
+    assert "$ref" not in str(schema), "no file $ref may survive into the sandbox"
+
+
+def test_inline_schema_recurses_into_nested_contract_refs():
+    """A contract whose own schema references another contract must be inlined all
+    the way down — one level of dereferencing would leave a live $ref behind."""
+    inner = _contract("Score", {"type": "object",
+                                "properties": {"n": {"type": "integer"}},
+                                "required": ["n"]})
+    outer = _contract("Report", {
+        "type": "object",
+        "properties": {"score": {"$ref": "../contracts/Score.schema.json"}},
+        "required": ["score"],
+    })
+
+    schema = inline_schema(_ref("Report"), {"Report": outer, "Score": inner})
+
+    assert schema["properties"]["score"] == inner.json_schema
+    assert "$ref" not in str(schema)
+
+
+def test_inline_schema_rejects_a_reference_cycle():
+    """A cycle cannot be inlined at all: the fixed point is infinite. Refuse it at
+    compile time rather than recurse forever or emit a $ref the host cannot read."""
+    a = _contract("A", {"$ref": "../contracts/B.schema.json"})
+    b = _contract("B", {"$ref": "../contracts/A.schema.json"})
+
+    with pytest.raises(ValueError, match="E_WF_005"):
+        inline_schema(_ref("A"), {"A": a, "B": b})
+
+
+def test_inline_schema_rejects_an_unknown_contract_ref():
+    """Same code, other unresolvable case: a $ref to a contract that is not in the
+    graph. Emitting the dangling $ref would fail inside the sandbox instead."""
+    with pytest.raises(ValueError, match="E_WF_005"):
+        inline_schema(_ref("Ghost"), {})
+
+
+def test_inline_schema_strips_the_clio_assert_ast():
+    """W_WF_003: the ASSERT predicate is not enforced by this target. Its CLIO AST
+    has no meaning for the host validator, so it does not travel in the schema —
+    same call as the claude-cli target, which embeds schemas in prompts."""
+    verdict = _contract("Verdict", {
+        "type": "object",
+        "properties": {"reason": {"type": "string"}},
+        "required": ["reason"],
+        "x-clio-assert": {"op": ">", "left": "len(reason)", "right": 0},
+    })
+
+    schema = inline_schema(_ref("Verdict"), {"Verdict": verdict})
+
+    assert "x-clio-assert" not in schema
+    assert schema["properties"] == {"reason": {"type": "string"}}
+
+
+def test_schema_literal_wraps_the_gives_field_not_the_step_name():
+    """Conditions read a step's output as state[step].<gives.name>, so the agent
+    must return an OBJECT wrapping that one named field — not the bare value."""
+    t = RecordType(fields=(("ok", PrimitiveType(name="bool")),))
+
+    literal = schema_literal(t, {}, "verdict")
+    obj = json.loads(literal)
+
+    assert obj["properties"]["verdict"]["type"] == "object"
+    assert obj["required"] == ["verdict"]
+    assert obj["additionalProperties"] is False
+
+
+def test_schema_literal_of_a_real_fixture_contract_is_self_contained():
+    """The hand-built IR above could drift from what the builder actually produces.
+    swift_contract.clio declares a CONTRACT (with an ASSERT) and a step that GIVES
+    it — compile it for real and inline that step's schema."""
+    from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
+
+    graph = build_ir(parse(Path("tests/fixtures/swift_contract.clio").read_text()))
+    contracts = {c.name: c for c in graph.contracts}
+    score = next(s for s in graph.steps if s.name == "score")
+
+    obj = json.loads(schema_literal(score.gives.type, contracts, score.gives.name))
+
+    risk = obj["properties"]["risk"]          # GIVES: risk: customer_risk
+    assert risk["properties"]["client"] == {"type": "string"}
+    assert risk["properties"]["risk"] == {"enum": ["low", "mid", "high"]}
+    assert "$ref" not in json.dumps(obj)
+    assert "x-clio-assert" not in json.dumps(obj)

@@ -4,9 +4,11 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 
+from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
     ApiInvokeIR,
     CodeImplIR,
+    ContractIR,
     FlowGraph,
     FlowIR,
     McpToolImplIR,
@@ -14,6 +16,7 @@ from clio.ir.graph import (
     ShellImplIR,
     SqlImplIR,
 )
+from clio.parser.ast_nodes import TypeExpr
 
 # ---------------------------------------------------------------------------
 # Compile-time validation error codes (permanent — stable across releases)
@@ -34,6 +37,10 @@ E_WF_004 = (
     "E_WF_004: target: claude-workflow can only embed exact step bodies in "
     "JavaScript (LANG: node or LANG: auto). Use --target python / go / swift for "
     "other languages."
+)
+E_WF_005 = (
+    "E_WF_005: CONTRACT reference cycle — cannot inline a self-referential schema "
+    "for target claude-workflow (the sandbox cannot resolve a $ref at run time)."
 )
 
 # ---------------------------------------------------------------------------
@@ -70,6 +77,70 @@ def js_string(s: str) -> str:
     """
     inner = json.dumps(s, ensure_ascii=False)[1:-1].replace("'", "\\'")
     return f"'{inner}'"
+
+
+_REF_PREFIX = "../contracts/"
+_REF_SUFFIX = ".schema.json"
+
+
+def _deref(schema: dict, contracts: dict[str, ContractIR], seen: frozenset[str]) -> dict:
+    """Recursively replace every {"$ref": "../contracts/X.schema.json"} with X's
+    own (recursively inlined) schema. `seen` carries the ancestor chain so a cycle
+    raises instead of recursing forever, and an unresolvable name raises rather
+    than leaving a dangling $ref the sandbox cannot read.
+
+    `x-clio-assert` is dropped from an inlined contract: the host validates the
+    agent's output against this schema and does not evaluate CLIO's assert AST
+    (W_WF_003). The claude-cli target strips it for the same reason.
+    """
+    ref = schema.get("$ref")
+    if isinstance(ref, str) and ref.startswith(_REF_PREFIX):
+        name = ref[len(_REF_PREFIX):-len(_REF_SUFFIX)]
+        if name in seen:
+            raise ValueError(f"{E_WF_005} (contract={name!r})")
+        target = contracts.get(name)
+        if target is None:
+            raise ValueError(f"{E_WF_005} (unknown contract {name!r})")
+        inlined = {
+            k: v for k, v in target.json_schema.items() if k != "x-clio-assert"
+        }
+        return _deref(inlined, contracts, seen | {name})
+
+    out: dict = {}
+    for k, v in schema.items():
+        if isinstance(v, dict):
+            out[k] = _deref(v, contracts, seen)
+        elif isinstance(v, list):
+            out[k] = [
+                _deref(i, contracts, seen) if isinstance(i, dict) else i for i in v
+            ]
+        else:
+            out[k] = v
+    return out
+
+
+def inline_schema(t: TypeExpr, contracts: dict[str, ContractIR]) -> dict:
+    """A fully self-contained JSON Schema for `t` — every $ref inlined."""
+    return _deref(type_to_json_schema(t), contracts, frozenset())
+
+
+def schema_literal(
+    t: TypeExpr, contracts: dict[str, ContractIR], field_name: str
+) -> str:
+    """The JS object literal for a step's GIVES schema.
+
+    A step's GIVES is a single NAMED field, and conditions read it as
+    state[step].<field> — so the agent must return an OBJECT wrapping that one
+    field, not the bare value. `field_name` is StepIR.gives.name (not the step
+    name: they differ).
+    """
+    obj = {
+        "type": "object",
+        "properties": {field_name: inline_schema(t, contracts)},
+        "required": [field_name],
+        "additionalProperties": False,
+    }
+    return json.dumps(obj, indent=2, ensure_ascii=False)
 
 
 def workflow_name(graph: FlowGraph) -> str:
