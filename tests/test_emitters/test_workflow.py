@@ -9,6 +9,7 @@ from clio.emitters._workflow_helpers import (
     schema_literal,
     validate_graph_for_workflow,
 )
+from clio.emitters._workflow_step_renderers import render_judgment_step_js
 from clio.emitters.workflow import WorkflowEmitter
 from clio.ir.graph import (
     ApiInvokeIR,
@@ -391,3 +392,134 @@ def test_schema_literal_of_a_real_fixture_contract_is_self_contained():
     assert risk["properties"]["risk"] == {"enum": ["low", "mid", "high"]}
     assert "$ref" not in json.dumps(obj)
     assert "x-clio-assert" not in json.dumps(obj)
+
+
+# ---------------------------------------------------------------------------
+# Task 4 — judgment step -> agent(), and the null trap
+# ---------------------------------------------------------------------------
+
+
+def test_judgment_step_calls_agent_with_schema_and_label(tmp_path):
+    step = _step(name="classify", mode="judgment",
+                 gives=FieldIR(name="label", type=PrimitiveType(name="str")))
+    js = render_judgment_step_js(step, contracts={})
+
+    assert "async function classify(" in js
+    assert "await agent(" in js
+    assert "label: 'judgment:classify'" in js
+    assert "schema:" in js
+    assert_valid_js(js, tmp_path)
+
+
+def test_judgment_step_throws_when_agent_returns_null():
+    """agent() returns null on terminal failure instead of throwing. If this
+    conversion is dropped, ON_FAIL and RESCUE become dead code and every failed
+    agent silently yields `undefined` downstream. This test is the guard."""
+    js = render_judgment_step_js(_step(name="classify"), contracts={})
+
+    assert "=== null" in js or "== null" in js
+    assert "throw new Error" in js
+
+
+def test_judgment_step_omits_model_when_source_declares_none():
+    """Omitting model lets the subagent inherit the session model — the behavior
+    the Workflow tool documents as almost always correct."""
+    js = render_judgment_step_js(_step(name="c"), contracts={})
+    assert "model:" not in js
+
+
+@pytest.mark.parametrize("model,tier", [
+    ("claude-opus-4-8", "opus"),
+    ("claude-sonnet-4-6", "sonnet"),
+    ("claude-haiku-4-5-20251001", "haiku"),
+])
+def test_judgment_step_maps_declared_model_to_a_tier(model: str, tier: str):
+    inv = ApiInvokeIR(protocol="anthropic", model=model, base_url=None,
+                      auth=None, temperature=None, max_tokens=None,
+                      timeout_seconds=None, retries=None)
+    js = render_judgment_step_js(_step(name="c", invoke=inv), contracts={})
+    assert f"model: '{tier}'" in js
+
+
+def test_judgment_step_maps_a_cli_invoke_model_too():
+    """invoke.mode: cli needs no protocol mapping — the agent() call IS the Claude
+    Code invocation — but the model it names still selects the subagent's tier."""
+    cli = CliInvokeIR(cli="claude", model="claude-haiku-4-5-20251001",
+                      output_format=None, max_turns=None)
+    js = render_judgment_step_js(_step(name="c", invoke=cli), contracts={})
+    assert "model: 'haiku'" in js
+
+
+def test_judgment_step_inherits_the_session_model_on_an_unknown_id():
+    """An id we cannot map is not a guess-and-hope: omit `model` and inherit the
+    session model, exactly as when the source declares nothing."""
+    inv = ApiInvokeIR(protocol="anthropic", model="claude-next-9", base_url=None,
+                      auth=None, temperature=None, max_tokens=None,
+                      timeout_seconds=None, retries=None)
+    js = render_judgment_step_js(_step(name="c", invoke=inv), contracts={})
+    assert "model:" not in js
+
+
+def test_judgment_prompt_carries_intent_inputs_and_output_shape(tmp_path):
+    step = _step(
+        name="triage",
+        takes=(FieldIR(name="report", type=PrimitiveType(name="str")),),
+        gives=FieldIR(name="severity", type=PrimitiveType(name="str")),
+        description="Rank the report by severity.",
+        strategies="When the report is empty, answer 'low'.",
+    )
+    js = render_judgment_step_js(step, contracts={})
+
+    assert "Rank the report by severity." in js
+    assert "When the report is empty" in js
+    # TAKES are interpolated from run state, not hardcoded.
+    assert "${JSON.stringify(state['report'])}" in js
+    # GIVES names the single key the agent must return (state[step].<gives.name>).
+    assert "severity" in js
+    assert_valid_js(js, tmp_path)
+
+
+def test_judgment_prompt_escapes_js_template_metacharacters(tmp_path):
+    """The prompt is emitted as a template literal so ${JSON.stringify(state…)}
+    interpolates. A backtick or a ${ in free text (DESCRIPTION/STRATEGIES are
+    prose — markdown backticks are the norm) would otherwise close the literal
+    early and emit a script that does not parse."""
+    step = _step(
+        name="c",
+        description="Use `jq` on the payload.",
+        strategies="Never emit ${danger} or a stray \\ backslash.",
+    )
+    js = render_judgment_step_js(step, contracts={})
+
+    assert "\\`jq\\`" in js
+    assert "\\${danger}" in js
+    assert_valid_js(js, tmp_path)
+
+
+def test_judgment_step_of_a_real_fixture_is_valid_js(tmp_path):
+    """Hand-built IR can drift from what the builder produces. swift_judgment.clio
+    declares a judgment step whose GIVES is a CONTRACT — render that step for real
+    and check the schema landed inlined inside valid JS."""
+    from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
+
+    graph = build_ir(parse(Path("tests/fixtures/swift_judgment.clio").read_text()))
+    contracts = {c.name: c for c in graph.contracts}
+    analyze = next(s for s in graph.steps if s.name == "analyze")
+
+    js = render_judgment_step_js(analyze, contracts)
+
+    assert "async function analyze(state, phaseName)" in js
+    assert "label: 'judgment:analyze'" in js
+    assert '"enum"' in js and '"positive"' in js   # the contract schema, inlined
+    assert "$ref" not in js
+    assert_valid_js(js, tmp_path)
+
+
+def test_no_emitted_line_calls_a_sandbox_forbidden_global():
+    """Date.now(), new Date() and Math.random() THROW in the workflow sandbox. No
+    emitted line may call them — no timestamps, no jitter, no generated ids."""
+    js = render_judgment_step_js(_step(name="c"), contracts={})
+
+    for forbidden in ("Date.now(", "new Date(", "Math.random("):
+        assert forbidden not in js
