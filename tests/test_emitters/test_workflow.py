@@ -9,7 +9,10 @@ from clio.emitters._workflow_helpers import (
     schema_literal,
     validate_graph_for_workflow,
 )
-from clio.emitters._workflow_step_renderers import render_judgment_step_js
+from clio.emitters._workflow_step_renderers import (
+    render_exact_step_js,
+    render_judgment_step_js,
+)
 from clio.emitters.workflow import WorkflowEmitter
 from clio.ir.graph import (
     ApiInvokeIR,
@@ -523,3 +526,71 @@ def test_no_emitted_line_calls_a_sandbox_forbidden_global():
 
     for forbidden in ("Date.now(", "new Date(", "Math.random("):
         assert forbidden not in js
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — exact `code` step -> a pure JS stub
+# ---------------------------------------------------------------------------
+
+
+def test_exact_code_step_emits_a_pure_stub():
+    step = _step(name="parse_rows", mode="exact", impl=CodeImplIR(lang="node"),
+                 takes=(FieldIR(name="raw", type=PrimitiveType(name="str")),),
+                 gives=FieldIR(name="rows", type=PrimitiveType(name="str")))
+    js = render_exact_step_js(step, contracts={})
+
+    assert "function parse_rows(state)" in js
+    assert "TODO" in js
+    # The sandbox has no IO. The stub must say so, loudly, where the author types.
+    assert "pure" in js.lower()
+    assert "throw new Error" in js  # unfilled stub must fail loudly, not return undefined
+
+
+def test_exact_stub_names_the_globals_that_throw_in_the_sandbox():
+    """`no IO` is not enough guidance: Date.now() and Math.random() look pure and
+    are not — they THROW in the sandbox. The author reads the stub, not the README,
+    so the two traps are named at the point where the body gets typed."""
+    js = render_exact_step_js(_step(name="c", mode="exact"), contracts={})
+
+    assert "Date.now()" in js
+    assert "Math.random()" in js
+
+
+def test_exact_stub_documents_the_state_keys_it_reads_and_the_field_it_returns():
+    """The body reads its inputs off `state`, not off named parameters. Without the
+    keys spelled out, the author has to go back to the .clio to find them."""
+    step = _step(name="merge", mode="exact",
+                 takes=(FieldIR(name="left", type=PrimitiveType(name="str")),
+                        FieldIR(name="right", type=PrimitiveType(name="str"))),
+                 gives=FieldIR(name="merged", type=PrimitiveType(name="str")))
+    js = render_exact_step_js(step, contracts={})
+
+    assert "state['left']" in js and "state['right']" in js
+    assert "merged" in js
+
+
+def test_exact_stub_without_takes_or_gives_is_still_valid_js(tmp_path):
+    """A step may declare neither (a side-effect step). The stub must degrade to
+    valid JS, not to a dangling comment or an empty `state[]`."""
+    js = render_exact_step_js(_step(name="c", mode="exact", takes=(), gives=None),
+                              contracts={})
+
+    assert_valid_js(js, tmp_path)
+
+
+def test_exact_step_of_a_real_fixture_is_valid_js(tmp_path):
+    """Hand-built IR can drift from what the builder produces. swift_minimal.clio
+    declares exact steps with no LANG (target-agnostic bodies) — render one for
+    real and syntax-check it."""
+    from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
+
+    graph = build_ir(parse(Path("tests/fixtures/swift_minimal.clio").read_text()))
+    load = next(s for s in graph.steps if s.name == "load")
+
+    js = render_exact_step_js(load, {c.name: c for c in graph.contracts})
+
+    assert "function load(state)" in js
+    assert "state['file']" in js          # TAKES: file: str
+    assert "throw new Error" in js
+    assert_valid_js(js, tmp_path)

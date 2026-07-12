@@ -1,4 +1,4 @@
-"""Step renderers for target: claude-workflow — a judgment step is an agent()."""
+"""Step renderers for target: claude-workflow — judgment steps and exact stubs."""
 from __future__ import annotations
 
 import textwrap
@@ -99,5 +99,34 @@ async function {step.name}(state, phaseName) {{
     throw new Error({js_string(f"clio: step '{step.name}' failed (agent returned no result)")})
   }}
   return result
+}}
+"""
+
+
+def render_exact_step_js(step: StepIR, contracts: dict[str, ContractIR]) -> str:
+    """An exact `code` step is a stub the author fills in.
+
+    The compiler emits the signature, the state keys to read and the field to
+    return; it never invents the body. The stub throws until filled — returning
+    `undefined` instead would flow silently into the next step and fail far from
+    the cause.
+
+    `contracts` is unused: the body is the author's, so there is nothing to
+    validate against a schema here. It stays in the signature so the flow renderer
+    can call either renderer the same way.
+    """
+    reads = ", ".join(f"state[{js_string(f.name)}]" for f in step.takes) or "(none)"
+    gives = step.gives.name if step.gives is not None else "(none)"
+    todo = f"TODO: implement exact step '{step.name}' (pure, no IO)"
+    return f"""\
+// STEP {step.name} — MODE: exact
+// Reads:   {reads}
+// Returns: {gives}
+//
+// This body must be a PURE function: the workflow sandbox has no filesystem, no
+// network, no process and no clock — Date.now(), new Date() and Math.random()
+// throw. Anything IO-shaped belongs in --target python / go / swift.
+function {step.name}(state) {{
+  throw new Error({js_string(todo)})
 }}
 """
