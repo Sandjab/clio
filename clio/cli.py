@@ -22,7 +22,8 @@ def main(argv: list[str] | None = None) -> int:
     compile_p.add_argument("source")
     compile_p.add_argument(
         "--target", required=True,
-        choices=["claude-cli", "python", "mcp-server", "langgraph", "claude-skill", "go", "swift"],
+        choices=["claude-cli", "python", "mcp-server", "langgraph", "claude-skill", "go", "swift",
+                 "claude-workflow"],
     )
     compile_p.add_argument("--output", required=True)
     compile_p.add_argument(
@@ -153,6 +154,15 @@ def _cmd_compile(source: str, target: str, output: str, flow: str | None = None)
         from clio.emitters.swift import SwiftEmitter
         try:
             SwiftEmitter().emit(graph, out_path, source_path=src_resolved)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+    elif target == "claude-workflow":
+        from clio.emitters.workflow import WorkflowEmitter
+        try:
+            WorkflowEmitter().emit(
+                graph, out_path, source_path=src_resolved, sources=tuple(parsed)
+            )
         except ValueError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
