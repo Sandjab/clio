@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import textwrap
 
-from clio.emitters._workflow_helpers import js_string, schema_literal
+from clio.emitters._workflow_helpers import js_identifier, js_string, schema_literal
 from clio.ir.graph import ApiInvokeIR, CliInvokeIR, ContractIR, StepIR
 
 _MODEL_TIERS = (
@@ -87,7 +87,7 @@ def render_judgment_step_js(step: StepIR, contracts: dict[str, ContractIR]) -> s
     opts_js = "".join(f"      {o},\n" for o in opts)
 
     return f"""\
-async function {step.name}(state, phaseName) {{
+async function {js_identifier(step.name)}(state, phaseName) {{
   const result = await agent(
     `{_prompt(step)}`,
     {{
@@ -126,7 +126,7 @@ def render_exact_step_js(step: StepIR, contracts: dict[str, ContractIR]) -> str:
 // This body must be a PURE function: the workflow sandbox has no filesystem, no
 // network, no process and no clock — Date.now(), new Date() and Math.random()
 // throw. Anything IO-shaped belongs in --target python / go / swift.
-function {step.name}(state) {{
+function {js_identifier(step.name)}(state) {{
   throw new Error({js_string(todo)})
 }}
 """

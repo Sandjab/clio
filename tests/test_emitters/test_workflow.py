@@ -6,6 +6,7 @@ import pytest
 
 from clio.emitters._workflow_helpers import (
     inline_schema,
+    js_identifier,
     schema_literal,
     validate_graph_for_workflow,
 )
@@ -593,4 +594,161 @@ def test_exact_step_of_a_real_fixture_is_valid_js(tmp_path):
     assert "function load(state)" in js
     assert "state['file']" in js          # TAKES: file: str
     assert "throw new Error" in js
+    assert_valid_js(js, tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# E_WF_006 — a multi-FLOW source compiled without --flow is ambiguous
+# ---------------------------------------------------------------------------
+
+
+def _two_flows() -> tuple[FlowIR, FlowIR]:
+    return (FlowIR(name="alpha", chain=(), rescues=(), line=1),
+            FlowIR(name="beta", chain=(), rescues=(), line=9))
+
+
+def test_multi_flow_without_a_selection_is_refused():
+    """LANGUAGE_SPEC: `clio compile` requires --flow when the source declares more
+    than one. The builder leaves graph.flow None in that case; picking flows[0]
+    here would compile a flow the author never asked for and drop the others
+    without a word — an exit-0 lie."""
+    alpha, beta = _two_flows()
+    graph = FlowGraph(steps=(), flow=None, flows=(alpha, beta))
+
+    with pytest.raises(ValueError, match="E_WF_006"):
+        validate_graph_for_workflow(graph)
+
+
+def test_e_wf_006_lists_the_declared_flows_and_names_the_fix():
+    """A refusal the author cannot act on is only half a refusal: it must name the
+    candidates and the flag that resolves the ambiguity."""
+    alpha, beta = _two_flows()
+
+    with pytest.raises(ValueError) as excinfo:
+        validate_graph_for_workflow(FlowGraph(steps=(), flow=None,
+                                              flows=(alpha, beta)))
+
+    msg = str(excinfo.value)
+    assert "alpha" in msg and "beta" in msg
+    assert "--flow" in msg
+
+
+def test_multi_flow_with_an_explicit_selection_is_accepted():
+    """The guard must not over-fire: --flow beta sets graph.flow, and a sub-flow
+    called by the entry flow is a normal, supported shape."""
+    alpha, beta = _two_flows()
+
+    validate_graph_for_workflow(FlowGraph(steps=(), flow=beta,
+                                          flows=(alpha, beta)))  # must not raise
+
+
+def test_multi_flow_source_without_flag_refuses_end_to_end(tmp_path, capsys):
+    """The reproduction, through the CLI. Before E_WF_006 this exited 0 and wrote
+    alpha.workflow.js — the first FLOW, silently chosen, `beta` gone. Exit 1 and
+    emit nothing instead: a wrong artifact is worse than no artifact."""
+    from clio.cli import main
+
+    rc = main(["compile", "tests/fixtures/workflow_two_flows.clio",
+               "--target", "claude-workflow", "--output", str(tmp_path)])
+
+    assert rc == 1
+    assert "E_WF_006" in capsys.readouterr().err
+    assert not list(tmp_path.glob("*.workflow.js")), "refused, yet a script was written"
+
+
+def test_selecting_the_flow_compiles_that_flow_end_to_end(tmp_path):
+    """The other half: --flow beta compiles, and it compiles *beta* — not flows[0]."""
+    from clio.cli import main
+
+    rc = main(["compile", "tests/fixtures/workflow_two_flows.clio",
+               "--target", "claude-workflow", "--flow", "beta",
+               "--output", str(tmp_path)])
+
+    assert rc == 0
+    assert [p.name for p in tmp_path.glob("*.workflow.js")] == ["beta.workflow.js"]
+
+
+# ---------------------------------------------------------------------------
+# JS reserved words — a CLIO step name is not a legal JS identifier by default
+# ---------------------------------------------------------------------------
+
+# node --check rejects every one of these as a function name in module code
+# (strict mode): reserved words, strict-mode reserved words, `await`/`enum`, the
+# literals, and the two names strict mode refuses to bind (`eval`, `arguments`).
+_JS_RESERVED_SAMPLE = ["delete", "new", "class", "default", "case", "return",
+                       "switch", "try", "catch", "throw", "let", "const", "var",
+                       "await", "enum", "export", "import", "static", "yield",
+                       "true", "false", "null", "eval", "arguments"]
+
+
+@pytest.mark.parametrize("name", _JS_RESERVED_SAMPLE)
+def test_judgment_step_named_after_a_js_reserved_word_is_valid_js(name, tmp_path):
+    """The CLIO lexer accepts any [a-zA-Z_][a-zA-Z0-9_]* as a STEP name and knows
+    nothing of JS. `STEP delete` therefore reaches the emitter and used to produce
+    `async function delete(state, phaseName)` — a SyntaxError. The name must be
+    mangled into a legal identifier."""
+    js = render_judgment_step_js(_step(name=name), contracts={})
+
+    assert_valid_js(js, tmp_path)
+
+
+@pytest.mark.parametrize("name", _JS_RESERVED_SAMPLE)
+def test_exact_stub_named_after_a_js_reserved_word_is_valid_js(name, tmp_path):
+    js = render_exact_step_js(_step(name=name, mode="exact"), contracts={})
+
+    assert_valid_js(js, tmp_path)
+
+
+def test_a_reserved_step_name_is_reachable_from_real_clio_source(tmp_path):
+    """Hand-built IR could be accused of inventing an impossible step. It is not:
+    `STEP delete` parses, builds, and reaches the renderer."""
+    from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
+
+    graph = build_ir(parse(
+        "STEP delete\n"
+        "  TAKES: path: str\n"
+        "  GIVES: gone: bool\n"
+        "  MODE:  judgment\n"
+        "\n"
+        "FLOW purge\n"
+        "  TAKES: path: str\n"
+        "  delete(path=path)\n"
+    ))
+    step = next(s for s in graph.steps if s.name == "delete")
+
+    js = render_judgment_step_js(step, {c.name: c for c in graph.contracts})
+
+    assert "async function delete(" not in js, "reserved word emitted verbatim"
+    assert_valid_js(js, tmp_path)
+
+
+def test_js_identifier_leaves_ordinary_names_alone():
+    """Mangling is not a rename: an ordinary step keeps its name, so the emitted
+    function, the agent label and the prompt still read like the source."""
+    assert js_identifier("classify") == "classify"
+    assert js_identifier("parse_rows_2") == "parse_rows_2"
+
+
+def test_js_identifier_is_collision_free():
+    """The suffix is `$`, not `_`: the CLIO lexer cannot produce a `$` in an
+    identifier, so no mangled name can ever equal another step's name. A `_`
+    suffix — the Python convention in _to_field_name — would map `delete` and a
+    real step named `delete_` onto the same JS function, and one would silently
+    overwrite the other."""
+    assert js_identifier("delete") == "delete$"
+    assert js_identifier("delete") != js_identifier("delete_")
+    assert js_identifier("delete_") == "delete_"
+
+
+def test_a_step_named_undefined_does_not_shadow_the_null_guard(tmp_path):
+    """`function undefined(...)` is legal JS — node accepts it — which makes it
+    worse than a SyntaxError: the declaration hoists and shadows the global, so
+    the `result === undefined` guard compares against a function object and never
+    fires. Trap §6.1 (agent() returns null, it does not throw) would come back
+    silently. Mangle it too."""
+    js = render_judgment_step_js(_step(name="undefined"), contracts={})
+
+    assert "function undefined(" not in js
+    assert "result === undefined" in js, "the null guard must still be the guard"
     assert_valid_js(js, tmp_path)

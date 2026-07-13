@@ -42,6 +42,11 @@ E_WF_005 = (
     "E_WF_005: CONTRACT reference cycle — cannot inline a self-referential schema "
     "for target claude-workflow (the sandbox cannot resolve a $ref at run time)."
 )
+E_WF_006 = (
+    "E_WF_006: the source declares more than one FLOW and none was selected. "
+    "target: claude-workflow emits exactly one script, and compiling the first "
+    "declared FLOW would silently drop the others. Re-run with --flow <name>."
+)
 
 # ---------------------------------------------------------------------------
 # Compile-time degradation warnings (the feature still compiles, with less)
@@ -66,6 +71,50 @@ _WF_OK_LANGS: frozenset[str | None] = frozenset({"node", "auto", None})
 
 # Impls that need a process, a socket or a filesystem — none of which exist here.
 _IO_IMPLS = (ShellImplIR, RestImplIR, SqlImplIR, McpToolImplIR)
+
+# Names that cannot be a function name in the emitted script. The list is not
+# from memory: every entry below was checked with `node --check` on a module
+# declaring `async function <name>(state) {}` — module code is strict code, which
+# is why the strict-mode reserved words and `eval` / `arguments` belong here and
+# not in a "maybe" pile.
+_JS_RESERVED = frozenset({
+    # ECMAScript reserved words + the three reserved literals
+    "break", "case", "catch", "class", "const", "continue", "debugger",
+    "default", "delete", "do", "else", "enum", "export", "extends", "false",
+    "finally", "for", "function", "if", "import", "in", "instanceof", "new",
+    "null", "return", "super", "switch", "this", "throw", "true", "try",
+    "typeof", "var", "void", "while", "with",
+    # reserved in strict mode / module code (the emitted script is an ES module)
+    "await", "implements", "interface", "let", "package", "private",
+    "protected", "public", "static", "yield",
+    # strict mode refuses to *bind* these two, so they cannot name a function
+    "eval", "arguments",
+    # `function undefined(…)` is legal JS — which makes it worse than a
+    # SyntaxError: the declaration hoists and shadows the global, so the
+    # judgment wrapper's `result === undefined` guard would compare against a
+    # function object and never fire (§6.1: agent() returns null, it does not
+    # throw). Mangled for that reason, not for the parser's.
+    "undefined",
+})
+
+
+def js_identifier(name: str) -> str:
+    """A CLIO step/flow name rendered as a legal JS identifier.
+
+    Identity for names that already are one — an ordinary step keeps its name, so
+    the emitted function still reads like the source. Reserved words get a `$`
+    suffix.
+
+    `$` and not `_`: the CLIO lexer only accepts `[a-zA-Z_][a-zA-Z0-9_]*`
+    (lexer.py:126-142), so a `$` cannot occur in a source identifier — which makes
+    this mangling injective. `delete$` can never collide with a step the author
+    actually declared. The house convention for Python (`_to_field_name`,
+    _shared_utils.py:57) suffixes `_` because Python has no `$`; that mapping is
+    NOT collision-free — a step `delete` and a step `delete_` both land on
+    `delete_`, and in a single JS module the second function would silently
+    overwrite the first.
+    """
+    return f"{name}$" if name in _JS_RESERVED else name
 
 
 def js_string(s: str) -> str:
@@ -143,12 +192,28 @@ def schema_literal(
     return json.dumps(obj, indent=2, ensure_ascii=False)
 
 
+def entry_flow(graph: FlowGraph) -> FlowIR:
+    """The single FLOW this script compiles.
+
+    Deliberately never falls back to `graph.flows[0]`. The builder leaves
+    `graph.flow` at None when the source declares several FLOWs and `--flow`
+    selected none (builder.py:226-237); guessing the first one there would emit a
+    perfectly plausible script for a flow the author never asked for, and drop the
+    others without a word. LANGUAGE_SPEC:459-461 makes `--flow` *required* in that
+    case, so this raises: E_WF_001 when there is nothing to compile, E_WF_006 when
+    there is more than one candidate.
+    """
+    if graph.flow is not None:
+        return graph.flow
+    if not graph.flows:
+        raise ValueError(E_WF_001)
+    declared = ", ".join(f.name for f in graph.flows)
+    raise ValueError(f"{E_WF_006} (declared: {declared})")
+
+
 def workflow_name(graph: FlowGraph) -> str:
     """kebab-case name of the entry flow — used for meta.name and the filename."""
-    flow = graph.flow or (graph.flows[0] if graph.flows else None)
-    if flow is None:
-        raise ValueError(E_WF_001)
-    return flow.name.replace("_", "-")
+    return entry_flow(graph).name.replace("_", "-")
 
 
 def phase_titles(flow: FlowIR) -> list[str]:
@@ -160,7 +225,7 @@ def phase_titles(flow: FlowIR) -> list[str]:
 def render_meta(graph: FlowGraph) -> str:
     """The `export const meta` block. It MUST be a pure literal — no variables,
     no calls, no interpolation — or the Workflow runtime rejects the script."""
-    flow = graph.flow or graph.flows[0]
+    flow = entry_flow(graph)
     name = workflow_name(graph)
     desc = flow.description or f"CLIO flow {flow.name}"
     lines = [
@@ -194,8 +259,7 @@ def validate_graph_for_workflow(
     python target emits pytest files), and refusing them would reject a source
     over a block this target simply ignores.
     """
-    if len(graph.flows) == 0:
-        raise ValueError(E_WF_001)
+    entry_flow(graph)  # E_WF_001 (no FLOW) / E_WF_006 (several, none selected)
 
     for step in graph.steps:
         where = f"(step={step.name!r}, line {step.line})"
