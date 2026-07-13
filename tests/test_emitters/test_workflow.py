@@ -1,10 +1,13 @@
 """target: claude-workflow — emitter tests."""
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
+from clio.emitters._workflow_flow_renderer import _render_preamble
 from clio.emitters._workflow_helpers import (
     inline_schema,
     js_identifier,
@@ -812,7 +815,7 @@ def test_linear_chain_threads_state_and_declares_phases(tmp_path):
     src = _emit(_linear_graph(), tmp_path)
 
     assert "const state = {}" in src
-    assert "state['url'] = args['url']" in src
+    assert "state['url'] = $args['url']" in src
     assert "state['text'] = await fetch(state, 'fetch')" in src
     assert "state['summary'] = await summarize(state, 'summarize')" in src
     assert "phase('fetch')" in src and "phase('summarize')" in src
@@ -923,9 +926,78 @@ def test_a_missing_required_arg_fails_loudly(tmp_path):
     answer to a question nobody asked."""
     src = _emit(_linear_graph(), tmp_path)
 
-    assert "if (args['url'] === undefined)" in src
+    assert "if ($args['url'] === undefined)" in src
     assert "brief" in src and "url" in src
     assert "throw new Error" in src
+
+
+# ---------------------------------------------------------------------------
+# The runtime hands `args` over as a JSON STRING (found by dogfooding, §6)
+#
+# These four RUN the preamble under node instead of reading it. That is the whole
+# point: the version that indexed the raw `args` was syntactically valid, passed
+# `node --check`, and passed every text assertion above — and threw
+# `requires args['url']` on the first real invocation, before the flow ran a
+# single step. Only executing it tells the two apart.
+# ---------------------------------------------------------------------------
+
+
+def _run_preamble(flow: FlowIR, args_js: str, tmp_path: Path) -> subprocess.CompletedProcess:
+    """Execute the emitted preamble with `args` bound to `args_js`, and print the
+    state it built. The preamble is the unit under test: running the whole script
+    would spawn subagents and call stubs that throw by design."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not installed; skipping JS execution gate")
+    src = "\n".join([
+        f"const args = {args_js}",
+        *_render_preamble(flow),
+        "console.log(JSON.stringify(state))",
+    ]) + "\n"
+    f = tmp_path / "preamble.mjs"
+    f.write_text(src)
+    return subprocess.run([node, str(f)], capture_output=True, text=True)
+
+
+def test_args_delivered_as_a_json_string_binds_the_takes(tmp_path):
+    """The Workflow runtime delivers `args` as a JSON string, not as an object —
+    measured with a probe workflow (`typeof args` came back `'string'`). Indexing
+    the string gives `undefined` for every field, so a flow with a TAKES threw at
+    line 1 and never started. The preamble must parse it."""
+    proc = _run_preamble(_linear_graph().flow, '\'{"url": "https://x.dev"}\'', tmp_path)
+
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == {"url": "https://x.dev"}
+
+
+def test_args_delivered_as_an_object_still_binds_the_takes(tmp_path):
+    """The other shape stays supported: the fix tolerates both, it does not swap one
+    failure for the other. Nothing in the runtime's contract says the string form is
+    permanent."""
+    proc = _run_preamble(_linear_graph().flow, '{ url: "https://x.dev" }', tmp_path)
+
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == {"url": "https://x.dev"}
+
+
+def test_args_delivered_as_a_string_that_is_not_json_names_clio_and_the_flow(tmp_path):
+    """A guarded JSON.parse. An unguarded one throws a bare `SyntaxError: Unexpected
+    token`, which points at the sandbox and names neither the flow nor the fact that
+    the string came in as `args`."""
+    proc = _run_preamble(_linear_graph().flow, "'not json at all'", tmp_path)
+
+    assert proc.returncode != 0
+    assert "clio: flow 'brief'" in proc.stderr
+    assert "not valid JSON" in proc.stderr
+
+
+def test_a_missing_arg_still_fails_loudly_after_the_string_is_parsed(tmp_path):
+    """The guard that caught this bug — in 9 ms, without spawning an agent — must
+    still fire once the parse succeeds and the field is genuinely absent."""
+    proc = _run_preamble(_linear_graph().flow, "'{}'", tmp_path)
+
+    assert proc.returncode != 0
+    assert "clio: flow 'brief' requires args['url']" in proc.stderr
 
 
 def test_the_linear_fixture_compiles_end_to_end(tmp_path):
@@ -933,7 +1005,7 @@ def test_the_linear_fixture_compiles_end_to_end(tmp_path):
     is the real thing: `load(file=file) -> summarize(rows)`, two exact steps."""
     src = _emit_fixture("swift_minimal.clio", tmp_path)
 
-    assert "state['file'] = args['file']" in src
+    assert "state['file'] = $args['file']" in src
     assert "state['rows'] = await load(state, 'load')" in src
     assert "state['summary'] = await summarize(state, 'summarize')" in src
     assert "function load(state)" in src and "function summarize(state)" in src

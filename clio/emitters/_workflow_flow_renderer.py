@@ -49,6 +49,12 @@ from clio.ir.graph import (
 # seam so a node type this task does not render fails loudly rather than silently.
 ChainItem = object
 
+# The preamble's own bindings: the normalized `args` (see _render_preamble) and the
+# error it catches from JSON.parse. `$`-prefixed, so no step name can collide with
+# either — the same namespace trick as `flow_$x`.
+_ARGS = "$args"
+_ERR = "$err"
+
 
 def _render_call(
     call: CallIR, steps_by_name: dict[str, StepIR], phase_js: str, bindings: Bindings
@@ -253,6 +259,23 @@ def _render_preamble(flow: FlowIR) -> list[str]:
     script nothing, and a guard emitted anyway would throw on a legitimate run.
     `typeof args` rather than `args === undefined` because an undeclared global is
     a ReferenceError, not undefined — the guard must survive its own failure case.
+    That is also why the normalization below reads the global once, AFTER that
+    guard, and never before it.
+
+    The runtime delivers `args` as a JSON **string**, not as the object the shape
+    of the invocation suggests (measured with a probe workflow: `typeof args` came
+    back `'string'`). Indexing a string by a field name yields `undefined`, so a
+    preamble that read `args[key]` directly threw `requires args[…]` on every flow
+    that declared a TAKES — before the first step ran. Both shapes are accepted
+    here: nothing in the runtime's contract makes the string form permanent, and
+    tolerating the object costs one `typeof`.
+
+    `$args` and not `_args`: a step may legally be named `_args`, and it is emitted
+    as `async function _args(…)` in this same module scope — a duplicate
+    declaration, which is a SyntaxError. A `$` cannot occur in a CLIO identifier
+    (lexer.py:126-142) and js_identifier only ever *appends* one, so a leading `$`
+    is a namespace no step name can reach — the same reasoning as `flow_$x`
+    (_workflow_subflows.subflow_fn_name).
     """
     lines = ["const state = {}"]
     if not flow.takes:
@@ -260,8 +283,29 @@ def _render_preamble(flow: FlowIR) -> list[str]:
 
     declared = ", ".join(f.name for f in flow.takes)
     missing_all = js_string(f"clio: flow '{flow.name}' requires args: {declared}")
+    bad_json = js_string(
+        f"clio: flow '{flow.name}' received args as a string that is not valid JSON: "
+    )
     lines += [
         "if (typeof args === 'undefined' || args === null) {",
+        f"  throw new Error({missing_all})",
+        "}",
+        f"let {_ARGS} = args",
+        # The runtime hands the script a JSON string; a host that hands it an object
+        # falls straight through. The parse is guarded: unguarded, a non-JSON string
+        # raises a bare `SyntaxError: Unexpected token`, which names neither the flow
+        # nor `args` and reads like a bug in the sandbox.
+        f"if (typeof {_ARGS} === 'string') {{",
+        "  try {",
+        f"    {_ARGS} = JSON.parse({_ARGS})",
+        f"  }} catch ({_ERR}) {{",
+        f"    throw new Error({bad_json} + {_ERR}.message)",
+        "  }",
+        "}",
+        # After the parse, `args` may be any JSON value: 'null' parses to null and
+        # '3' to a number. Indexing null throws a TypeError from inside the guard
+        # that exists to prevent exactly that.
+        f"if ({_ARGS} === null || typeof {_ARGS} !== 'object') {{",
         f"  throw new Error({missing_all})",
         "}",
     ]
@@ -269,10 +313,10 @@ def _render_preamble(flow: FlowIR) -> list[str]:
         key = js_string(field.name)
         missing = js_string(f"clio: flow '{flow.name}' requires args[{field.name!r}]")
         lines += [
-            f"if (args[{key}] === undefined) {{",
+            f"if ({_ARGS}[{key}] === undefined) {{",
             f"  throw new Error({missing})",
             "}",
-            f"state[{key}] = args[{key}]",
+            f"state[{key}] = {_ARGS}[{key}]",
         ]
     return lines
 
