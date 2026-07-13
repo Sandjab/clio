@@ -25,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from clio.emitters._workflow_helpers import js_identifier, js_string
-from clio.ir.graph import BoolOpIR, ConditionIR
+from clio.ir.graph import BoolOpIR, CallIR, ConditionIR, StepIR
 
 # CLIO name -> the JS expression that shadows it at the point being rendered.
 # Empty at the top level of a flow: there, every name is a state key.
@@ -169,3 +169,31 @@ def loop_binding(loop_var: str, bindings: Bindings) -> dict[str, str]:
     `FOR EACH class IN rows` parses, and `for (const class of …)` is a SyntaxError.
     """
     return {**bindings, loop_var: js_identifier(loop_var)}
+
+
+def call_js(
+    call: CallIR, steps_by_name: dict[str, StepIR], phase: str, bindings: Bindings
+) -> str:
+    """`await <step>(<input>, '<phase>')` — the call expression, unbound.
+
+    `await` even on an exact step, whose stub is a plain `function`: awaiting a
+    non-promise yields the value, and the day an author makes a stub async the call
+    site is already right.
+
+    The phase travels as an ARGUMENT — the step wrapper hands it to agent({phase})
+    — and never as a `phase()` call from inside a block: that global is racy under
+    parallel() / pipeline(), where the last writer wins (§4.3).
+    """
+    step = steps_by_name[call.step_name]
+    return (
+        f"await {js_identifier(step.name)}"
+        f"({step_input(call.kwargs, bindings)}, {js_string(phase)})"
+    )
+
+
+def gives_of(call: CallIR, steps_by_name: dict[str, StepIR]) -> str | None:
+    """The state-field name a call produces. A step's NAME and its GIVES FIELD
+    differ — `review` GIVES `verdict`, and a downstream kwarg reads `@verdict` —
+    and it is the field name that every reader keys on."""
+    step = steps_by_name[call.step_name]
+    return step.gives.name if step.gives is not None else None
