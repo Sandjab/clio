@@ -4,10 +4,13 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from clio import __version__
+from clio.emitters._sidecar import write_sidecar
 from clio.emitters._workflow_flow_renderer import render_flow_js, render_subflow_js
 from clio.emitters._workflow_helpers import (
     entry_flow,
     render_meta,
+    render_readme,
     validate_graph_for_workflow,
     workflow_name,
 )
@@ -99,6 +102,23 @@ def _collect_reachable_steps(
     return ordered
 
 
+def emitted_steps(graph: FlowGraph) -> tuple[StepIR, ...]:
+    """The steps whose functions this script declares — nothing more, nothing less.
+
+    Exposed because the README names the exact stubs the author has to fill in, and
+    `graph.steps` is the wrong list to name them from: compiling
+    workflow_two_flows.clio with `--flow alpha` emits `load` and not `summarize`
+    (alpha never calls it), so a README built from every DECLARED step would send the
+    author looking for a function that is not in the file.
+
+    render_script renders exactly this list, so the two cannot drift.
+    """
+    flow = entry_flow(graph)
+    sub_flows = reachable_flows(flow, {f.name: f for f in graph.flows})
+    steps_by_name = {s.name: s for s in graph.steps}
+    return tuple(_collect_reachable_steps((flow, *sub_flows), steps_by_name))
+
+
 def render_script(graph: FlowGraph) -> str:
     """The whole script: header, meta, step functions, sub-flow functions, flow body.
 
@@ -118,7 +138,7 @@ def render_script(graph: FlowGraph) -> str:
     sub_flows = reachable_flows(flow, {f.name: f for f in graph.flows})
 
     parts = [_HEADER.format(flow=flow.name), render_meta(graph) + "\n"]
-    for step in _collect_reachable_steps((flow, *sub_flows), steps_by_name):
+    for step in emitted_steps(graph):
         parts.append(
             render_exact_step_js(step, contracts)
             if step.mode == "exact"
@@ -144,3 +164,16 @@ class WorkflowEmitter(BaseEmitter):
         output_dir.mkdir(parents=True, exist_ok=True)
         name = workflow_name(graph)
         (output_dir / f"{name}.workflow.js").write_text(render_script(graph))
+        (output_dir / "README.md").write_text(render_readme(graph, emitted_steps(graph)))
+
+        # Written LAST: the manifest hashes the files above, so it has to see them
+        # all. `source_path` is None when the emitter is driven in-process (tests,
+        # scripts) — there is no source file to copy, and a sidecar claiming to hold
+        # one would be a lie `clio import --mode strict` would later trust.
+        #
+        # Not wrapped in a try/except, unlike claude_skill.py:132-140 which swallows
+        # the failure and warns. A half-emitted output that LOOKS complete is worse
+        # here: the README above tells the author `clio import` recovers their
+        # source, and a silently absent sidecar makes that sentence false.
+        if source_path is not None:
+            write_sidecar(source_path, output_dir, clio_version=__version__, sources=sources)

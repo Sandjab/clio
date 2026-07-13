@@ -1732,3 +1732,242 @@ def test_no_emitted_script_calls_a_forbidden_global(fixture, flow, tmp_path):
     for forbidden in ("Date.now(", "new Date(", "Math.random(", "setTimeout("):
         assert forbidden not in code, f"{fixture} emits {forbidden} — it throws in the sandbox"
     assert_valid_js(code, tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Task 11 — .clio/ sidecar + install README
+# ---------------------------------------------------------------------------
+
+
+def _compile_fixture(name: str, tmp_path: Path, flow: str | None = None) -> Path:
+    """Compile a fixture and return the OUTPUT DIRECTORY.
+
+    `_emit_fixture` returns the script text, which is what a test about the *code*
+    wants. The sidecar and the README are files beside the script, so a test about
+    them needs the directory. Both go through `cli.main`, not the emitter directly:
+    `source_path` / `sources` are threaded by the CLI (cli.py:160-165), and an
+    emitter called in-process never sees them — which is exactly the bug this
+    section has to be able to catch.
+    """
+    from clio.cli import main
+
+    out = tmp_path / "out"
+    argv = ["compile", f"tests/fixtures/{name}",
+            "--target", "claude-workflow", "--output", str(out)]
+    if flow is not None:
+        argv += ["--flow", flow]
+    rc = main(argv)
+    assert rc == 0, f"{name} failed to compile"
+    return out
+
+
+def test_emits_sidecar_and_readme(tmp_path):
+    """The sidecar is what makes `clio import` round-trip. Layout is dictated by
+    _sidecar.py:write_sidecar — `.clio/source.clio`, NOT `.clio/source/<name>.clio`.
+
+    Byte-identical, not text-identical: `clio import` recovers the source verbatim,
+    and the manifest hashes the bytes. A README-shaped test would pass on a
+    re-serialized source that lost its trailing newline; `clio import --mode strict`
+    would then report drift on a file nobody touched.
+    """
+    out = _compile_fixture("swift_judgment.clio", tmp_path)
+
+    original = Path("tests/fixtures/swift_judgment.clio").read_bytes()
+    assert (out / ".clio" / "source.clio").read_bytes() == original
+    assert (out / ".clio" / "manifest.json").exists()
+
+    readme = (out / "README.md").read_text()
+    assert ".claude/workflows/" in readme      # how to install it
+    assert "no API key" in readme              # the point of a host-orchestrated target
+
+
+def test_sidecar_manifest_hashes_the_emitted_files(tmp_path):
+    """`file_hashes` is what `clio import` compares against to detect drift, so it
+    has to cover the files this target actually writes. An empty (or script-less)
+    map would make every hand-edit invisible and `--mode strict` a rubber stamp."""
+    out = _compile_fixture("swift_judgment.clio", tmp_path)
+
+    manifest = json.loads((out / ".clio" / "manifest.json").read_text())
+    assert set(manifest["file_hashes"]) == {"classifier.workflow.js", "README.md"}
+    assert manifest["clio_version"]
+    assert manifest["source_hash"].startswith("sha256:")
+
+
+def test_sidecar_round_trips_through_clio_import(tmp_path):
+    """The reason the sidecar exists, asserted end to end rather than by proxy:
+    `clio import --mode strict` on a freshly emitted workflow gives the source back,
+    byte for byte. It refuses on any hash drift, so this also proves the manifest
+    describes the emitted tree and not some other one."""
+    from clio.cli import main
+
+    out = _compile_fixture("swift_judgment.clio", tmp_path)
+    recovered = tmp_path / "recovered.clio"
+
+    rc = main(["import", str(out), "--mode", "strict", "--output", str(recovered)])
+
+    assert rc == 0
+    assert recovered.read_bytes() == Path("tests/fixtures/swift_judgment.clio").read_bytes()
+
+
+def test_multi_file_source_is_stored_whole_in_the_sidecar(tmp_path):
+    """A FROM…IMPORT project only round-trips if EVERY source is stored, not just
+    the entry: recovering `main.clio` alone would give back a file whose import
+    points at a `lib.clio` that is not there. cli.py hands this target
+    `sources=tuple(parsed)` (the same argument it hands claude-skill) — this is the
+    test that the emitter forwards it instead of dropping it on the floor.
+
+    `--flow` is required: two files, two EXPOSE FLOWs, and this target refuses to
+    guess which one to compile (E_WF_006).
+    """
+    from clio.cli import main
+
+    (tmp_path / "lib.clio").write_text(
+        "EXPOSE CONTRACT Article\n"
+        "  SHAPE: {title: str, body: str}\n"
+        "\n"
+        "STEP score\n"
+        "  MODE: judgment\n"
+        "  TAKES: article: Article\n"
+        "  GIVES: label: str\n"
+        "\n"
+        "EXPOSE FLOW classify\n"
+        "  TAKES: article: Article\n"
+        "  GIVES: label: str\n"
+        "  score(article=article)\n"
+    )
+    (tmp_path / "main.clio").write_text(
+        'FROM "./lib.clio" IMPORT Article, classify\n'
+        "\n"
+        "EXPOSE FLOW pipeline\n"
+        "  TAKES: article: Article\n"
+        "  GIVES: label: str\n"
+        "  classify(article=article)\n"
+    )
+    out = tmp_path / "out"
+
+    rc = main(["compile", str(tmp_path / "main.clio"), "--target", "claude-workflow",
+               "--flow", "pipeline", "--output", str(out)])
+    assert rc == 0
+
+    manifest = json.loads((out / ".clio" / "manifest.json").read_text())
+    assert manifest["entry"] == "main.clio"
+    assert set(manifest["sources"]) == {"main.clio", "lib.clio"}
+    assert (out / ".clio" / "sources" / "lib.clio").read_bytes() == (
+        tmp_path / "lib.clio"
+    ).read_bytes()
+
+
+def test_no_sidecar_when_there_is_no_source_path(tmp_path):
+    """An emitter called in-process (tests, scripts) has no `.clio` file to copy.
+    It must still emit the script — not crash, and not write a sidecar claiming to
+    hold a source it never saw."""
+    flow = FlowIR(name="triage", chain=(), rescues=(), line=1)
+    graph = FlowGraph(steps=(), flow=flow, flows=(flow,))
+
+    WorkflowEmitter().emit(graph, tmp_path)
+
+    assert (tmp_path / "triage.workflow.js").exists()
+    assert not (tmp_path / ".clio").exists()
+
+
+@pytest.mark.parametrize("fixture,flow", _ALL_FIXTURES)
+def test_every_compiled_flow_gets_an_install_readme(fixture, flow, tmp_path):
+    """The README is the only place the install step is written down: the emitter
+    never writes into `.claude/workflows/` itself (§3), so a flow shipped without it
+    is a script the author has no instructions for."""
+    out = _compile_fixture(fixture, tmp_path, flow=flow)
+
+    readme = (out / "README.md").read_text()
+    script = next(iter(out.glob("*.workflow.js")))
+    assert script.name in readme, "the README must name the script it tells you to copy"
+    assert ".claude/workflows/" in readme
+
+
+def test_readme_states_that_exact_stubs_must_stay_pure(tmp_path):
+    """swift_minimal is exact-only. Its stubs THROW until the author fills them in,
+    and what they fill in has to be pure — the sandbox has no filesystem, no
+    network, no process and no clock. The stub says so in a comment; the README is
+    where the author looks BEFORE opening the script."""
+    out = _compile_fixture("swift_minimal.clio", tmp_path)
+
+    readme = (out / "README.md").read_text()
+    assert "pure" in readme.lower()
+    assert "no filesystem, no network, no process and no clock" in readme
+    # The exact steps are named, so the author knows what is left to implement.
+    assert "`load`" in readme and "`summarize`" in readme
+
+
+def test_readme_warns_that_this_flows_cache_is_ignored(tmp_path):
+    """swift_judgment_cache declares `CACHE: ttl(24h)`. The compiler prints W_WF_001
+    at compile time — a line the author will not see again once the script is on
+    disk. The README is the durable copy, and it must carry the code so the two are
+    greppably the same fact."""
+    out = _compile_fixture("swift_judgment_cache.clio", tmp_path)
+
+    readme = (out / "README.md").read_text()
+    assert "W_WF_001" in readme
+    assert "W_WF_002" not in readme, "this flow declares no ON_FAIL retry"
+    assert "W_WF_003" not in readme, "this flow declares no CONTRACT ASSERT"
+
+
+def test_readme_warns_that_this_flows_retries_have_no_backoff(tmp_path):
+    """swift_judgment_onfail declares `retry(2)`. Retries run back-to-back here: the
+    sandbox has no clock. An author who reads 'retry' and assumes exponential
+    backoff will hammer a flaky dependency — hence W_WF_002, in writing."""
+    out = _compile_fixture("swift_judgment_onfail.clio", tmp_path)
+
+    readme = (out / "README.md").read_text()
+    assert "W_WF_002" in readme
+    assert "W_WF_001" not in readme, "this flow declares no CACHE"
+
+
+def test_readme_warns_that_this_flows_asserts_are_not_enforced(tmp_path):
+    """swift_judgment's CONTRACT carries `ASSERT: confidence >= 0.0`. The host
+    enforces the JSON Schema; nothing enforces the ASSERT predicate. This is the
+    degradation with teeth — an author who believes the ASSERT holds will not
+    re-check the value downstream — so silence here would be the dishonest kind."""
+    out = _compile_fixture("swift_judgment.clio", tmp_path)
+
+    readme = (out / "README.md").read_text()
+    assert "W_WF_003" in readme
+    assert "W_WF_001" not in readme, "this flow declares no CACHE"
+
+
+def test_readme_of_an_undegraded_flow_claims_no_degradation(tmp_path):
+    """The negative control, and the whole point of deriving the section from the
+    graph: swift_minimal has no CACHE, no ON_FAIL and no ASSERT. A README that
+    listed all three warnings unconditionally would be a generic disclaimer — it
+    would tell this author their cache is ignored when they never wrote one, and
+    the section would stop being read on the flow where it matters."""
+    out = _compile_fixture("swift_minimal.clio", tmp_path)
+
+    readme = (out / "README.md").read_text()
+    assert "W_WF_001" not in readme
+    assert "W_WF_002" not in readme
+    assert "W_WF_003" not in readme
+
+
+@pytest.mark.parametrize("fixture,flow", _ALL_FIXTURES)
+def test_readme_never_warns_about_a_degradation_the_compiler_did_not(fixture, flow, tmp_path, capsys):
+    """README ≡ stderr, swept across every fixture.
+
+    These are the same three predicates evaluated twice — once by
+    validate_graph_for_workflow into `warn`, once by render_readme into prose — and
+    nothing but this test keeps them in step. Drift either way is a lie the author
+    cannot detect: a README that stays silent about a warning they saw scroll past
+    reads as 'it got fixed', and one that invents a warning the compiler never
+    raised sends them hunting for a CACHE they never wrote.
+    """
+    out = _compile_fixture(fixture, tmp_path, flow=flow)
+
+    # ONE readouterr(): it DRAINS the captured buffer, so calling it per code (say,
+    # inside the comprehension below) would hand the first code the whole stderr and
+    # every later one an empty string — a sweep that can only ever see W_WF_001.
+    stderr = capsys.readouterr().err
+    readme = (out / "README.md").read_text()
+
+    codes = ("W_WF_001", "W_WF_002", "W_WF_003")
+    warned = {code for code in codes if code in stderr}
+    documented = {code for code in codes if code in readme}
+
+    assert documented == warned

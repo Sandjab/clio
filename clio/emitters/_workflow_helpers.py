@@ -22,6 +22,7 @@ from clio.ir.graph import (
     RestImplIR,
     ShellImplIR,
     SqlImplIR,
+    StepIR,
     WhileBlockIR,
 )
 from clio.parser.ast_nodes import TypeExpr
@@ -303,6 +304,166 @@ def render_meta(graph: FlowGraph) -> str:
     lines.append("  ],")
     lines.append("}")
     return "\n".join(lines)
+
+
+def _backticked(names: list[str]) -> str:
+    return ", ".join(f"`{n}`" for n in names)
+
+
+def _degradations(graph: FlowGraph) -> list[str]:
+    """The W_WF_NNN degradations THIS graph actually triggers, as README bullets.
+
+    The same three predicates as validate_graph_for_workflow's `warn` calls, over
+    the same nodes — deliberately, and the two are swept for agreement by
+    test_readme_never_warns_about_a_degradation_the_compiler_did_not.
+
+    Neither a canned list nor no list. Printing all three unconditionally would tell
+    an author who declared no CACHE that their cache is ignored, and the section
+    would stop being read on the flow where it matters; printing none would leave
+    the compile-time warnings — which scroll past once and are gone — as the only
+    record that this target does not honor what the source declares.
+
+    Over-reporting is the safe direction, and the reason this reads `graph.steps`
+    (every declared step) rather than the steps the script emits: on a multi-FLOW
+    source a cached step in an UNSELECTED flow still earns a W_WF_001 on stderr, and
+    a README that stayed silent about a warning the author watched scroll past would
+    read as 'it got fixed'. The stub list below is the one that tracks the emitted
+    script, because that one answers a different question: what do I have to fill in.
+    """
+    cached = [
+        s.name for s in graph.steps if s.cache is not None and s.cache.mode != "off"
+    ]
+    retried = [
+        s.name
+        for s in graph.steps
+        if s.on_fail is not None
+        and any(st.kind == "retry" for st in s.on_fail.strategies)
+    ]
+    asserted = [c.name for c in graph.contracts if c.assert_json_ast is not None]
+
+    bullets: list[str] = []
+    if cached:
+        bullets.append(
+            f"- **`CACHE:` is ignored** (`W_WF_001`) — declared by "
+            f"{_backticked(cached)}. The sandbox has no filesystem and no clock, so "
+            "every run recomputes. A cache miss is slower, never wrong: this one "
+            "costs you tokens and latency, not correctness."
+        )
+    if retried:
+        bullets.append(
+            f"- **`ON_FAIL` retries run without backoff** (`W_WF_002`) — declared by "
+            f"{_backticked(retried)}. The sandbox has no clock, so the attempts run "
+            "back-to-back. If you are retrying against something rate-limited, it "
+            "will not wait between attempts."
+        )
+    if asserted:
+        bullets.append(
+            f"- **`CONTRACT … ASSERT` is not enforced** (`W_WF_003`) — declared by "
+            f"{_backticked(asserted)}. The host DOES validate a judgment step's "
+            "output against the JSON Schema (types, ranges, enums); it does not "
+            "evaluate the ASSERT predicate. Re-check it downstream if you depend "
+            "on it holding."
+        )
+    return bullets
+
+
+_SANDBOX = (
+    "the workflow sandbox has no filesystem, no network, no process and no clock "
+    "— `Date.now()`, `new Date()` and `Math.random()` throw if you call them"
+)
+
+
+def render_readme(graph: FlowGraph, steps: tuple[StepIR, ...]) -> str:
+    """README.md — how to install the script, what stays your job, what this target
+    does not honor.
+
+    `steps` is what the script actually declares (workflow.emitted_steps), not
+    `graph.steps`: it is read here only to name the exact stubs the author has to
+    fill in, and naming one that is not in the file would be a wild goose chase.
+
+    The purity rule is stated in BOTH branches below rather than once, after them:
+    an exact-step-free flow that reads "there is nothing to fill in" followed by
+    "what you write must be pure" is telling the author about a `there` that does
+    not exist, and prose nobody can place is prose nobody reads.
+    """
+    flow = entry_flow(graph)
+    name = workflow_name(graph)
+    script = f"{name}.workflow.js"
+    exact = [s.name for s in steps if s.mode == "exact"]
+
+    if exact:
+        plural = "step" if len(exact) == 1 else "steps"
+        stubs = (
+            f"This flow has {len(exact)} exact {plural}: {_backticked(exact)}. The "
+            "compiler emitted the signature, the state keys to read and the field to "
+            "return — never the body. **Each stub throws until you fill it in**, and "
+            f"what you fill in must be **pure JavaScript**: {_SANDBOX}.\n"
+            "\n"
+            "A step that needs IO cannot run here at all. Compile that flow with "
+            "`--target python`, `go` or `swift` instead."
+        )
+    else:
+        stubs = (
+            "Nothing. This flow declares no exact step — every step is a judgment "
+            "step, run by a subagent — so the script runs as emitted.\n"
+            "\n"
+            f"Add an exact step later and its body must be **pure JavaScript**: "
+            f"{_SANDBOX}. A step that needs IO cannot run here at all."
+        )
+
+    degraded = _degradations(graph)
+    caveats = "\n".join(degraded) if degraded else (
+        "Nothing, for this flow. It declares no `CACHE:`, no `ON_FAIL` retry and no "
+        "CONTRACT `ASSERT` — the three things this target degrades. Had it declared "
+        "one, it would be listed here, under the same `W_WF_NNN` code the compiler "
+        "prints when it compiles the source."
+    )
+
+    return f"""\
+# {flow.name} — claude-workflow
+
+Compiled by CLIO from a `.clio` source. The script is **`{script}`**: it runs this
+flow inside a Claude Code session, spawning a subagent for each judgment step.
+
+## Install
+
+```bash
+mkdir -p .claude/workflows
+cp {script} .claude/workflows/
+```
+
+Then invoke it from a Claude Code session — it registers under the name `{name}`,
+declared in the script's own `meta` block. CLIO only ever writes inside its
+`--output` directory, so this copy is yours to make.
+
+## Run
+
+Nothing to install, nothing to configure: **no API key**, no runtime, no dependency.
+The Claude Code session IS the runtime — it reads `meta`, runs the script, and
+spawns the subagents. (Same bargain as the `claude-skill` target: the host executes,
+CLIO only emits.)
+
+## What is still your job
+
+{stubs}
+
+## What this target does not honor
+
+{caveats}
+
+## Recovering the source
+
+`.clio/` holds the source this was compiled from, plus a hash manifest of the files
+above. To get the source back, verbatim:
+
+```bash
+clio import . --mode strict --output recovered.clio
+```
+
+Strict mode refuses on drift — including the drift you create yourself, the moment
+you fill a stub in. Drop the flag to recover from a directory you have already
+edited.
+"""
 
 
 def _noop_warn(_msg: str) -> None:
