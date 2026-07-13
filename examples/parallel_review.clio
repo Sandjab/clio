@@ -13,23 +13,37 @@
 #   claude-cli / langgraph     rejected at compile time
 #   python / go / swift / mcp-server   supported
 #
-# `list_changed_files` is an exact step with no `impl:` — under claude-workflow
+# Each fan-out is ONE call per item: a PARALLEL body of several calls is refused
+# by the compiler (`FOR EACH PARALLEL body must contain exactly one step or
+# sub-flow call in v1`), which is why reviewing and triaging are two FOR EACHes
+# rather than a two-call body.
+#
+# `split_diff_by_file` is an exact step with no `impl:` — under claude-workflow
 # it is emitted as a pure-JS stub that throws until you fill it in (the workflow
 # sandbox has no process, no network and no filesystem, so an `impl: shell`
-# here would be refused with E_WF_003).
+# here would be refused with E_WF_003). Its job is a pure transform: cut the
+# unified diff at each `diff --git` boundary. It hands the reviewer the file's
+# HUNKS, not its path — a reviewer given only `src/auth.py` has nothing to read
+# and would go looking for the file on disk, which is not where the flow's input
+# lives.
 
 CONTRACT review_note
   SHAPE:  {file: str(max=200), severity: enum(blocker|major|minor|nit), finding: str(max=400)}
 
-STEP list_changed_files
-  TAKES: diff:  str
-  GIVES: files: List<str>
+STEP split_diff_by_file
+  TAKES: diff:       str
+  GIVES: file_diffs: List<str>
   MODE:  exact
 
 STEP review_file
-  TAKES: file:  str
-  GIVES: draft: str
+  TAKES: file_diff: str
+  GIVES: draft:     str
   MODE:  judgment
+  DESCRIPTION: |
+    Review the single file whose unified diff is given. Everything needed is in
+    the input: the `diff --git` header names the file, and the hunks are the
+    change. Review what the diff says — do not read the repository, the file may
+    not exist on this disk. Name the file in the draft.
 
 STEP triage_finding
   TAKES: draft: str
@@ -43,9 +57,9 @@ STEP summarize_review
 
 FLOW parallel_review
   TAKES: diff: str
-  list_changed_files(diff=diff)
-    -> FOR EACH f IN files PARALLEL AS drafts:
-         review_file(file=f)
+  split_diff_by_file(diff=diff)
+    -> FOR EACH fd IN file_diffs PARALLEL AS drafts:
+         review_file(file_diff=fd)
     -> FOR EACH d IN drafts PARALLEL AS notes:
          triage_finding(draft=d)
     -> summarize_review(notes=notes)

@@ -5,7 +5,7 @@ branches, the preamble. The other two thirds of the job live next door, and the
 split is by responsibility rather than by size:
 
   * _workflow_expressions — how a node READS a value (a state key, a loop
-    variable, a pipeline stage's `prev`). Expressions never render a statement,
+    variable). Expressions never render a statement,
     so the dependency is one-way.
   * _workflow_loops — FOR EACH, sequential and parallel. It renders its own body,
     which may contain anything, so it takes `_render_body` as a parameter rather

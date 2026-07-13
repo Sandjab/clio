@@ -98,8 +98,8 @@ def render_on_fail_wrapper(step: StepIR) -> str:
 
     The chain wraps the STEP, not the call site, because that is what the language
     declares: `ON_FAIL` is a STEP block field, so it must hold at *every* call site.
-    A call-site wrapper would be silently dropped inside a `parallel()` /
-    `pipeline()` body — that path builds a thunk EXPRESSION out of `call_js`
+    A call-site wrapper would be silently dropped inside a `parallel()` body —
+    that path builds a thunk EXPRESSION out of `call_js`
     (_workflow_loops) and never walks the statement dispatcher. python, go and
     swift all put the chain inside the step for the same reason.
 

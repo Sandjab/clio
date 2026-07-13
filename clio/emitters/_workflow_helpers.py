@@ -279,7 +279,7 @@ def phase_titles(flow: FlowIR) -> list[str]:
 
     §4.3, and the reason it is a rule rather than a preference: `phase()` is
     *global* state in the Workflow runtime, so calling it from inside a
-    parallel()/pipeline() stage is racy — the last writer wins and the UI reports
+    parallel() body is racy — the last writer wins and the UI reports
     a phase no one is in. Agents spawned inside a block therefore carry the
     block's phase through `agent({phase})`, and only the top level moves the
     global. `meta.phases` lists exactly these titles, in order (the runtime

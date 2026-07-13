@@ -574,6 +574,8 @@ Then run the workflow from Claude Code. The emitter never writes outside `<outpu
 
 `agent()` returns **null** on terminal failure rather than throwing, so every emitted step wrapper converts that null into a thrown error — otherwise `ON_FAIL` and `RESCUE` would be dead code.
 
+`parallel()` is the **only** fan-out primitive emitted. The Workflow host also offers `pipeline()` (one item threaded through several stages), but the language has no source that reaches it: a `FOR EACH … PARALLEL` body is always **exactly one** step or sub-flow call — [`LANGUAGE_SPEC.md`](LANGUAGE_SPEC.md#parallel-for-each-bodies), enforced by the IR builder for every target. A flow that wants several steps per item writes several `FOR EACH … PARALLEL` blocks, as [`examples/parallel_review.clio`](../examples/parallel_review.clio) does (review, then triage).
+
 Inside a fan-out, a thunk that throws resolves to `null` in the array `parallel()` returns — the same value a step whose `GIVES` is `Optional<T>` produces when it legitimately returns `null`. The two are told apart by the emitted `$$settle` wrapper, which makes each item report its outcome (`{ok, value}` / `{ok, error}`) instead of having it inferred from its value. `$$collect` then **fails the flow** on any failed item, naming it and its cause — the semantics `python` / `go` / `swift` already have, the step's `ON_FAIL` chain having already run inside its own function — and maps the successes back **in order**, so `state['c'][i]` stays the result of `items[i]` and a legitimate `null` survives.
 
 ### Refused at compile time

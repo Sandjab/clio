@@ -3,7 +3,13 @@
 This is the module that justifies the target. `FOR EACH … PARALLEL` is degraded to
 sequential by claude-skill (with a warning) and refused outright by claude-cli;
 here it becomes real concurrency, because the Workflow host gives us `parallel()`
-and `pipeline()` over live subagents.
+over live subagents.
+
+`parallel()` is the only fan-out primitive emitted. The host also offers
+`pipeline()` — one item threaded through several stages — but the language has no
+source that reaches it: the IR builder refuses a PARALLEL body of more than one
+call for every .clio file there is (builder.py:2043). Rendering it anyway would be
+a branch no user can run.
 
 It renders a STATEMENT, so it needs to render its own body — and the body may
 contain anything, including another FOR EACH. Rather than import the dispatcher
@@ -18,7 +24,6 @@ from clio.emitters._workflow_expressions import (
     Bindings,
     call_js,
     flow_input,
-    gives_of,
     loop_binding,
     read,
 )
@@ -40,13 +45,10 @@ RenderBody = Callable[
     [tuple[object, ...], dict[str, StepIR], str, str, Bindings], list[str]
 ]
 
-# The predecessor's result inside a pipeline() stage. `$$` and not `prev`, for the
-# reason loop_var_js exists: a step may legally be named `prev`, and a bare `prev`
-# parameter would shadow its function — `(prev, doc) => prev(…)` calls a string.
-# `$$` is out of reach of BOTH manglings: js_identifier only appends a `$`, and a
-# loop variable is `$` + a CLIO name, whose first character is never a `$`.
-_PREV = "$$prev"
-
+# `$$`, and not a bare name: these two are out of reach of BOTH manglings —
+# js_identifier only ever appends a `$` to a step's name, and a loop variable is `$`
+# + a CLIO name, whose first character is never a `$`. So neither can be shadowed by
+# a step or a loop variable the author happens to name after them.
 _SETTLE = "$$settle"
 _COLLECT = "$$collect"
 
@@ -56,10 +58,10 @@ _COLLECT = "$$collect"
 # A plain string, not an f-string: every `${…}` below is a JS template-literal
 # interpolation, and the names are already spelled the way they are emitted.
 PARALLEL_RUNTIME = """\
-// A thunk that throws resolves to `null` in the result array of parallel() /
-// pipeline() — the call itself never rejects (§6.1). But a SUCCESSFUL item can be
-// `null` too: a step whose GIVES is `Optional<T>` returns one, and the host
-// validates it against the schema. In the raw array the two are the same value.
+// A thunk that throws resolves to `null` in the result array of parallel() — the
+// call itself never rejects (§6.1). But a SUCCESSFUL item can be `null` too: a step
+// whose GIVES is `Optional<T>` returns one, and the host validates it against the
+// schema. In the raw array the two are the same value.
 //
 // So each thunk reports its own outcome rather than having it guessed at
 // afterwards. $$collect then applies the rule every other target has — a step that
@@ -134,26 +136,24 @@ def _render_parallel(
 ) -> list[str]:
     """The payoff: real fan-out, collected into `state[<collector>]`.
 
-    One call in the body -> `parallel(items.map(x => () => step(x)))`. The inner
-    arrow is load-bearing: parallel() takes THUNKS, and `.map(x => step(x))` would
-    start every call during the map and hand it promises already in flight —
-    bypassing the very concurrency limit it exists to enforce.
+    `parallel(items.map(x => () => step(x)))`. The inner arrow is load-bearing:
+    parallel() takes THUNKS, and `.map(x => step(x))` would start every call during
+    the map and hand it promises already in flight — bypassing the very concurrency
+    limit it exists to enforce.
 
-    N calls -> `pipeline(items, stage1, …, stageN)`, NOT parallel(). A multi-call
-    body is a per-item stage chain, and pipeline() runs each item through all the
-    stages with no barrier between them; parallel() would impose one, idling fast
-    items behind the slowest of each stage. The Workflow tool's own guidance is
-    "DEFAULT TO pipeline()", and the two are equivalent for a single stage anyway.
+    ONE call per item, because the language states nothing else: the IR builder
+    refuses a PARALLEL body of more than one call for every source there is
+    (builder.py:2043). The two checks below are that invariant asserted where it is
+    relied on — not a user-facing path. A source that trips them does not exist; only
+    hand-built IR can, and it must not be rendered into some concurrency the author
+    never asked for.
 
     The body renders no nested statement, so this branch needs no `render_body`:
     the IR builder allows only calls here (builder.py:2043-2079).
 
-    Every call is wrapped in `$$settle` and the result array goes through
-    `$$collect`, which is what keeps a failed item apart from an item that
-    legitimately gave `null` — see PARALLEL_RUNTIME. In a pipeline, a stage whose
-    predecessor failed passes the failure straight through instead of running: its
-    step would otherwise be handed the failure envelope as its input and would
-    happily send it to an agent.
+    The call is wrapped in `$$settle` and the result array goes through `$$collect`,
+    which is what keeps a failed item apart from an item that legitimately gave
+    `null` — see PARALLEL_RUNTIME.
 
     So a step that fails here fails the FLOW. That is not this module overriding the
     author's error handling: an ON_FAIL chain has already run inside the step's own
@@ -163,6 +163,12 @@ def _render_parallel(
     if item.collector is None:
         raise AssertionError(
             "unreachable: PARALLEL requires an AS binding (parser.py:2362-2366)"
+        )
+    if len(item.body) != 1:
+        raise AssertionError(
+            f"unreachable: a PARALLEL FOR EACH body holds exactly one step or "
+            f"sub-flow call (builder.py:2043) — got {len(item.body)} at line "
+            f"{item.line}"
         )
 
     var = loop_var_js(item.loop_var)
@@ -174,47 +180,23 @@ def _render_parallel(
     where = js_string(f"FOR EACH {item.loop_var} IN {item.collection} (line {item.line})")
     collected = f"{indent}), {items}, {where})"
 
-    if len(item.body) == 1 and isinstance(item.body[0], FlowCallIR):
+    call = item.body[0]
+    if isinstance(call, FlowCallIR):
         return _render_parallel_subflow(
-            item.body[0], var, items, target, indent, phase_js, inner, collected
+            call, var, items, target, indent, phase_js, inner, collected
+        )
+    if not isinstance(call, CallIR):
+        raise AssertionError(
+            f"unreachable: a PARALLEL FOR EACH body is a step or a sub-flow call "
+            f"(builder.py:2049-2079) — got {type(call).__name__} at line {item.line}"
         )
 
-    calls = [b for b in item.body if isinstance(b, CallIR)]
-    if len(calls) != len(item.body):
-        raise NotImplementedError(
-            f"claude-workflow: a PARALLEL FOR EACH body that MIXES step calls and "
-            f"sub-flow calls (line {item.line}) is not rendered. A pipeline() stage "
-            f"receives the previous stage's return value, and the two kinds return "
-            f"different shapes — a step gives its GIVES value, an inlined sub-flow "
-            f"gives an object of its GIVES — so `prev` would mean two things in one "
-            f"chain. Split the FOR EACH, or wrap the steps in a sub-flow."
-        )
-
-    if len(calls) == 1:
-        thunk = call_js(calls[0], steps_by_name, phase_js, inner).removeprefix("await ")
-        return [
-            f"{target} {_COLLECT}(await parallel(",
-            f"{indent}  {items}.map(({var}) => () => {_SETTLE}(() => {thunk})),",
-            collected,
-        ]
-
-    lines = [f"{target} {_COLLECT}(await pipeline(", f"{indent}  {items},"]
-    for i, call in enumerate(calls):
-        stage = _stage_bindings(calls, i, steps_by_name, inner)
-        body = call_js(call, steps_by_name, phase_js, stage).removeprefix("await ")
-        settled = f"{_SETTLE}(() => {body})"
-        if i == 0:
-            lines.append(f"{indent}  ({var}) => {settled},")
-        else:
-            # `$$prev && $$prev.ok`, not just `.ok`: a raw null reaches a stage when
-            # the host killed the previous one's agent outright, and reading `.ok`
-            # off it would throw a bare TypeError in place of $$collect's diagnostic.
-            lines.append(
-                f"{indent}  ({_PREV}, {var}) => "
-                f"({_PREV} && {_PREV}.ok) ? {settled} : {_PREV},"
-            )
-    lines.append(collected)
-    return lines
+    thunk = call_js(call, steps_by_name, phase_js, inner).removeprefix("await ")
+    return [
+        f"{target} {_COLLECT}(await parallel(",
+        f"{indent}  {items}.map(({var}) => () => {_SETTLE}(() => {thunk})),",
+        collected,
+    ]
 
 
 def _render_parallel_subflow(
@@ -236,10 +218,9 @@ def _render_parallel_subflow(
     slice must have one static element type; JS has no such constraint, and
     extracting here would silently drop the other fields of a multi-GIVES sub-flow.)
 
-    parallel(), not pipeline(): the body is a single stage. The thunk arrow is the
-    same load-bearing one as for a step call — parallel() takes THUNKS, and mapping
-    straight to the promise would start every sub-flow during the map, bypassing the
-    concurrency limit.
+    The thunk arrow is the same load-bearing one as for a step call — parallel()
+    takes THUNKS, and mapping straight to the promise would start every sub-flow
+    during the map, bypassing the concurrency limit.
     """
     fn = subflow_fn_name(call.flow_name)
     thunk = f"{fn}({flow_input(call.kwargs, inner)}, {phase_js})"
@@ -248,50 +229,6 @@ def _render_parallel_subflow(
         f"{indent}  {items}.map(({var}) => () => {_SETTLE}(() => {thunk})),",
         collected,
     ]
-
-
-def _stage_bindings(
-    calls: list[CallIR], i: int, steps_by_name: dict[str, StepIR], inner: Bindings
-) -> Bindings:
-    """What stage `i` of a pipeline() can see: the original item, and the result of
-    the stage immediately before it.
-
-    A stage callback receives `(prevResult, originalItem, index)` — that is the
-    whole contract. So the predecessor's GIVES field is bound to `$$prev.value` (the
-    stage returns the `$$settle` envelope, not the bare value), and a late stage
-    takes the item from `originalItem` rather than having it threaded through the
-    previous stage's return value, which must stay that step's GIVES: the collector
-    holds the LAST stage's results.
-
-    A read of an EARLIER stage's output has nowhere to come from: it is not a
-    parameter, and it is not in state either — nothing writes state inside a
-    parallel body, because concurrent items would race on the key. Falling back to
-    `state[…]` would emit JS that parses and reads `undefined` at run time. Refused
-    instead, naming the step and the line.
-    """
-    if i == 0:
-        return inner
-
-    prev = gives_of(calls[i - 1], steps_by_name)
-    earlier = {
-        g
-        for c in calls[: i - 1]
-        if (g := gives_of(c, steps_by_name)) is not None and g != prev
-    }
-    call = calls[i]
-    refs = {v[1:] for _, v in call.kwargs if isinstance(v, str) and v.startswith("@")}
-
-    blocked = sorted(refs & earlier)
-    if blocked:
-        raise NotImplementedError(
-            f"claude-workflow: step {call.step_name!r} (line {call.line}) reads "
-            f"{', '.join(blocked)} from a stage that is not the one right before "
-            "it. A pipeline() stage receives only (prevResult, originalItem), and a "
-            "parallel body never writes state (concurrent items would race), so "
-            "there is nowhere to read it from. Split the FOR EACH, or fold the "
-            "steps into one."
-        )
-    return inner if prev is None else {**inner, prev: f"{_PREV}.value"}
 
 
 def needs_parallel_runtime(flows: tuple[FlowIR, ...]) -> bool:

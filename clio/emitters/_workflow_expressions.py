@@ -11,10 +11,10 @@ that FOR EACH introduces.
 of two places, and the renderer must never confuse them:
 
   * a **state key** — `state['rows']`, written by an earlier step's GIVES;
-  * a **local binding** — the `for (const doc of …)` variable, or a `pipeline()`
-    stage's `(prevResult, originalItem)` parameters. These are JS bindings. They
-    are NOT in state, and inside a parallel body they must not be: concurrent
-    items writing the loop variable into the shared object would race.
+  * a **local binding** — the loop variable, bound by the `for (const doc of …)`
+    head or by the arrow parameter of the `.map()` that builds a `parallel()` body's
+    thunks. It is a JS binding. It is NOT in state, and inside a parallel body it
+    must not be: concurrent items writing it into the shared object would race.
 
 Getting that backwards emits JS that parses, runs, and silently reads `undefined`
 — `undefined > 0.5` is false, and a `switch (undefined)` takes no arm. Which is
@@ -135,8 +135,8 @@ def step_input(kwargs: tuple[tuple[str, object], ...], bindings: Bindings) -> st
       * a literal TAKES named like some step's GIVES would clobber that output
         (`assess(x="in")` in swift_control_flow.clio binds `x` from a literal —
         nothing in state holds it, and nothing may be overwritten to put it there);
-      * inside parallel() / pipeline(), concurrent items writing the loop variable
-        into the shared state would race.
+      * inside a parallel() body, concurrent items writing the loop variable into
+        the shared state would race.
 
     When every kwarg is an identity ref (`@x` bound to TAKES `x` — what the `->`
     pipe sugar produces, and the common case), the copy would be a no-op: pass
@@ -187,7 +187,7 @@ def flow_input(kwargs: tuple[tuple[str, object], ...], bindings: Bindings) -> st
 
       * leak the sub-flow's intermediate keys into the parent, clobbering a parent
         key that happens to share a name — silently, since JS just overwrites;
-      * race inside parallel() / pipeline(), where concurrent items would each be
+      * race inside a parallel() body, where concurrent items would each be
         writing into that one shared object.
 
     So the copy is emitted even when it looks like a no-op (`{ ...state }`). The
@@ -224,7 +224,7 @@ def call_js(
 
     The phase travels as an ARGUMENT — the step wrapper hands it to agent({phase})
     — and never as a `phase()` call from inside a block: that global is racy under
-    parallel() / pipeline(), where the last writer wins (§4.3).
+    a parallel() body, where the last writer wins (§4.3).
 
     `phase_js` is a JS EXPRESSION, not a title: a string literal at the top level of
     the entry flow, and the `phase$` PARAMETER inside an inlined sub-flow (Task 9),
@@ -236,11 +236,3 @@ def call_js(
         f"await {js_identifier(step.name)}"
         f"({step_input(call.kwargs, bindings)}, {phase_js})"
     )
-
-
-def gives_of(call: CallIR, steps_by_name: dict[str, StepIR]) -> str | None:
-    """The state-field name a call produces. A step's NAME and its GIVES FIELD
-    differ — `review` GIVES `verdict`, and a downstream kwarg reads `@verdict` —
-    and it is the field name that every reader keys on."""
-    step = steps_by_name[call.step_name]
-    return step.gives.name if step.gives is not None else None

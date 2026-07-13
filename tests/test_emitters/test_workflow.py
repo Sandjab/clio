@@ -1293,17 +1293,17 @@ def test_agents_inside_a_block_carry_the_blocks_phase(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 8 — FOR EACH: a plain loop, parallel() for one call, pipeline() for a chain
+# Task 8 — FOR EACH: a plain loop, and parallel() — the one fan-out primitive
 # ---------------------------------------------------------------------------
 
 
 def _foreach_graph(*, parallel: bool, n_steps: int, collector: str | None) -> FlowGraph:
     """A flow whose only element is a FOR EACH over `docs`, with a 1- or 2-call body.
 
-    `score` reads `@verdict` — *review*'s GIVES field, i.e. the output of the stage
-    right before it. That is the whole point of a multi-stage body, and the only
-    kwarg shape pipeline() can serve: a stage callback receives (prevResult,
-    originalItem, index) and nothing else.
+    The 2-call body is **not a source any .clio file can state**: the IR builder
+    refuses it for every one of them (builder.py:2043). It exists here only to hand
+    the renderer the IR the builder would never produce, and check that it refuses
+    it too instead of inventing a concurrency the language never asked for.
     """
     review = _step(name="review", takes=(FieldIR(name="doc", type=_STR),),
                    gives=FieldIR(name="verdict", type=_STR))
@@ -1362,44 +1362,22 @@ def test_parallel_is_handed_thunks_not_already_running_promises(tmp_path):
     assert "($doc) => () => $$settle(() => review(" in src
 
 
-def test_parallel_for_each_with_several_steps_uses_pipeline(tmp_path):
-    """A multi-step body is a per-item stage chain — pipeline() runs each item
-    through all stages with NO barrier between them. parallel() would force one,
-    idling fast items behind the slowest of each stage. The Workflow tool's own
-    guidance is: default to pipeline()."""
-    src = _emit(_foreach_graph(parallel=True, n_steps=2, collector="scores"), tmp_path)
+def test_a_parallel_body_of_several_calls_is_refused_not_rendered(tmp_path):
+    """`parallel()` is the ONLY fan-out primitive this target emits, and it maps one
+    call per item. The host also offers `pipeline()` — a per-item stage chain — but
+    no source can reach it: the IR builder refuses a PARALLEL body of more than one
+    call for every .clio file there is ("FOR EACH PARALLEL body must contain exactly
+    one step or sub-flow call in v1", builder.py:2043). A renderer branch for it
+    would be code no user can run, kept alive by a test that hand-builds the IR to
+    exercise it — the definition of speculative.
 
-    assert "await pipeline(" in src
-    assert "await parallel(" not in src
-    assert_valid_js(src, tmp_path)
+    So the invariant is asserted where it is relied on rather than assumed. Silently
+    rendering *something* for a 2-call body is the failure this guards: whatever that
+    something is, it is a concurrency semantics the language never stated."""
+    graph = _foreach_graph(parallel=True, n_steps=2, collector="scores")
 
-
-def test_a_pipeline_stage_reads_its_predecessor_from_prev_not_from_state(tmp_path):
-    """`score(r=@verdict)` reads *review*'s GIVES. Inside a pipeline that value is
-    the stage callback's `prevResult` — it is NOT in state, and it must not be: the
-    items run concurrently, so writing each one's output into the shared state key
-    would race. A renderer that emitted state['verdict'] here would compile, parse,
-    and score every document on `undefined`.
-
-    `.value`, because a stage returns the outcome envelope $$settle builds and not
-    the bare result — that is what keeps a failed item apart from an item whose
-    result legitimately IS `null`."""
-    src = _emit(_foreach_graph(parallel=True, n_steps=2, collector="scores"), tmp_path)
-
-    assert "($doc) => $$settle(() => review({ ...state, 'doc': $doc }, 'each:docs'))" in src
-    assert "'r': $$prev.value" in src
-    assert "state['verdict']" not in src
-
-
-def test_a_stage_whose_predecessor_failed_does_not_run(tmp_path):
-    """The failure envelope travels down the chain untouched. Running the next stage
-    on it would hand a step `{ok: false, error: …}` as its INPUT — and a judgment
-    step would dutifully send that to an agent, spending a call to summarize an
-    error object."""
-    src = _emit(_foreach_graph(parallel=True, n_steps=2, collector="scores"), tmp_path)
-
-    assert "($$prev, $doc) => ($$prev && $$prev.ok) ? $$settle(" in src
-    assert ") : $$prev," in src
+    with pytest.raises(AssertionError, match="exactly one"):
+        _emit(graph, tmp_path)
 
 
 def test_a_failed_item_fails_the_flow_instead_of_being_filtered_out(tmp_path):
@@ -1421,16 +1399,17 @@ def test_a_failed_item_fails_the_flow_instead_of_being_filtered_out(tmp_path):
 
 
 def test_parallel_agents_carry_phase_via_opts_not_the_global(tmp_path):
-    """phase() is global state and racy inside parallel()/pipeline() stages — the
-    last writer wins. Agents spawned there receive `phase` through agent({phase}),
-    which is what the step wrapper's `phaseName` parameter carries. The global moves
-    once, at the top level."""
-    src = _emit(_foreach_graph(parallel=True, n_steps=2, collector="scores"), tmp_path)
+    """phase() is global state and racy inside a parallel() body — concurrent items
+    would each move it, and the last writer would win. Agents spawned there receive
+    `phase` through agent({phase}), which is what the step wrapper's `phaseName`
+    parameter carries. The global moves once, at the top level."""
+    src = _emit(_foreach_graph(parallel=True, n_steps=1, collector="reviews"), tmp_path)
 
     assert re.findall(r"^phase\('([^']+)'\)", src, re.M) == ["each:docs"]
-    # Both stages take the phase as an ARGUMENT (the wrapper hands it to
-    # agent({phase})); neither calls the global from inside the pipeline.
-    assert src.count(", 'each:docs')") == 2
+    # The fanned-out call takes the phase as an ARGUMENT (the wrapper hands it to
+    # agent({phase})); it never calls the global from inside the thunk.
+    assert "$$settle(() => review({ ...state, 'doc': $doc }, 'each:docs'))" in src
+    assert src.count("phase('each:docs')") == 1
 
 
 def test_a_condition_on_the_loop_variable_reads_the_loop_variable(tmp_path):
@@ -2109,11 +2088,19 @@ def test_example_parallel_review_fans_out_for_real(tmp_path):
     src = (tmp_path / "parallel-review.workflow.js").read_text()
     assert src.count("await parallel(") == 2
     # The serialized shape, spelled the way render_foreach would actually emit it:
-    # `$f` / `$d`, since a loop variable is namespaced away from the step functions
+    # `$fd` / `$d`, since a loop variable is namespaced away from the step functions
     # (loop_var_js). Asserting the bare names would be asserting nothing.
-    assert "for (const $f of" not in src
+    assert "for (const $fd of" not in src
     assert "for (const $d of" not in src
     assert "state['drafts'] =" in src and "state['notes'] =" in src
+
+    # The reviewer reviews the DIFF, not a path. `review_file(file=f)` handed the
+    # subagent a bare filename, and the dogfood run came back "src/auth.py does not
+    # exist… BLOCKED step, not a defect" — correctly: nothing in the prompt was the
+    # code, so the agent went looking for it on a disk the flow never promised.
+    assert "'file_diff': $fd" in src
+    assert "${JSON.stringify(state['file_diff'])}" in src
+    assert "do not read the repository" in src
     assert_valid_js(src, tmp_path)
 
 
@@ -2125,10 +2112,10 @@ def test_example_parallel_review_fans_out_for_real(tmp_path):
 # against a double for the host globals — the same reason the `args` tests above
 # run the preamble instead of reading it.
 #
-# The double models the ONE property of parallel() / pipeline() everything here
-# turns on (§6.1): a thunk that throws resolves to `null` in the result array,
-# and the call itself never rejects. Get that wrong and the tests would agree
-# with any implementation.
+# The double models the ONE property of parallel() everything here turns on
+# (§6.1): a thunk that throws resolves to `null` in the result array, and the
+# call itself never rejects. Get that wrong and the tests would agree with any
+# implementation.
 # ---------------------------------------------------------------------------
 
 _HOST_DOUBLE = """\
@@ -2137,15 +2124,6 @@ function log(..._a) {}
 async function parallel(thunks) {
   return Promise.all(thunks.map(async (t) => {
     try { return await t() } catch (_e) { return null }
-  }))
-}
-async function pipeline(items, ...stages) {
-  return Promise.all(items.map(async (item, i) => {
-    try {
-      let acc = await stages[0](item, i)
-      for (const stage of stages.slice(1)) acc = await stage(acc, item, i)
-      return acc
-    } catch (_e) { return null }
   }))
 }
 """
@@ -2233,39 +2211,6 @@ def test_a_parallel_loop_variable_does_not_shadow_the_step_it_calls(tmp_path):
     assert_valid_js(src, tmp_path)
 
 
-def test_a_pipeline_stage_result_does_not_shadow_the_step_it_calls(tmp_path):
-    """The other binding the fan-out renderer introduces: the stage's predecessor.
-    Named `prev`, it shadows a step called `prev` exactly as the loop variable did —
-    `(prev, doc) => prev(…)` calls a string. Reachable only from hand-built IR today
-    (the builder refuses a multi-call PARALLEL body), which is why it is fixed with
-    the loop variable rather than after the next release: every binding this module
-    emits now lives in a namespace no CLIO identifier can reach.
-    """
-    first = _step(name="first", takes=(FieldIR(name="d", type=_STR),),
-                  gives=FieldIR(name="a", type=_STR))
-    prev = _step(name="prev", takes=(FieldIR(name="y", type=_STR),),
-                 gives=FieldIR(name="b", type=_STR))
-    fe = ForEachIR(loop_var="doc", collection="docs", line=5, parallel=True,
-                   collector="out",
-                   body=(CallIR(step_name="first", kwargs=(("d", "@doc"),), line=6),
-                         CallIR(step_name="prev", kwargs=(("y", "@a"),), line=7)))
-    flow = FlowIR(name="chain", chain=(fe,), rescues=(), line=1,
-                  takes=(FieldIR(name="docs", type=ListType(inner=_STR)),))
-    graph = FlowGraph(steps=(first, prev), flow=flow, flows=(flow,))
-    agent_js = """\
-async function agent(prompt, opts) {
-  if (opts.label === 'judgment:first') return { a: 'A' }
-  return { b: 'B' }
-}
-"""
-
-    src = _emit(graph, tmp_path)
-    proc = _run_script(src, agent_js, '\'{"docs": ["d1"]}\'', tmp_path)
-
-    assert _state_of(proc)["out"] == ["B"]
-    assert_valid_js(src, tmp_path)
-
-
 # --- Defect B: a legitimate `null` is not a failure -------------------------
 
 def _optional_parallel_graph() -> FlowGraph:
@@ -2337,39 +2282,6 @@ def test_a_failed_item_fails_the_flow_and_names_itself(tmp_path):
     assert "clio:" in proc.stderr
     assert "boom" in proc.stderr, "the failing item is not named"
     assert "agent returned no result" in proc.stderr, "the cause is not reported"
-
-
-def test_a_failed_pipeline_stage_fails_the_flow(tmp_path):
-    """Same rule through pipeline(): a stage that throws leaves `null` for that item
-    in the result array, and the collector must not read it as a value."""
-    review = _step(name="review", takes=(FieldIR(name="doc", type=_STR),),
-                   gives=FieldIR(name="verdict", type=_STR))
-    score = _step(name="score", takes=(FieldIR(name="r", type=_STR),),
-                  gives=FieldIR(name="rating", type=OptionalType(inner=_STR)))
-    fe = ForEachIR(loop_var="doc", collection="docs", line=5, parallel=True,
-                   collector="ratings",
-                   body=(CallIR(step_name="review", kwargs=(("doc", "@doc"),), line=6),
-                         CallIR(step_name="score", kwargs=(("r", "@verdict"),), line=7)))
-    flow = FlowIR(name="rev", chain=(fe,), rescues=(), line=1,
-                  takes=(FieldIR(name="docs", type=ListType(inner=_STR)),))
-    graph = FlowGraph(steps=(review, score), flow=flow, flows=(flow,))
-    agent_js = """\
-async function agent(prompt, opts) {
-  if (opts.label === 'judgment:review') {
-    const doc = JSON.parse(prompt.match(/Input `doc`:\\n(.*)/)[1])
-    return doc === 'boom' ? null : { verdict: 'V:' + doc }
-  }
-  return { rating: null }
-}
-"""
-    src = _emit(graph, tmp_path)
-
-    ok = _run_script(src, agent_js, '\'{"docs": ["a", "b"]}\'', tmp_path)
-    assert _state_of(ok)["ratings"] == [None, None], "a legitimate null was dropped"
-
-    bad = _run_script(src, agent_js, '\'{"docs": ["a", "boom"]}\'', tmp_path)
-    assert bad.returncode != 0, f"the flow continued on a failed stage: {bad.stdout}"
-    assert "clio:" in bad.stderr
 
 
 def test_a_flow_that_never_fans_out_carries_no_fan_out_runtime(tmp_path):
