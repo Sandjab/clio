@@ -1,0 +1,27 @@
+STEP risky
+  TAKES:   x: str
+  GIVES:   y: str
+  MODE:    judgment
+  ON_FAIL: retry(2)
+
+STEP notify
+  TAKES: reason: str, err_type: str
+  GIVES: sent: bool
+  MODE:  exact
+
+STEP recover
+  TAKES: x: str
+  GIVES: z: str
+  MODE:  exact
+
+FLOW pipeline
+  risky(x="hi")
+
+  RESCUE risky:
+    -> notify(reason=risky.error.message, err_type=risky.error.type)
+    -> recover(x="hi")
+    -> RESUME(recover.z)
+
+RESOURCES
+  target: claude-workflow
+  models: [haiku]

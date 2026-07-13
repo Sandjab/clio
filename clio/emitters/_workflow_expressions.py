@@ -24,8 +24,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from clio.emitters._workflow_errors import error_access_js
 from clio.emitters._workflow_helpers import js_identifier, js_string
-from clio.ir.graph import BoolOpIR, CallIR, ConditionIR, StepIR
+from clio.ir.graph import BoolOpIR, CallIR, ConditionIR, ErrorAccessIR, StepIR
 
 # CLIO name -> the JS expression that shadows it at the point being rendered.
 # Empty at the top level of a flow: there, every name is a state key.
@@ -50,8 +51,7 @@ def js_value(value: object) -> str:
     if value is None:
         return "null"
     raise NotImplementedError(
-        f"claude-workflow: kwarg value of type {type(value).__name__} is not "
-        "rendered yet (ErrorAccessIR rides on ON_FAIL / RESCUE — Task 10)"
+        f"claude-workflow: kwarg value of type {type(value).__name__} is not rendered"
     )
 
 
@@ -152,10 +152,18 @@ def step_input(kwargs: tuple[tuple[str, object], ...], bindings: Bindings) -> st
 
 
 def _overlays(kwargs: tuple[tuple[str, object], ...], bindings: Bindings) -> list[str]:
-    """The `k: v` fragments that shadow state for one call site."""
+    """The `k: v` fragments that shadow state for one call site.
+
+    An ErrorAccessIR kwarg (`reason=detect.error.message`) is not a state read at
+    all: the value lives on the error object the enclosing RESCUE's `catch` bound,
+    which is a JS binding like a loop variable — and, like one, it must never be
+    looked up in state, where nothing ever writes it.
+    """
     overlays: list[str] = []
     for name, value in kwargs:
-        if isinstance(value, str) and value.startswith("@"):
+        if isinstance(value, ErrorAccessIR):
+            overlays.append(f"{js_string(name)}: {error_access_js(value)}")
+        elif isinstance(value, str) and value.startswith("@"):
             ref = value[1:]
             local = bindings.get(ref)
             if local is not None:

@@ -20,6 +20,7 @@ other. ON_FAIL / RESCUE (T10) hangs off `_render_item`, the single dispatch poin
 """
 from __future__ import annotations
 
+from clio.emitters._workflow_errors import abort_js, render_guarded, resume_js
 from clio.emitters._workflow_expressions import (
     NO_BINDINGS,
     Bindings,
@@ -38,6 +39,8 @@ from clio.ir.graph import (
     ForEachIR,
     IfBlockIR,
     MatchBlockIR,
+    RescueBlockIR,
+    ResumeIR,
     StepIR,
     WhileBlockIR,
 )
@@ -88,12 +91,23 @@ def _render_body(
     phase_js: str,
     indent: str,
     bindings: Bindings,
+    resume_key: str | None = None,
 ) -> list[str]:
     """The lines of a block body, one indent level deeper. `phase_js` is passed
-    through unchanged: §4.3 moves the global only at the top level."""
+    through unchanged: §4.3 moves the global only at the top level.
+
+    `resume_key` is the GIVES field of the step a RESCUE handler protects — the key
+    a `RESUME` in this body binds its value under. It is None everywhere else, which
+    is why a RESUME reached outside a handler fails loudly (_render_item) instead of
+    binding nothing. FOR EACH takes this function as a callback and calls it with
+    five positional arguments, so a body nested in a loop drops the key: a RESUME
+    there is exactly the case that must not be guessed at.
+    """
     lines: list[str] = []
     for sub in body:
-        lines += _render_item(sub, steps_by_name, phase_js, indent + "  ", bindings)
+        lines += _render_item(
+            sub, steps_by_name, phase_js, indent + "  ", bindings, resume_key
+        )
     return lines
 
 
@@ -176,10 +190,26 @@ def _render_item(
     phase_js: str,
     indent: str,
     bindings: Bindings = NO_BINDINGS,
+    resume_key: str | None = None,
 ) -> list[str]:
-    """Dispatch one chain node. Task 10 adds its branches here; `phase_js` is
-    threaded down so an agent spawned inside a block carries the block's phase
-    (§4.3) instead of moving the racy global."""
+    """Dispatch one chain node. `phase_js` is threaded down so an agent spawned
+    inside a block carries the block's phase (§4.3) instead of moving the racy
+    global; `resume_key` only ever has a value inside a RESCUE handler."""
+    if isinstance(item, CallIR) and item.step_name == "abort":
+        # Before the CallIR branch, which would look 'abort' up in steps_by_name and
+        # KeyError: it is a synthetic terminator, not a step (_workflow_errors).
+        # Here rather than in _render_call because a rescue body may nest it inside
+        # an IF, and every recursion lands on this dispatcher.
+        return [indent + abort_js(item)]
+    if isinstance(item, ResumeIR):
+        if resume_key is None:
+            raise NotImplementedError(
+                f"claude-workflow: RESUME({item.fallback_step}.{item.field_name}) "
+                f"(line {item.line}) is not rendered outside a RESCUE handler whose "
+                "step has a GIVES — there is no key to bind the value under, and "
+                "emitting nothing would let the flow continue on a stale value."
+            )
+        return [indent + line for line in resume_js(item, resume_key)]
     if isinstance(item, CallIR):
         return [
             indent + line for line in _render_call(item, steps_by_name, phase_js, bindings)
@@ -199,8 +229,20 @@ def _render_item(
             item, steps_by_name, phase_js, indent, bindings, _render_body
         )
     raise NotImplementedError(
-        f"claude-workflow: {type(item).__name__} is not rendered yet "
-        "(ON_FAIL / RESCUE: Task 10)"
+        f"claude-workflow: {type(item).__name__} is not rendered"
+    )
+
+
+def _render_top_item(
+    item: ChainItem,
+    steps_by_name: dict[str, StepIR],
+    phase_js: str,
+    indent: str,
+    rescues: dict[str, RescueBlockIR],
+) -> list[str]:
+    """A top-level chain node — the only place a RESCUE handler may wrap one."""
+    return render_guarded(
+        item, steps_by_name, phase_js, indent, rescues, _render_item, _render_body
     )
 
 
@@ -244,11 +286,12 @@ def render_flow_js(flow: FlowIR, steps_by_name: dict[str, StepIR]) -> str:
     title fails here — loudly, at compile time — instead of shifting every phase
     label by one.
     """
+    rescues = {rb.step_name: rb for rb in flow.rescues}
     lines = _render_preamble(flow)
     for title, item in zip(phase_titles(flow), flow.chain, strict=True):
         lines.append("")
         lines.append(f"phase({js_string(title)})")
-        lines += _render_item(item, steps_by_name, js_string(title), "")
+        lines += _render_top_item(item, steps_by_name, js_string(title), "", rescues)
     return "\n".join(lines) + "\n"
 
 
@@ -272,9 +315,10 @@ def render_subflow_js(flow: FlowIR, steps_by_name: dict[str, StepIR]) -> str:
         (`Object.assign`), which is how a downstream `@field` read resolves — the
         same convention python (`state.update(run_x(...))`) and go emit.
     """
+    rescues = {rb.step_name: rb for rb in flow.rescues}
     lines = [f"async function {subflow_fn_name(flow.name)}(state, {PHASE_PARAM}) {{"]
     for item in flow.chain:
-        lines += _render_item(item, steps_by_name, PHASE_PARAM, "  ")
+        lines += _render_top_item(item, steps_by_name, PHASE_PARAM, "  ", rescues)
     fields = ", ".join(
         f"{js_string(g.name)}: state[{js_string(g.name)}]" for g in flow.gives
     )

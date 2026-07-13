@@ -37,7 +37,9 @@ from clio.ir.graph import (
     McpToolImplIR,
     OnFailChainIR,
     OnFailStrategyIR,
+    RescueBlockIR,
     RestImplIR,
+    ResumeIR,
     ShellImplIR,
     SqlImplIR,
     StepIR,
@@ -1517,3 +1519,216 @@ def test_sub_flow_as_parallel_body_collects_its_gives_objects(tmp_path):
     assert "state['urls'].map((u) => () => flow_$enrich({ ...state, 'url': u }," in src
     assert "workflow(" not in src
     assert_valid_js(src, tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Task 10 — ON_FAIL chains, RESCUE handlers, RESUME
+# ---------------------------------------------------------------------------
+
+
+def _one_call_flow(step_name: str, name: str = "g") -> FlowIR:
+    return FlowIR(
+        name=name, rescues=(), line=1,
+        chain=(CallIR(step_name=step_name, kwargs=(), line=2),),
+    )
+
+
+def test_on_fail_retry_loops_without_backoff(tmp_path):
+    """Retries run back-to-back — the sandbox has no clock. W_WF_002 says so at
+    compile time; the emitted code must not reach for one anyway."""
+    chain = OnFailChainIR(strategies=(OnFailStrategyIR(kind="retry", max_retries=3),))
+    step = _step(name="flaky", on_fail=chain)
+    flow = _one_call_flow("flaky")
+
+    src = _emit(FlowGraph(steps=(step,), flow=flow, flows=(flow,)), tmp_path)
+
+    assert "attempt < 3" in src
+    # …on the CODE: the script header names Date.now() in prose, to warn the
+    # author away from it. See _code_only.
+    assert "Date.now" not in _code_only(src)
+    assert "setTimeout" not in _code_only(src)
+    assert_valid_js(src, tmp_path)
+
+
+def test_on_fail_retry_only_rethrows_the_last_error(tmp_path):
+    """A retry chain that exhausts must FAIL, not fall through.
+
+    Swallowing the error would hand `undefined` to the next step — the failure
+    then surfaces somewhere else, on a step that is not the broken one."""
+    chain = OnFailChainIR(strategies=(OnFailStrategyIR(kind="retry", max_retries=2),))
+    step = _step(name="flaky", on_fail=chain)
+    flow = _one_call_flow("flaky")
+
+    src = _emit(FlowGraph(steps=(step,), flow=flow, flows=(flow,)), tmp_path)
+
+    assert "throw lastError" in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_on_fail_lives_in_the_step_function_not_at_the_call_site(tmp_path):
+    """ON_FAIL is declared on the STEP, so it must hold at EVERY call site.
+
+    Rendered at the call site instead, it would be silently dropped inside a
+    `parallel()` / `pipeline()` body: that path builds a thunk EXPRESSION from
+    `call_js` (_workflow_loops) and never walks the statement dispatcher. Same
+    placement as python / go / swift, which all render the chain inside the step.
+    """
+    chain = OnFailChainIR(strategies=(OnFailStrategyIR(kind="retry", max_retries=3),))
+    step = _step(name="flaky", on_fail=chain)
+
+    fn = render_judgment_step_js(step, {})
+
+    assert "attempt < 3" in fn, "the retry loop belongs to the step function"
+
+
+def test_on_fail_fallback_calls_the_fallback_step_then_aborts(tmp_path):
+    """swift_judgment_onfail.clio: retry(2) then escalate then fallback(naive)
+    then abort("detection exhausted")."""
+    src = _emit_fixture("swift_judgment_onfail.clio", tmp_path)
+
+    assert "attempt < 2" in src
+    assert "await naive(state, phaseName)" in src   # the fallback, same inputs
+    assert "function naive(state)" in src           # …and its function is emitted
+    assert "throw new Error('detection exhausted')" in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_on_fail_abort_only_throws_the_declared_message(tmp_path):
+    """swift_onfail_abort_only.clio: ON_FAIL: abort("boom"). No retry clause, so
+    the attempt runs once and the abort message is what the flow sees."""
+    src = _emit_fixture("swift_onfail_abort_only.clio", tmp_path)
+
+    assert "throw new Error('boom')" in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_rescue_catches_and_resumes(tmp_path):
+    src = _emit_fixture("workflow_rescue.clio", tmp_path)
+
+    assert "try {" in src
+    assert "catch (_err) {" in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_rescue_body_reads_the_caught_error(tmp_path):
+    """`risky.error.message` / `.type` (ErrorAccessIR) are the fields of the error
+    the catch actually binds — `err.name` is the JS analog of python's
+    `type(_err).__name__` (python.py:608-616)."""
+    src = _emit_fixture("workflow_rescue.clio", tmp_path)
+
+    assert "'reason': _err.message" in src
+    assert "'err_type': _err.name" in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_resume_binds_the_fallback_value_under_the_rescued_step_key(tmp_path):
+    """RESUME(recover.z) where `risky` GIVES `y`: the flow continues, and every
+    downstream reader keys on `y`.
+
+    The two names differ in the fixture on purpose. State is keyed by the GIVES
+    FIELD name and holds the UNWRAPPED value (_workflow_flow_renderer:_render_call,
+    _workflow_step_renderers), so the value is at `state['z']` — not under the
+    step's name, and not nested. `state['recover']['z']` would be `undefined`,
+    silently, at run time."""
+    src = _emit_fixture("workflow_rescue.clio", tmp_path)
+
+    assert "state['y'] = state['z']" in src
+    assert "state['recover']" not in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_rescue_wraps_the_step_that_can_actually_throw(tmp_path):
+    """The whole chain rests on the T4 guard: agent() returns null on terminal
+    failure, it does NOT throw. The wrapper converts that null into a throw — so
+    this catch can see it. Without that line the handler is dead code."""
+    src = _emit_fixture("workflow_rescue.clio", tmp_path)
+
+    assert "if (result === null || result === undefined) {" in src
+    protected = src[src.index("try {"):src.index("catch (_err) {")]
+    assert "await risky(" in protected, "the rescued call must be inside the try"
+
+
+def test_rescue_body_ending_in_abort_throws(tmp_path):
+    """`abort("msg")` is a synthetic CallIR the IR builder injects into RESCUE
+    bodies only (builder.py:1530-1533) — it names no STEP, so the dispatcher must
+    catch it before it looks the name up."""
+    step = _step(name="risky")
+    rescue = RescueBlockIR(
+        step_name="risky",
+        body=(CallIR(step_name="abort", kwargs=(("message", "no way back"),), line=5),),
+        line=4,
+    )
+    flow = FlowIR(
+        name="g", rescues=(rescue,), line=1,
+        chain=(CallIR(step_name="risky", kwargs=(), line=2),),
+    )
+
+    src = _emit(FlowGraph(steps=(step,), flow=flow, flows=(flow,)), tmp_path)
+
+    assert "catch (_err) {" in src
+    assert "throw new Error('no way back')" in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_resume_with_no_rescued_key_in_scope_is_refused():
+    """A RESUME the renderer cannot bind must fail at compile time.
+
+    It has one key to write and it comes from context — the GIVES of the step the
+    enclosing handler protects. The dispatcher only carries that key through a
+    RESCUE body; a FOR EACH body, whose render_body callback drops it, is the case
+    that would otherwise be guessed at. Emitting nothing there would drop the
+    recovery silently and let the chain continue on a stale value.
+    """
+    from clio.emitters._workflow_flow_renderer import _render_item
+
+    resume = ResumeIR(fallback_step="recover", field_name="z", line=9)
+
+    with pytest.raises(NotImplementedError, match="RESUME"):
+        _render_item(resume, {}, "'p'", "", {}, None)
+
+
+# Every fixture this target compiles, with the entry FLOW where the source has
+# more than one. The sweep below is only as good as this list is complete.
+_ALL_FIXTURES = [
+    ("swift_minimal.clio", None),
+    ("swift_judgment.clio", None),
+    ("swift_judgment_cache.clio", None),
+    ("swift_judgment_onfail.clio", None),
+    ("swift_onfail_abort_only.clio", None),
+    ("swift_contract.clio", None),
+    ("swift_control_flow.clio", None),
+    ("swift_foreach_seq.clio", None),
+    ("swift_foreach_take.clio", None),
+    ("swift_parallel.clio", None),
+    ("swift_parallel_shared.clio", None),
+    ("swift_sideeffect.clio", None),
+    ("workflow_rescue.clio", None),
+    ("workflow_subflow.clio", "pipeline"),
+    ("workflow_subflow_parallel.clio", "batch"),
+    ("workflow_two_flows.clio", "alpha"),
+]
+
+
+def _code_only(src: str) -> str:
+    """The script with its full-line `//` comments removed.
+
+    The exact-step stub WARNS the author, in prose, that `Date.now()` and friends
+    throw (_workflow_step_renderers) — so a raw substring sweep would flag the very
+    comment that exists to prevent the bug. What must not appear is a CALL."""
+    return "\n".join(
+        line for line in src.splitlines() if not line.lstrip().startswith("//")
+    )
+
+
+@pytest.mark.parametrize("fixture,flow", _ALL_FIXTURES)
+def test_no_emitted_script_calls_a_forbidden_global(fixture, flow, tmp_path):
+    """Date.now(), new Date() and Math.random() THROW in the workflow sandbox
+    (§6.2), and there are no timers. This is a whole-output guard across every
+    fixture, not a per-node check: the trap is that any renderer might reach for a
+    timestamp, a retry jitter or a generated id, and each one only fails at run
+    time, in the user's session."""
+    code = _code_only(_emit_fixture(fixture, tmp_path, flow=flow))
+
+    for forbidden in ("Date.now(", "new Date(", "Math.random(", "setTimeout("):
+        assert forbidden not in code, f"{fixture} emits {forbidden} — it throws in the sandbox"
+    assert_valid_js(code, tmp_path)

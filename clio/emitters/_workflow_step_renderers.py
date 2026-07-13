@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import textwrap
 
+from clio.emitters._workflow_errors import attempt_fn_name, render_on_fail_wrapper
 from clio.emitters._workflow_helpers import js_identifier, js_string, schema_literal
 from clio.ir.graph import ApiInvokeIR, CliInvokeIR, ContractIR, StepIR
 
@@ -72,7 +73,17 @@ def _prompt(step: StepIR) -> str:
 def render_judgment_step_js(step: StepIR, contracts: dict[str, ContractIR]) -> str:
     """A judgment step delegates to a subagent. The host forces it through a
     structured-output tool and validates the result against `schema`, so contract
-    validation costs no emitted code."""
+    validation costs no emitted code.
+
+    With an ON_FAIL chain the agent call moves into an inner `<step>$attempt`
+    function and the STEP's own name goes to the wrapper that retries it
+    (_workflow_errors). The call sites are untouched — they call the step by name,
+    as they always did, and so the chain holds at every one of them, including the
+    thunks a `parallel()` body builds.
+    """
+    fn_name = (
+        attempt_fn_name(step) if step.on_fail is not None else js_identifier(step.name)
+    )
     schema = (
         schema_literal(step.gives.type, contracts, step.gives.name)
         if step.gives is not None
@@ -95,8 +106,8 @@ def render_judgment_step_js(step: StepIR, contracts: dict[str, ContractIR]) -> s
         f"result[{js_string(step.gives.name)}]" if step.gives is not None else "result"
     )
 
-    return f"""\
-async function {js_identifier(step.name)}(state, phaseName) {{
+    attempt = f"""\
+async function {fn_name}(state, phaseName) {{
   const result = await agent(
     `{_prompt(step)}`,
     {{
@@ -110,6 +121,9 @@ async function {js_identifier(step.name)}(state, phaseName) {{
   return {unwrap}
 }}
 """
+    if step.on_fail is None:
+        return attempt
+    return render_on_fail_wrapper(step) + "\n" + attempt
 
 
 def render_exact_step_js(step: StepIR, contracts: dict[str, ContractIR]) -> str:
