@@ -20,7 +20,7 @@ A side-by-side reading of [CLIO](../README.md) and [openprose/prose](https://git
 | **Persistence** | `state.json` + `--from-step N` (resume) | `runs/{id}/`, `state/`, `state/agents/`, `state/responsibilities/` |
 | **Observability** | JSONL events, OTel-mappable (`CLIO_LOG=1`) | `runs/{id}/vm.log.md` + `prose status` |
 | **Cache** | Deterministic, SHA256(prompt+schema+model), `ttl(24h)` | No deterministic cache (LLM-replay only) |
-| **Multi-target** | python, claude-cli, mcp-server, claude-skill, langgraph, go (6 shipped) | Single target: the host agent |
+| **Multi-target** | python, claude-cli, mcp-server, claude-skill, langgraph, go, swift, claude-workflow (8 shipped) | Single target: the host agent |
 | **Failure / recovery** | `ON_FAIL: retry(3) then escalate then fallback(x)` + `RESCUE` (`abort` / `RESUME`) | `### Errors` declarative + contract-driven retry |
 | **Tests** | 1281+ pytest tests *of the compiler* | `kind: test` native, with `### Expects` / `### Expects Not` in natural language |
 | **Dependencies** | Zero external (each `.clio` self-contained) | `prose install` + `prose.lock` + `deps/` (git-native) |
@@ -28,7 +28,7 @@ A side-by-side reading of [CLIO](../README.md) and [openprose/prose](https://git
 | **External ingestion** | No abstraction | `kind: gateway` (cron, webhook, HTTP route) |
 | **Standing goals** | None (run-once flows) | `kind: responsibility` + Reactor (event-driven continuity) |
 | **Stack** | Python 3.12+ | TypeScript CLI wrapper + skill |
-| **Maturity** | v0.24.0, 1351+ tests, 7 targets shipped, cross-file imports + skill ↔ `.clio` round-trip | Beta, ~19 open issues, MIT |
+| **Maturity** | v0.25.0 (unreleased), 1583+ tests, 8 targets shipped, cross-file imports + skill ↔ `.clio` round-trip | Beta, ~19 open issues, MIT |
 
 ## Deep similarities
 

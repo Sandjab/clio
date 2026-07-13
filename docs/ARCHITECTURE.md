@@ -11,7 +11,7 @@ flowchart LR
     ast --> rsv["Resolver (v0.18)<br/><sub>ir/resolver.py — FROM…IMPORT,<br/>EXPOSE/INTERNAL validation</sub>"]
     rsv --> bld["IR Builder<br/><sub>ir/builder.py — flatten +<br/>alpha-rename, then build</sub>"]
     bld --> ir["IR Graph<br/><sub>ir/graph.py</sub>"]
-    ir --> emt["Emitter<br/><sub>emitters/{claude_cli,python,mcp_server,<br/>langgraph,claude_skill,go}.py</sub>"]
+    ir --> emt["Emitter<br/><sub>emitters/{claude_cli,python,mcp_server,langgraph,<br/>claude_skill,go,swift,workflow}.py</sub>"]
     emt --> out["Target project<br/><sub>per target: run.sh / Python pkg /<br/>MCP server / StateGraph / SKILL.md +<br/>.clio/ sidecar on claude-skill (v0.19) /<br/>Go module</sub>"]
 ```
 

@@ -6,7 +6,9 @@ full set, run `ls examples/` — additional fixtures include
 `critical_pipeline.clio` / `critical_pipeline_resume.clio` (resume-from-step
 demo), `feedback_routing.clio`, `flow_composition.clio`, `flow_signature.clio`,
 `mcp_tool.clio`, `parallel_classify.clio`, `rest_advanced.clio`,
-`skill_minimal.clio`, `sql_demo.clio`, and `mvp_go.clio` (Go target demo).
+`skill_minimal.clio`, `sql_demo.clio`, `mvp_go.clio` (Go target demo), and
+`parallel_review.clio` (fan-out code review — the `claude-workflow` target demo,
+where each `FOR EACH … PARALLEL` iteration runs as a concurrent subagent).
 Multi-file examples live under [`multi_file/`](multi_file/).
 
 ## Project examples

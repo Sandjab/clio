@@ -74,7 +74,7 @@ Also lifts `FOR EACH <var> IN <collection>:` from spec-only to implemented contr
 | `WHILE <cond> MAX N:` (v0.7) | ✅ | ✅ | ✅ bounded `for/break` | ❌ rejected | ✅ bounded `for/break` |
 | `FLOW.TAKES` / `FLOW.GIVES` (v0.16) | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-(per-target status for all seven targets, including `swift`, `go`, `claude-skill`, and `langgraph`: see [docs/manual/04-targets.md](manual/04-targets.md#cross-target-feature-support))
+(per-target status for all eight targets, including `swift`, `go`, `claude-skill`, `langgraph`, and `claude-workflow`: see [docs/manual/04-targets.md](manual/04-targets.md#cross-target-feature-support))
 
 Where the table says *rejected at compile time*, the emitter raises a clear `ValueError` / `NotImplementedError` rather than producing silent or broken code.
 
@@ -234,7 +234,7 @@ Five forms, hybrid syntax:
 
 It is a parse error to combine forms (e.g. `body: {form: ..., multipart: ...}`).
 
-> **`target: go` limitation.** The Go emitter supports the **JSON** and **Raw** body forms only. **File**, **Form**, and **Multipart** bodies are refused at compile time with `E_GO_013` — use `--target python` for those. (The other implemented targets support all five forms, except `target: swift` which defers `impl.mode: rest` entirely to Phase 4 — use `--target python` or `--target go` for REST steps today.)
+> **`target: go` limitation.** The Go emitter supports the **JSON** and **Raw** body forms only. **File**, **Form**, and **Multipart** bodies are refused at compile time with `E_GO_013` — use `--target python` for those. (The other implemented targets support all five forms, except `target: swift`, which defers `impl.mode: rest` entirely to Phase 4, and `target: claude-workflow`, which refuses it outright with `E_WF_003` — its sandbox has no network. Use `--target python` or `--target go` for REST steps today.)
 
 ##### `retry`
 
@@ -604,6 +604,7 @@ compile under `swift build`.
 | `langgraph`     | yes (sub-flow → compiled sub-`StateGraph`)                            |
 | `go`            | yes (sub-flow → `run<Name>()` func; single-GIVES parallel bodies are terminal-only — typed downstream consumption deferred to v0.24; multi-GIVES PARALLEL refused — E_GO_006) |
 | `swift`         | **no** — deferred to Phase 5; use `--target python` or `--target go` |
+| `claude-workflow` | yes (sub-flow → **inlined** local `async function`; a recursive FLOW is refused — E_WF_007). A `FOR EACH PARALLEL` body that is a sub-flow call runs under `parallel()`, and the collector holds the sub-flow's **GIVES objects**, not bare values |
 | `claude-cli`    | **no** — compile-time error (deferred to a later release)             |
 
 ### IMPORT and EXPOSE (v0.18)
@@ -710,6 +711,7 @@ symbol. It is legal to re-export a CONTRACT or a FLOW this way.
 | `mcp-server`   | yes                                     |
 | `claude-skill` | yes                                     |
 | `langgraph`    | yes                                     |
+| `claude-workflow` | yes (the reachable sources are flattened into the one emitted script; the `.clio/` sidecar keeps them all for `clio import`) |
 | `claude-cli`   | **no** — rejected at compile time (stderr message, exit 1) |
 
 ### TEST (v0.15)
@@ -749,8 +751,8 @@ TEST <name>:
 
 - `python`: emits `tests/test_<name>.py` calling `run(**kwargs)` with
   `CLIO_STATE_FILE` pinned to a per-test tempfile (so runs don't pollute cwd).
-- `claude-cli`, `mcp-server`, `langgraph`, `claude-skill`: ignore TESTs in
-  v0.15 (compile cleanly, no test artefacts).
+- `claude-cli`, `mcp-server`, `langgraph`, `claude-skill`, `claude-workflow`:
+  ignore TESTs (compile cleanly, no test artefacts).
 
 **Validation:** the referenced FLOW must exist in the same source. Duplicate
 TEST names are rejected at IR build time. WITH-kwargs vs flow-signature
@@ -1073,6 +1075,9 @@ same STEP is a compile error (redundant double-abort).
 - **mcp-server** ✓ — async mirror with `_session=_session` threading.
 - **claude-skill** ✓ — RESCUE body emitted as a helper script invoked from main.
 - **go** ✓ — RESCUE body emitted as a `rescue<Step>()` helper func (v0.23).
+- **claude-workflow** ✓ — the protected step is wrapped in `try` / `catch`, the
+  body renders inside the `catch`, and `RESUME` binds the fallback value under the
+  rescued step's `GIVES` key so the chain continues (v0.25).
 - **swift** ✗ — rejects at compile time (deferred to Phase 5); use `--target python` or `--target go`.
 - **langgraph** ✗ — rejects at compile time. Cyclic edges, state
   reducers, and multi-step branches all need to land together; planned
@@ -1323,8 +1328,9 @@ RESOURCES
 
 ## The `.clio/` sidecar convention (v0.19+)
 
-When `clio compile --target claude-skill` emits a skill, it also writes a
-`.clio/` directory inside the skill with two files:
+When `clio compile --target claude-skill` emits a skill — or `--target
+claude-workflow` emits a workflow script (v0.25) — it also writes a
+`.clio/` directory inside the output with two files:
 
 - `source.clio` — a verbatim, byte-identical copy of the input `.clio`.
 - `manifest.json` — CLIO version, emission timestamp, the source hash, and

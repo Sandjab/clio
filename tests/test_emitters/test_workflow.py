@@ -234,8 +234,11 @@ def test_on_fail_without_retry_does_not_warn_about_backoff():
 
 def test_contract_assert_is_not_enforced_and_says_so():
     """The JSON Schema (types, ranges, enums) IS enforced by the host; the ASSERT
-    predicate is not rendered. Five other targets drop it silently — this one
-    warns."""
+    predicate is not rendered. This target WARNS rather than dropping it in
+    silence — the author's `ASSERT` is the one guarantee they wrote by hand, and a
+    guarantee that quietly stops holding is worse than one that was never offered.
+    (python, go and swift do enforce it, through an `x-clio-assert` walker in their
+    emitted validators; there is no validator here to carry one.)"""
     contract = ContractIR(
         name="Verdict",
         json_schema={"type": "object", "properties": {"ok": {"type": "boolean"}}},
@@ -1971,3 +1974,38 @@ def test_readme_never_warns_about_a_degradation_the_compiler_did_not(fixture, fl
     documented = {code for code in codes if code in readme}
 
     assert documented == warned
+
+
+# ---------------------------------------------------------------------------
+# Task 12 — the shipped example
+# ---------------------------------------------------------------------------
+
+
+def test_example_parallel_review_fans_out_for_real(tmp_path):
+    """examples/parallel_review.clio IS this target's argument, so the test is that
+    the argument holds: both FOR EACH … PARALLEL blocks must reach the host's
+    fan-out primitive.
+
+    Serialize them into `for…of` — which is exactly what claude-skill does, with a
+    warning — and the example still compiles, still passes `node --check`, still
+    reads plausibly, and demonstrates nothing at all. That failure is invisible to
+    every other assertion in this file, which is why the count is asserted here.
+
+    `parallel()` and not `pipeline()`: the IR builder refuses a PARALLEL body with
+    more than one call for ANY source (builder.py:2043, "exactly one step or
+    sub-flow call in v1"), so no .clio file can express the multi-stage body that
+    pipeline() renders. The example fans out TWICE instead — review, then triage —
+    which is the multi-step-per-item shape the language can actually state.
+    """
+    from clio.cli import main
+
+    rc = main(["compile", "examples/parallel_review.clio",
+               "--target", "claude-workflow", "--output", str(tmp_path)])
+    assert rc == 0
+
+    src = (tmp_path / "parallel-review.workflow.js").read_text()
+    assert src.count("await parallel(") == 2
+    assert "for (const f of" not in src
+    assert "for (const d of" not in src
+    assert "state['drafts'] =" in src and "state['notes'] =" in src
+    assert_valid_js(src, tmp_path)

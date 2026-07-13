@@ -247,7 +247,7 @@ A **bridge target** is an emitter whose primary value is not production deployme
 
 **Pre-ship conditions — all satisfied.**
 1. ✅ `python` shipped W2 short-term (structured JSON-line logging via `CLIO_LOG=1`) and W5 short-term (`--from-step N` flag on emitted projects) **before** langgraph instrumentation diverged. The canonical `python` target retains the full runtime; langgraph delegates explicitly.
-2. ✅ `docs/manual/04-targets.md` documents langgraph as one of six targets with its scope and trade-offs; `README.md` "current" line lists it without elevating it above `python`. CLI surface treats all targets symmetrically.
+2. ✅ `docs/manual/04-targets.md` documents langgraph as one of eight targets with its scope and trade-offs; `README.md` "current" line lists it without elevating it above `python`. CLI surface treats all targets symmetrically.
 3. ✅ `tests/test_emitters/test_langgraph.py` covers the linear-flow round-trip plus boundary rejections (FOR EACH, openai/bedrock/vertex, escalate/fallback). Bridge stays narrower than `python`, not wider.
 
 ### General principle for bridge targets

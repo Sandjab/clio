@@ -80,7 +80,7 @@ Each compilation target is a separate emitter module. Emitters are independent. 
 
 ## Compilation targets shipped
 
-Six emitters live in `clio/emitters/`. Each takes an IR and writes a runnable project for a different deployment shape:
+Eight emitters live in `clio/emitters/`. Each takes an IR and writes a runnable project for a different deployment shape:
 
 | Target | Output | Typical use |
 |---|---|---|
@@ -91,6 +91,7 @@ Six emitters live in `clio/emitters/`. Each takes an IR and writes a runnable pr
 | `claude-skill` | Claude Code skill directory (`SKILL.md` + `scripts/` + `prompts/` + `schemas/`) — emits a `.clio/` sidecar (v0.19) so `clio import` can recover the source verbatim | Ship a flow as a host-orchestrated skill, no runtime needed after install |
 | `go` | Go module (parity baseline with the Python target, anthropic-sdk-go v1) | Native Go deployment, no Python runtime |
 | `swift` | Swift package (SwiftPM, zero external SPM deps, URLSession client, macOS + Linux) | Native Swift deployment, no Python runtime, parallel FOR EACH via `withThrowingTaskGroup` |
+| `claude-workflow` | Claude Code Workflow script (one JS module: `export const meta` + `agent()` / `parallel()` / `phase()`) — emits a `.clio/` sidecar so `clio import` can recover the source | The only target where `FOR EACH … PARALLEL` really is parallel (each iteration is a concurrent subagent). Host-orchestrated: no API key, the Claude Code session is the runtime |
 
 Read `docs/COMPILATION_TARGETS.md` for the per-target contracts and `docs/manual/04-targets.md` for the cross-target feature matrix.
 
@@ -118,7 +119,7 @@ clio/
     resolver.py       # cross-file FROM…IMPORT resolution (v0.18)
     contracts.py      # type_to_json_schema (CONTRACT shape → JSON Schema)
     types.py          # IR type nodes
-  emitters/           # IR → target project (7 emitters)
+  emitters/           # IR → target project (8 emitters)
     base.py           # abstract emitter interface
     claude_cli.py     # target: claude-cli
     python.py         # target: python
@@ -127,11 +128,14 @@ clio/
     claude_skill.py   # target: claude-skill
     go.py             # target: go (v0.20)
     swift.py          # target: swift (phase 1+)
+    workflow.py       # target: claude-workflow (v0.25)
     _sidecar.py       # .clio/ sidecar writer + hash drift detection (v0.19)
     _python_helpers.py, _mcp_helpers.py, _langgraph_helpers.py,
     _claude_skill_helpers.py, _claude_cli_helpers.py, _shared_utils.py,
     _go_helpers.py, _go_flow_renderer.py, _go_step_renderers.py, _go_runtime_templates.py,
-    _swift_helpers.py, _swift_flow_renderer.py, _swift_step_renderers.py, _swift_runtime_templates.py
+    _swift_helpers.py, _swift_flow_renderer.py, _swift_step_renderers.py, _swift_runtime_templates.py,
+    _workflow_helpers.py, _workflow_flow_renderer.py, _workflow_step_renderers.py,
+    _workflow_expressions.py, _workflow_loops.py, _workflow_subflows.py, _workflow_errors.py
   runtime/            # snippets copied verbatim into emitted Python projects
     cache.py, logging.py, rest.py, sql.py, mcp_client.py, substitute.py, validate.py
   prompts/            # LLM system prompts loaded by gen/import (v0.19)
@@ -177,7 +181,7 @@ docs/
 ## How to run
 
 ```bash
-# Compile a .clio file to any of the seven targets
+# Compile a .clio file to any of the eight targets
 python -m clio compile examples/mvp.clio --target claude-cli   --output ./output
 python -m clio compile examples/mvp.clio --target python       --output ./py-out
 python -m clio compile examples/mvp.clio --target mcp-server   --output ./mcp-out
@@ -185,6 +189,7 @@ python -m clio compile examples/mvp.clio --target langgraph    --output ./lg-out
 python -m clio compile examples/skill_minimal.clio --target claude-skill --output ./skill-out
 python -m clio compile examples/mvp_go.clio --target go        --output ./go-out
 python -m clio compile examples/mvp_go.clio --target swift     --output ./swift-out
+python -m clio compile examples/parallel_review.clio --target claude-workflow --output ./wf-out
 
 # Validate a .clio file without emitting
 python -m clio check examples/mvp.clio

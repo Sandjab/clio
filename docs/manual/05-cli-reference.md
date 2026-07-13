@@ -11,7 +11,7 @@ clio compile <source.clio> --target <target> --output <dir>
 | Flag | Required | Default | Notes |
 |---|:-:|---|---|
 | `<source.clio>` | yes | — | Path to the `.clio` file. |
-| `--target` | yes | — | One of `claude-cli`, `python`, `mcp-server`, `langgraph`, `claude-skill`, `go`. |
+| `--target` | yes | — | One of `claude-cli`, `python`, `mcp-server`, `langgraph`, `claude-skill`, `go`, `swift`, `claude-workflow`. |
 | `--output` | yes | — | Directory to write the project into. Created if missing. **Overwrites** existing files. |
 | `--flow` | no  | — | (v0.15) Select a FLOW by name when the source declares more than one. Single-FLOW files don't need it. |
 
