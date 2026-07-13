@@ -28,6 +28,7 @@ from clio.ir.graph import (
     FieldIR,
     FlowGraph,
     FlowIR,
+    ForEachIR,
     IfBlockIR,
     ImplIR,
     MatchBlockIR,
@@ -1198,3 +1199,165 @@ def test_agents_inside_a_block_carry_the_blocks_phase(tmp_path):
     assert "phase('if:done')" in src           # declared once, at the top level
     assert "await check(state, 'if:done')" in src   # the nested call carries it
     assert body.count("phase('if:done')") <= 1, "phase() must not be called in-block"
+
+
+# ---------------------------------------------------------------------------
+# Task 8 — FOR EACH: a plain loop, parallel() for one call, pipeline() for a chain
+# ---------------------------------------------------------------------------
+
+
+def _foreach_graph(*, parallel: bool, n_steps: int, collector: str | None) -> FlowGraph:
+    """A flow whose only element is a FOR EACH over `docs`, with a 1- or 2-call body.
+
+    `score` reads `@verdict` — *review*'s GIVES field, i.e. the output of the stage
+    right before it. That is the whole point of a multi-stage body, and the only
+    kwarg shape pipeline() can serve: a stage callback receives (prevResult,
+    originalItem, index) and nothing else.
+    """
+    review = _step(name="review", takes=(FieldIR(name="doc", type=_STR),),
+                   gives=FieldIR(name="verdict", type=_STR))
+    score = _step(name="score", takes=(FieldIR(name="r", type=_STR),),
+                  gives=FieldIR(name="rating", type=_STR))
+    body: list[CallIR] = [CallIR(step_name="review", kwargs=(("doc", "@doc"),), line=6)]
+    if n_steps == 2:
+        body.append(CallIR(step_name="score", kwargs=(("r", "@verdict"),), line=7))
+    fe = ForEachIR(loop_var="doc", collection="docs", body=tuple(body), line=5,
+                   parallel=parallel, collector=collector)
+    flow = FlowIR(name="rev", chain=(fe,), rescues=(), line=1)
+    return FlowGraph(steps=(review, score), flow=flow, flows=(flow,))
+
+
+def test_sequential_for_each_is_a_plain_loop(tmp_path):
+    src = _emit(_foreach_graph(parallel=False, n_steps=1, collector=None), tmp_path)
+
+    assert "for (const doc of state['docs'])" in src
+    assert "await parallel(" not in src
+    assert "await pipeline(" not in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_the_loop_variable_is_bound_from_the_loop_not_from_state(tmp_path):
+    """swift_parallel.clio's `FOR EACH item IN items: classify(item=item)` builds the
+    kwarg ('item', '@item') — an identity ref, which OUTSIDE a loop means "already
+    in state under that key" and lets the call site pass `state` untouched. Inside
+    a loop it means the exact opposite: the loop variable is a JS binding and never
+    a state key, so state['item'] is undefined and every item would be classified
+    on nothing — at run time, with no syntax error to catch it."""
+    src = _emit_fixture("swift_parallel.clio", tmp_path)
+
+    assert "{ ...state, 'item': item }" in src
+
+
+def test_parallel_for_each_with_one_step_uses_parallel(tmp_path):
+    """A single-call body: parallel() and pipeline() are equivalent; use parallel()."""
+    src = _emit(_foreach_graph(parallel=True, n_steps=1, collector="reviews"), tmp_path)
+
+    assert "await parallel(" in src
+    assert "state['reviews'] =" in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_parallel_is_handed_thunks_not_already_running_promises(tmp_path):
+    """parallel() takes THUNKS — `(doc) => () => review(…)`. Dropping the inner arrow
+    (`.map((doc) => review(doc))`) starts every call during the map and hands
+    parallel() a list of promises that are already in flight: the concurrency limit
+    it exists to enforce would be bypassed, and the emitted text would still look
+    plausible."""
+    src = _emit(_foreach_graph(parallel=True, n_steps=1, collector="reviews"), tmp_path)
+
+    assert "(doc) => () => review(" in src
+
+
+def test_parallel_for_each_with_several_steps_uses_pipeline(tmp_path):
+    """A multi-step body is a per-item stage chain — pipeline() runs each item
+    through all stages with NO barrier between them. parallel() would force one,
+    idling fast items behind the slowest of each stage. The Workflow tool's own
+    guidance is: default to pipeline()."""
+    src = _emit(_foreach_graph(parallel=True, n_steps=2, collector="scores"), tmp_path)
+
+    assert "await pipeline(" in src
+    assert "await parallel(" not in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_a_pipeline_stage_reads_its_predecessor_from_prev_not_from_state(tmp_path):
+    """`score(r=@verdict)` reads *review*'s GIVES. Inside a pipeline that value is
+    the stage callback's `prevResult` — it is NOT in state, and it must not be: the
+    items run concurrently, so writing each one's output into the shared state key
+    would race. A renderer that emitted state['verdict'] here would compile, parse,
+    and score every document on `undefined`."""
+    src = _emit(_foreach_graph(parallel=True, n_steps=2, collector="scores"), tmp_path)
+
+    assert "(doc) => review({ ...state, 'doc': doc }, 'each:docs')" in src
+    assert "(prev, doc) => score({ ...state, 'r': prev }, 'each:docs')" in src
+    assert "state['verdict']" not in src
+
+
+def test_a_failed_item_does_not_flow_into_the_collector(tmp_path):
+    """A thunk that throws resolves to `null` in the result array — parallel() and
+    pipeline() never reject. Unfiltered, those nulls land in state[collector] and
+    fail somewhere else, later.
+
+    Filtered on null/undefined and NOT with `.filter(Boolean)`: a step that GIVES a
+    bool or a str legitimately produces `false` / `''`, and Boolean would silently
+    drop those successful items alongside the failed ones."""
+    src = _emit(_foreach_graph(parallel=True, n_steps=1, collector="reviews"), tmp_path)
+
+    assert "filter((r) => r !== null && r !== undefined)" in src
+    assert "filter(Boolean)" not in src
+
+
+def test_parallel_agents_carry_phase_via_opts_not_the_global(tmp_path):
+    """phase() is global state and racy inside parallel()/pipeline() stages — the
+    last writer wins. Agents spawned there receive `phase` through agent({phase}),
+    which is what the step wrapper's `phaseName` parameter carries. The global moves
+    once, at the top level."""
+    src = _emit(_foreach_graph(parallel=True, n_steps=2, collector="scores"), tmp_path)
+
+    assert re.findall(r"^phase\('([^']+)'\)", src, re.M) == ["each:docs"]
+    # Both stages take the phase as an ARGUMENT (the wrapper hands it to
+    # agent({phase})); neither calls the global from inside the pipeline.
+    assert src.count(", 'each:docs')") == 2
+
+
+def test_a_condition_on_the_loop_variable_reads_the_loop_variable(tmp_path):
+    """swift_foreach_seq.clio: `FOR EACH a IN assessments: MATCH a.level` builds
+    MatchBlockIR(state_field='a') — and `a` is the LOOP VARIABLE, not a state key.
+    state['a'] is undefined, `undefined.level` throws, and a switch on it would take
+    no arm at all. The renderer has to know what is in scope."""
+    src = _emit_fixture("swift_foreach_seq.clio", tmp_path)
+
+    assert "switch (a.level) {" in src
+    assert "if (b.level === 'high') {" in src
+    assert "state['a']" not in src and "state['b']" not in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_a_nested_loop_iterates_the_enclosing_loop_variable(tmp_path):
+    """`FOR EACH b IN a` nested in `FOR EACH a IN rows`: the inner collection is the
+    outer loop's variable, not a state key. state['a'] would be undefined, and
+    `for (const b of undefined)` throws."""
+    tag = _step(name="tag", takes=(FieldIR(name="cell", type=_STR),),
+                gives=FieldIR(name="tagged", type=_STR))
+    inner = ForEachIR(loop_var="b", collection="a", line=4, parallel=False,
+                      body=(CallIR(step_name="tag", kwargs=(("cell", "@b"),), line=5),))
+    outer = ForEachIR(loop_var="a", collection="rows", body=(inner,), line=3,
+                      parallel=False)
+    flow = FlowIR(name="grid", chain=(outer,), rescues=(), line=1)
+
+    src = _emit(FlowGraph(steps=(tag,), flow=flow, flows=(flow,)), tmp_path)
+
+    assert "for (const a of state['rows']) {" in src
+    assert "for (const b of a) {" in src
+    assert "{ ...state, 'cell': b }" in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_parallel_fixture_emits_valid_js(tmp_path):
+    """The real thing, end to end: `load(file="in.csv") -> FOR EACH item IN items
+    PARALLEL AS labels: classify(item=item)`."""
+    src = _emit_fixture("swift_parallel.clio", tmp_path)
+
+    assert "await parallel(" in src
+    assert "state['labels'] =" in src
+    assert_valid_js(src, tmp_path)
