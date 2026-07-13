@@ -1,0 +1,38 @@
+STEP s1
+  TAKES: a: str
+  GIVES: b: str
+  MODE:  exact
+
+STEP s2
+  TAKES: b: str
+  GIVES: c: str
+  MODE:  exact
+
+STEP s3
+  TAKES: c: str
+  GIVES: d: str
+  MODE:  judgment
+
+FLOW level_c
+  TAKES: c: str
+  GIVES: d: str
+  s3(c=c)
+
+FLOW level_b
+  TAKES: b: str
+  GIVES: d: str
+  s2(b=b) -> level_c(c=c)
+
+FLOW level_a
+  TAKES: a: str
+  GIVES: d: str
+  s1(a=a) -> level_b(b=b)
+
+FLOW pipeline
+  TAKES: a: str
+  GIVES: d: str
+  level_a(a=a)
+
+RESOURCES
+  target: claude-workflow
+  models: [haiku]

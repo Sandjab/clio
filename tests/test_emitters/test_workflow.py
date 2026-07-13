@@ -26,6 +26,7 @@ from clio.ir.graph import (
     ConditionIR,
     ContractIR,
     FieldIR,
+    FlowCallIR,
     FlowGraph,
     FlowIR,
     ForEachIR,
@@ -54,18 +55,25 @@ def _emit(graph: FlowGraph, tmp_path: Path) -> str:
     return scripts[0].read_text()
 
 
-def _emit_fixture(name: str, tmp_path: Path) -> str:
+def _emit_fixture(name: str, tmp_path: Path, flow: str | None = None) -> str:
     """Compile a real fixture from tests/fixtures/ and return the script text.
 
     Later tasks use this rather than hand-building IR: the `.clio` grammar has
     traps, and these fixtures already parse. Assert on structure, not on step
     names you have not read.
+
+    `flow` selects the entry FLOW. A multi-FLOW source needs it: the IR builder
+    leaves `graph.flow` at None there, and this target refuses to guess
+    (E_WF_006). Every sub-flow fixture is multi-FLOW by construction.
     """
     from clio.cli import main
 
     out = tmp_path / "out"
-    rc = main(["compile", f"tests/fixtures/{name}",
-               "--target", "claude-workflow", "--output", str(out)])
+    argv = ["compile", f"tests/fixtures/{name}",
+            "--target", "claude-workflow", "--output", str(out)]
+    if flow is not None:
+        argv += ["--flow", flow]
+    rc = main(argv)
     assert rc == 0, f"{name} failed to compile"
     script = next(iter(out.glob("*.workflow.js")))
     return script.read_text()
@@ -1360,4 +1368,152 @@ def test_parallel_fixture_emits_valid_js(tmp_path):
 
     assert "await parallel(" in src
     assert "state['labels'] =" in src
+    assert_valid_js(src, tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Task 9 — sub-flows, inlined as local async functions
+# ---------------------------------------------------------------------------
+
+
+def test_sub_flows_are_inlined_not_nested(tmp_path):
+    """workflow_subflow.clio chains FLOW pipeline -> level_a -> level_b -> level_c:
+    three levels of nesting, which is exactly what `workflow({scriptPath})` cannot
+    express (the tool caps nesting at one level: a workflow() inside a child
+    throws). Inlining each called flow as a local async function sidesteps the cap
+    and keeps the script self-contained (§4.2)."""
+    src = _emit_fixture("workflow_subflow.clio", tmp_path, flow="pipeline")
+
+    assert "async function flow_" in src
+    assert "workflow(" not in src, "must inline, not delegate to a nested workflow()"
+    assert_valid_js(src, tmp_path)
+
+
+def test_every_reachable_sub_flow_gets_one_function(tmp_path):
+    src = _emit_fixture("workflow_subflow.clio", tmp_path, flow="pipeline")
+
+    for name in ("level_a", "level_b", "level_c"):
+        assert f"async function flow_${name}(state, phase$) {{" in src
+    # The entry flow is the script body, not a function: emitting it as one too
+    # would leave a function nothing calls.
+    assert "async function flow_$pipeline" not in src
+
+
+def test_sub_flow_publishes_its_gives_into_the_parent_state(tmp_path):
+    """A sub-flow's declared GIVES land as TOP-LEVEL parent state keys, exactly as
+    python (`state.update(run_x(...))`, python.py:686-693) and go emit them.
+
+    This is what makes a downstream read resolve: in `s2(b=b) -> level_c(c=c)` the
+    `->` sugar binds level_c's kwarg from s2's GIVES, and level_b's own GIVES `d`
+    is produced INSIDE level_c. Binding the result under the call-site name
+    (`state['level_c'] = …`) instead would leave `state['d']` undefined — JS reads
+    it silently, so the flow would return `{d: undefined}` rather than fail."""
+    src = _emit_fixture("workflow_subflow.clio", tmp_path, flow="pipeline")
+
+    assert "Object.assign(state, await flow_$level_a(" in src
+    assert "state['level_a']" not in src
+    assert "  return { 'd': state['d'] }" in src
+
+
+def test_sub_flow_call_never_passes_the_parent_state_object(tmp_path):
+    """The callee WRITES into the object it is handed (every step in its chain
+    binds its GIVES there), unlike a step function, which only reads. Handing it
+    `state` itself would leak the sub-flow's intermediate keys into the parent —
+    clobbering a parent key of the same name — and, inside parallel(), concurrent
+    items would race on the shared object. So the input is always a fresh copy,
+    even when every kwarg is an identity ref and the copy looks like a no-op."""
+    src = _emit_fixture("workflow_subflow.clio", tmp_path, flow="pipeline")
+
+    assert "await flow_$level_a({ ...state }" in src
+    # Anchored on `await `: the DECLARATION reads `flow_$level_a(state, phase$)`,
+    # where `state` is the parameter — it is the CALL that must not hand over the
+    # parent's object. A step call may (and does): it only reads.
+    assert "await flow_$level_a(state," not in src
+    assert "await s1(state, phase$)" in src
+
+
+def test_sub_flow_steps_are_emitted(tmp_path):
+    """The entry flow calls no step at all — every step lives in a sub-flow. The
+    step collector must follow FlowCallIR boundaries, or the script would call
+    functions it never declares."""
+    src = _emit_fixture("workflow_subflow.clio", tmp_path, flow="pipeline")
+
+    assert "function s1(state) {" in src          # exact stub
+    assert "function s2(state) {" in src
+    assert "async function s3(state, phaseName) {" in src   # judgment
+    assert_valid_js(src, tmp_path)
+
+
+def test_agent_inside_a_sub_flow_carries_the_call_site_phase(tmp_path):
+    """`phase()` is only moved at the top level of the entry flow (§4.3), and
+    `meta.phases` declares exactly those titles. A sub-flow is called from a phase
+    it does not know at emit time — the same function can be called from two sites
+    — so the phase travels as an argument and is threaded down to the agent, rather
+    than being frozen into a literal that could name an undeclared phase."""
+    src = _emit_fixture("workflow_subflow.clio", tmp_path, flow="pipeline")
+
+    # Top level: the literal, which is a phase meta declares.
+    assert "phase('level_a')" in src
+    assert "Object.assign(state, await flow_$level_a({ ...state }, 'level_a'))" in src
+    # Inside a sub-flow: the parameter, propagated to the callee and to the agent.
+    assert "Object.assign(state, await flow_$level_c({ ...state }, phase$))" in src
+    assert "await s3(state, phase$)" in src        # the judgment step, 3 levels deep
+    assert "phase: phaseName," in src              # …which hands it to agent()
+    # Exactly one phase() call: the entry flow's single top-level element. A
+    # sub-flow never moves the global (it does not own a phase).
+    assert src.count("phase('") == 1
+
+
+def test_unreachable_flow_gets_no_function(tmp_path):
+    """workflow_two_flows.clio declares alpha and beta, neither calling the other.
+    Compiling alpha must not emit a function for beta: dead code in a file the
+    author has to read and fill in."""
+    src = _emit_fixture("workflow_two_flows.clio", tmp_path, flow="alpha")
+
+    assert "async function flow_" not in src
+    assert "summarize" not in src, "beta's step must not be emitted either"
+    assert_valid_js(src, tmp_path)
+
+
+def _flow_calling(name: str, callee: str) -> FlowIR:
+    return FlowIR(
+        name=name, rescues=(), line=1,
+        chain=(FlowCallIR(flow_name=callee, kwargs=(), line=2),),
+    )
+
+
+def test_self_recursive_flow_is_refused(tmp_path):
+    """E_WF_007. The IR builder rejects flow recursion for any source it parses
+    (builder.py:976-1009), so this graph is hand-built — the emitter is a public
+    seam, and its own inliner is what would break: a flow calling itself inlines to
+    a function calling itself, which overflows the stack at run time rather than
+    failing at compile time."""
+    loop = _flow_calling("a", "a")
+    graph = FlowGraph(steps=(), flow=loop, flows=(loop,))
+
+    with pytest.raises(ValueError, match="E_WF_007"):
+        _emit(graph, tmp_path)
+
+
+def test_flow_call_cycle_is_refused(tmp_path):
+    """Same refusal for an indirect cycle: a -> b -> a."""
+    a, b = _flow_calling("a", "b"), _flow_calling("b", "a")
+    graph = FlowGraph(steps=(), flow=a, flows=(a, b))
+
+    with pytest.raises(ValueError, match="E_WF_007"):
+        _emit(graph, tmp_path)
+
+
+def test_sub_flow_as_parallel_body_collects_its_gives_objects(tmp_path):
+    """`FOR EACH u IN urls PARALLEL AS results: enrich(url=u)` — the body is a
+    sub-flow call, which the IR builder explicitly allows (builder.py:2057-2069:
+    "the collector receives a list of the sub-flow's GIVES dicts at runtime").
+
+    The thunk is the inlined function, so the collector fills with `{summary: …}`
+    objects — no extraction, which is what that IR rule says a collector holds."""
+    src = _emit_fixture("workflow_subflow_parallel.clio", tmp_path, flow="batch")
+
+    assert "state['results'] = (await parallel(" in src
+    assert "state['urls'].map((u) => () => flow_$enrich({ ...state, 'url': u }," in src
+    assert "workflow(" not in src
     assert_valid_js(src, tmp_path)

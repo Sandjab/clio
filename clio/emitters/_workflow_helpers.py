@@ -55,6 +55,12 @@ E_WF_006 = (
     "target: claude-workflow emits exactly one script, and compiling the first "
     "declared FLOW would silently drop the others. Re-run with --flow <name>."
 )
+E_WF_007 = (
+    "E_WF_007: FLOW recursion — target claude-workflow inlines every sub-flow as a "
+    "local function in the same script (§4.2), so a FLOW that calls itself, "
+    "directly or through a cycle, would inline into a function that calls itself "
+    "and overflow the stack at run time."
+)
 
 # ---------------------------------------------------------------------------
 # Compile-time degradation warnings (the feature still compiles, with less)
@@ -316,6 +322,11 @@ def validate_graph_for_workflow(
     TEST blocks are deliberately NOT refused: they are inert here (only the
     python target emits pytest files), and refusing them would reject a source
     over a block this target simply ignores.
+
+    One refusal is NOT here: E_WF_007 (FLOW recursion) is raised by
+    _workflow_subflows.reachable_flows, which owns the flow-call graph and is the
+    only walk that can see a back edge. render_script calls it before it emits a
+    line, so emit() still refuses a recursive source before writing a file.
     """
     entry_flow(graph)  # E_WF_001 (no FLOW) / E_WF_006 (several, none selected)
 

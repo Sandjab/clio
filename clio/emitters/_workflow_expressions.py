@@ -145,6 +145,14 @@ def step_input(kwargs: tuple[tuple[str, object], ...], bindings: Bindings) -> st
     is an identity ref to the LOOP VARIABLE, which is not in state at all — passing
     `state` untouched there would classify every item on `undefined`.
     """
+    overlays = _overlays(kwargs, bindings)
+    if not overlays:
+        return "state"
+    return "{ ...state, " + ", ".join(overlays) + " }"
+
+
+def _overlays(kwargs: tuple[tuple[str, object], ...], bindings: Bindings) -> list[str]:
+    """The `k: v` fragments that shadow state for one call site."""
     overlays: list[str] = []
     for name, value in kwargs:
         if isinstance(value, str) and value.startswith("@"):
@@ -157,8 +165,30 @@ def step_input(kwargs: tuple[tuple[str, object], ...], bindings: Bindings) -> st
             # else: an identity ref to a state key — already in state under `name`.
         else:
             overlays.append(f"{js_string(name)}: {js_value(value)}")
+    return overlays
+
+
+def flow_input(kwargs: tuple[tuple[str, object], ...], bindings: Bindings) -> str:
+    """The object an INLINED SUB-FLOW reads its TAKES from — always a fresh copy.
+
+    This is step_input without its shortcut, and the difference is load-bearing. A
+    step function only READS the object it is handed, so passing `state` itself
+    when no kwarg shadows anything is free. A sub-flow function WRITES into it:
+    every step in its chain binds its GIVES there. Handing it the parent's own
+    state would
+
+      * leak the sub-flow's intermediate keys into the parent, clobbering a parent
+        key that happens to share a name — silently, since JS just overwrites;
+      * race inside parallel() / pipeline(), where concurrent items would each be
+        writing into that one shared object.
+
+    So the copy is emitted even when it looks like a no-op (`{ ...state }`). The
+    sub-flow's declared GIVES come back through its return value, and only those:
+    render_subflow_js builds the returned object from FlowIR.gives.
+    """
+    overlays = _overlays(kwargs, bindings)
     if not overlays:
-        return "state"
+        return "{ ...state }"
     return "{ ...state, " + ", ".join(overlays) + " }"
 
 
@@ -172,9 +202,9 @@ def loop_binding(loop_var: str, bindings: Bindings) -> dict[str, str]:
 
 
 def call_js(
-    call: CallIR, steps_by_name: dict[str, StepIR], phase: str, bindings: Bindings
+    call: CallIR, steps_by_name: dict[str, StepIR], phase_js: str, bindings: Bindings
 ) -> str:
-    """`await <step>(<input>, '<phase>')` — the call expression, unbound.
+    """`await <step>(<input>, <phase>)` — the call expression, unbound.
 
     `await` even on an exact step, whose stub is a plain `function`: awaiting a
     non-promise yields the value, and the day an author makes a stub async the call
@@ -183,11 +213,16 @@ def call_js(
     The phase travels as an ARGUMENT — the step wrapper hands it to agent({phase})
     — and never as a `phase()` call from inside a block: that global is racy under
     parallel() / pipeline(), where the last writer wins (§4.3).
+
+    `phase_js` is a JS EXPRESSION, not a title: a string literal at the top level of
+    the entry flow, and the `phase$` PARAMETER inside an inlined sub-flow (Task 9),
+    which is called from a phase it cannot know at emit time. Freezing a literal
+    there would name a phase `meta.phases` never declared.
     """
     step = steps_by_name[call.step_name]
     return (
         f"await {js_identifier(step.name)}"
-        f"({step_input(call.kwargs, bindings)}, {js_string(phase)})"
+        f"({step_input(call.kwargs, bindings)}, {phase_js})"
     )
 
 

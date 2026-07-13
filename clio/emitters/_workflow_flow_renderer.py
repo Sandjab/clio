@@ -10,9 +10,13 @@ split is by responsibility rather than by size:
   * _workflow_loops — FOR EACH, sequential and parallel. It renders its own body,
     which may contain anything, so it takes `_render_body` as a parameter rather
     than importing this module back.
+  * _workflow_subflows — the FLOW→FLOW call graph: which flows this script must
+    inline, in what order, and the refusal (E_WF_007) that inlining a recursive
+    flow would otherwise defer to a stack overflow at run time. Analysis only, so
+    it renders nothing and this module can import it.
 
-Sub-flows (T9) and ON_FAIL / RESCUE (T10) hang off `_render_item`, the single
-dispatch point.
+A sub-flow is emitted here (render_subflow_js) because it is a body like any
+other. ON_FAIL / RESCUE (T10) hangs off `_render_item`, the single dispatch point.
 """
 from __future__ import annotations
 
@@ -21,12 +25,15 @@ from clio.emitters._workflow_expressions import (
     Bindings,
     call_js,
     condition_js,
+    flow_input,
     state_access,
 )
 from clio.emitters._workflow_helpers import js_string, phase_titles
 from clio.emitters._workflow_loops import render_foreach
+from clio.emitters._workflow_subflows import PHASE_PARAM, subflow_fn_name
 from clio.ir.graph import (
     CallIR,
+    FlowCallIR,
     FlowIR,
     ForEachIR,
     IfBlockIR,
@@ -41,7 +48,7 @@ ChainItem = object
 
 
 def _render_call(
-    call: CallIR, steps_by_name: dict[str, StepIR], phase: str, bindings: Bindings
+    call: CallIR, steps_by_name: dict[str, StepIR], phase_js: str, bindings: Bindings
 ) -> list[str]:
     """`state['<gives>'] = await <step>(…)`.
 
@@ -50,39 +57,58 @@ def _render_call(
     scrutinee. python.py:635 and _swift_flow_renderer.py:264 key state the same way.
     """
     step = steps_by_name[call.step_name]
-    invocation = call_js(call, steps_by_name, phase, bindings)
+    invocation = call_js(call, steps_by_name, phase_js, bindings)
     if step.gives is None:
         return [invocation]  # a side-effect step: nothing to bind
     return [f"state[{js_string(step.gives.name)}] = {invocation}"]
 
 
+def _render_flow_call(call: FlowCallIR, phase_js: str, bindings: Bindings) -> list[str]:
+    """`Object.assign(state, await flow_$<name>(<input>, <phase>))`.
+
+    The merge, and not `state['<call site>'] = …`, because a sub-flow's declared
+    GIVES are published as TOP-LEVEL keys of the parent state — the convention
+    python (`state.update(run_x(...))`, python.py:686-693) and go already emit, and
+    the one the IR builder itself assumes when it resolves a downstream `@field`
+    against the sub-flow's signature. Binding the whole result under the call-site
+    name instead would leave every one of those reads on `undefined`: JS returns it
+    silently, so `s2(b=b) -> level_c(c=c)` would run with `c` unset rather than
+    fail.
+
+    `flow_input` and not `step_input`: the callee writes into the object it is
+    handed, so it must never be the parent's own state.
+    """
+    fn = subflow_fn_name(call.flow_name)
+    return [f"Object.assign(state, await {fn}({flow_input(call.kwargs, bindings)}, {phase_js}))"]
+
+
 def _render_body(
     body: tuple[object, ...],
     steps_by_name: dict[str, StepIR],
-    phase: str,
+    phase_js: str,
     indent: str,
     bindings: Bindings,
 ) -> list[str]:
-    """The lines of a block body, one indent level deeper. `phase` is passed
+    """The lines of a block body, one indent level deeper. `phase_js` is passed
     through unchanged: §4.3 moves the global only at the top level."""
     lines: list[str] = []
     for sub in body:
-        lines += _render_item(sub, steps_by_name, phase, indent + "  ", bindings)
+        lines += _render_item(sub, steps_by_name, phase_js, indent + "  ", bindings)
     return lines
 
 
 def _render_if(
     item: IfBlockIR,
     steps_by_name: dict[str, StepIR],
-    phase: str,
+    phase_js: str,
     indent: str,
     bindings: Bindings,
 ) -> list[str]:
     lines = [f"{indent}if ({condition_js(item.condition, bindings)}) {{"]
-    lines += _render_body(item.then_body, steps_by_name, phase, indent, bindings)
+    lines += _render_body(item.then_body, steps_by_name, phase_js, indent, bindings)
     if item.else_body:
         lines.append(f"{indent}}} else {{")
-        lines += _render_body(item.else_body, steps_by_name, phase, indent, bindings)
+        lines += _render_body(item.else_body, steps_by_name, phase_js, indent, bindings)
     lines.append(f"{indent}}}")
     return lines
 
@@ -90,7 +116,7 @@ def _render_if(
 def _render_match(
     item: MatchBlockIR,
     steps_by_name: dict[str, StepIR],
-    phase: str,
+    phase_js: str,
     indent: str,
     bindings: Bindings,
 ) -> list[str]:
@@ -108,7 +134,7 @@ def _render_match(
     for arm in item.cases:
         label = "default:" if arm.value is None else f"case {js_string(arm.value)}:"
         lines.append(f"{indent}  {label}")
-        lines += _render_body(arm.body, steps_by_name, phase, indent + "  ", bindings)
+        lines += _render_body(arm.body, steps_by_name, phase_js, indent + "  ", bindings)
         lines.append(f"{indent}    break")
     lines.append(f"{indent}}}")
     return lines
@@ -117,7 +143,7 @@ def _render_match(
 def _render_while(
     item: WhileBlockIR,
     steps_by_name: dict[str, StepIR],
-    phase: str,
+    phase_js: str,
     indent: str,
     bindings: Bindings,
 ) -> list[str]:
@@ -139,7 +165,7 @@ def _render_while(
         f"{indent}while (({cond}) && {counter} < {item.max_iters}) {{",
         f"{indent}  {counter}++",
     ]
-    lines += _render_body(item.body, steps_by_name, phase, indent, bindings)
+    lines += _render_body(item.body, steps_by_name, phase_js, indent, bindings)
     lines.append(f"{indent}}}")
     return lines
 
@@ -147,30 +173,34 @@ def _render_while(
 def _render_item(
     item: ChainItem,
     steps_by_name: dict[str, StepIR],
-    phase: str,
+    phase_js: str,
     indent: str,
     bindings: Bindings = NO_BINDINGS,
 ) -> list[str]:
-    """Dispatch one chain node. Tasks 9-10 add their branches here; `phase` is
+    """Dispatch one chain node. Task 10 adds its branches here; `phase_js` is
     threaded down so an agent spawned inside a block carries the block's phase
     (§4.3) instead of moving the racy global."""
     if isinstance(item, CallIR):
         return [
-            indent + line for line in _render_call(item, steps_by_name, phase, bindings)
+            indent + line for line in _render_call(item, steps_by_name, phase_js, bindings)
+        ]
+    if isinstance(item, FlowCallIR):
+        return [
+            indent + line for line in _render_flow_call(item, phase_js, bindings)
         ]
     if isinstance(item, IfBlockIR):
-        return _render_if(item, steps_by_name, phase, indent, bindings)
+        return _render_if(item, steps_by_name, phase_js, indent, bindings)
     if isinstance(item, MatchBlockIR):
-        return _render_match(item, steps_by_name, phase, indent, bindings)
+        return _render_match(item, steps_by_name, phase_js, indent, bindings)
     if isinstance(item, WhileBlockIR):
-        return _render_while(item, steps_by_name, phase, indent, bindings)
+        return _render_while(item, steps_by_name, phase_js, indent, bindings)
     if isinstance(item, ForEachIR):
         return render_foreach(
-            item, steps_by_name, phase, indent, bindings, _render_body
+            item, steps_by_name, phase_js, indent, bindings, _render_body
         )
     raise NotImplementedError(
         f"claude-workflow: {type(item).__name__} is not rendered yet "
-        "(sub-flows: Task 9 — ON_FAIL / RESCUE: Task 10)"
+        "(ON_FAIL / RESCUE: Task 10)"
     )
 
 
@@ -218,5 +248,36 @@ def render_flow_js(flow: FlowIR, steps_by_name: dict[str, StepIR]) -> str:
     for title, item in zip(phase_titles(flow), flow.chain, strict=True):
         lines.append("")
         lines.append(f"phase({js_string(title)})")
-        lines += _render_item(item, steps_by_name, title, "")
+        lines += _render_item(item, steps_by_name, js_string(title), "")
+    return "\n".join(lines) + "\n"
+
+
+def render_subflow_js(flow: FlowIR, steps_by_name: dict[str, StepIR]) -> str:
+    """A sub-flow, inlined as a local `async function` (§4.2).
+
+    Not `workflow({scriptPath})`: that call caps nesting at one level and CLIO
+    nests arbitrarily — see _workflow_subflows for the full reasoning.
+
+    Three things the signature encodes:
+
+      * `state` is the caller's COPY, never its object (flow_input), so the writes
+        this body makes — every step binds its GIVES into `state` — stay local;
+      * `phase$` is a PARAMETER, so the agents spawned in here report the phase of
+        the CALL SITE. A sub-flow does not know that phase at emit time (the same
+        function can be called from two sites), and only the top level of the entry
+        flow may move the `phase()` global (§4.3) — so no phase() call is emitted
+        here, and none of the titles in meta.phases is ever invented;
+      * the return value is exactly the flow's declared GIVES, read back out of the
+        local state. The call site merges those into the parent state
+        (`Object.assign`), which is how a downstream `@field` read resolves — the
+        same convention python (`state.update(run_x(...))`) and go emit.
+    """
+    lines = [f"async function {subflow_fn_name(flow.name)}(state, {PHASE_PARAM}) {{"]
+    for item in flow.chain:
+        lines += _render_item(item, steps_by_name, PHASE_PARAM, "  ")
+    fields = ", ".join(
+        f"{js_string(g.name)}: state[{js_string(g.name)}]" for g in flow.gives
+    )
+    lines.append(f"  return {{ {fields} }}" if fields else "  return {}")
+    lines.append("}")
     return "\n".join(lines) + "\n"

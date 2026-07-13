@@ -763,7 +763,7 @@ Flow-level resources and defaults.
 
 ```
 RESOURCES
-  target:       claude-cli | python | mcp-server | langgraph | claude-skill | go | swift   # required
+  target:       claude-cli | python | mcp-server | langgraph | claude-skill | go | swift | claude-workflow   # required
   models:       [<model>, <model>, ...]         # required for the claude-cli target
   mcp_servers:  {<name>: <server-spec>, ...}    # MCP servers callable from impl.mcp_tool steps
   databases:    {<name>: <db-spec>, ...}        # databases callable from impl.sql steps

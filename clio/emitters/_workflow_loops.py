@@ -17,14 +17,16 @@ from collections.abc import Callable
 from clio.emitters._workflow_expressions import (
     Bindings,
     call_js,
+    flow_input,
     gives_of,
     loop_binding,
     read,
 )
 from clio.emitters._workflow_helpers import js_identifier, js_string
-from clio.ir.graph import CallIR, ForEachIR, StepIR
+from clio.emitters._workflow_subflows import subflow_fn_name
+from clio.ir.graph import CallIR, FlowCallIR, ForEachIR, StepIR
 
-# `_render_body` of the flow renderer: (body, steps_by_name, phase, indent, bindings).
+# `_render_body` of the flow renderer: (body, steps_by_name, phase_js, indent, bindings).
 RenderBody = Callable[
     [tuple[object, ...], dict[str, StepIR], str, str, Bindings], list[str]
 ]
@@ -43,7 +45,7 @@ _DROP_FAILED = ".filter((r) => r !== null && r !== undefined)"
 def render_foreach(
     item: ForEachIR,
     steps_by_name: dict[str, StepIR],
-    phase: str,
+    phase_js: str,
     indent: str,
     bindings: Bindings,
     render_body: RenderBody,
@@ -59,12 +61,12 @@ def render_foreach(
     here: the parser refuses `AS` without `PARALLEL` (parser.py:2371-2375).
     """
     if item.parallel:
-        return _render_parallel(item, steps_by_name, phase, indent, bindings)
+        return _render_parallel(item, steps_by_name, phase_js, indent, bindings)
 
     var = js_identifier(item.loop_var)
     inner = loop_binding(item.loop_var, bindings)
     lines = [f"{indent}for (const {var} of {read(item.collection, bindings)}) {{"]
-    lines += render_body(item.body, steps_by_name, phase, indent, inner)
+    lines += render_body(item.body, steps_by_name, phase_js, indent, inner)
     lines.append(f"{indent}}}")
     return lines
 
@@ -72,7 +74,7 @@ def render_foreach(
 def _render_parallel(
     item: ForEachIR,
     steps_by_name: dict[str, StepIR],
-    phase: str,
+    phase_js: str,
     indent: str,
     bindings: Bindings,
 ) -> list[str]:
@@ -96,20 +98,30 @@ def _render_parallel(
         raise AssertionError(
             "unreachable: PARALLEL requires an AS binding (parser.py:2362-2366)"
         )
-    calls = [b for b in item.body if isinstance(b, CallIR)]
-    if len(calls) != len(item.body):
-        raise NotImplementedError(
-            f"claude-workflow: a PARALLEL FOR EACH body of sub-flow calls "
-            f"(line {item.line}) is rendered in Task 9"
-        )
 
     var = js_identifier(item.loop_var)
     items = read(item.collection, bindings)
     inner = loop_binding(item.loop_var, bindings)
     target = f"{indent}state[{js_string(item.collector)}] ="
 
+    if len(item.body) == 1 and isinstance(item.body[0], FlowCallIR):
+        return _render_parallel_subflow(
+            item.body[0], var, items, target, indent, phase_js, inner
+        )
+
+    calls = [b for b in item.body if isinstance(b, CallIR)]
+    if len(calls) != len(item.body):
+        raise NotImplementedError(
+            f"claude-workflow: a PARALLEL FOR EACH body that MIXES step calls and "
+            f"sub-flow calls (line {item.line}) is not rendered. A pipeline() stage "
+            f"receives the previous stage's return value, and the two kinds return "
+            f"different shapes — a step gives its GIVES value, an inlined sub-flow "
+            f"gives an object of its GIVES — so `prev` would mean two things in one "
+            f"chain. Split the FOR EACH, or wrap the steps in a sub-flow."
+        )
+
     if len(calls) == 1:
-        thunk = call_js(calls[0], steps_by_name, phase, inner).removeprefix("await ")
+        thunk = call_js(calls[0], steps_by_name, phase_js, inner).removeprefix("await ")
         return [
             f"{target} (await parallel(",
             f"{indent}  {items}.map(({var}) => () => {thunk}),",
@@ -120,10 +132,41 @@ def _render_parallel(
     for i, call in enumerate(calls):
         stage = _stage_bindings(calls, i, steps_by_name, inner)
         params = f"({var})" if i == 0 else f"(prev, {var})"
-        body = call_js(call, steps_by_name, phase, stage).removeprefix("await ")
+        body = call_js(call, steps_by_name, phase_js, stage).removeprefix("await ")
         lines.append(f"{indent}  {params} => {body},")
     lines.append(f"{indent})){_DROP_FAILED}")
     return lines
+
+
+def _render_parallel_subflow(
+    call: FlowCallIR,
+    var: str,
+    items: str,
+    target: str,
+    indent: str,
+    phase_js: str,
+    inner: Bindings,
+) -> list[str]:
+    """A sub-flow call as the PARALLEL body: `parallel(items.map(x => () => flow_$f(…)))`.
+
+    The IR builder allows exactly this (builder.py:2057-2069) and states what the
+    collector then holds: "a list of the sub-flow's GIVES dicts at runtime". The
+    inlined function returns precisely that object, so the thunk IS the call — no
+    field is extracted. (go extracts the lone GIVES field instead, because a Go
+    slice must have one static element type; JS has no such constraint, and
+    extracting here would silently drop the other fields of a multi-GIVES sub-flow.)
+
+    parallel(), not pipeline(): the body is a single stage. The thunk arrow is the
+    same load-bearing one as for a step call — parallel() takes THUNKS, and mapping
+    straight to the promise would start every sub-flow during the map, bypassing the
+    concurrency limit.
+    """
+    fn = subflow_fn_name(call.flow_name)
+    return [
+        f"{target} (await parallel(",
+        f"{indent}  {items}.map(({var}) => () => {fn}({flow_input(call.kwargs, inner)}, {phase_js})),",
+        f"{indent})){_DROP_FAILED}",
+    ]
 
 
 def _stage_bindings(

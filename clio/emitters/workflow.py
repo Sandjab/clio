@@ -4,7 +4,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from clio.emitters._workflow_flow_renderer import render_flow_js
+from clio.emitters._workflow_flow_renderer import render_flow_js, render_subflow_js
 from clio.emitters._workflow_helpers import (
     entry_flow,
     render_meta,
@@ -15,6 +15,7 @@ from clio.emitters._workflow_step_renderers import (
     render_exact_step_js,
     render_judgment_step_js,
 )
+from clio.emitters._workflow_subflows import reachable_flows
 from clio.emitters.base import BaseEmitter
 from clio.ir.graph import (
     CallIR,
@@ -38,18 +39,22 @@ _HEADER = """\
 
 
 def _collect_reachable_steps(
-    flow: FlowIR, steps_by_name: dict[str, StepIR]
+    flows: tuple[FlowIR, ...], steps_by_name: dict[str, StepIR]
 ) -> list[StepIR]:
-    """Every step reachable from the entry flow, first-seen order, no duplicates.
+    """Every step reachable from these flows, first-seen order, no duplicates.
 
-    Scoped to the entry flow — unlike swift.py:38, which walks graph.flows. This
-    target emits one script for exactly one FLOW (E_WF_006), so a step that only
-    another FLOW calls has no call site here: emitting its function would leave
-    dead code in the file the author has to read and fill in.
+    `flows` is the entry flow plus the sub-flows inlined into the same script —
+    never `graph.flows`, unlike swift.py:38. This target emits one script for
+    exactly one FLOW (E_WF_006), so a step that only an UNCALLED flow mentions has
+    no call site here: emitting its function would leave dead code in the file the
+    author has to read and fill in. But a step behind a FlowCallIR does have one —
+    workflow_subflow.clio's entry flow calls no step at all, every one of them lives
+    in a sub-flow — so the sub-flows must be in this list or the script would call
+    functions it never declares.
 
     Deduping is not cosmetic. The script is an ES module, module code is strict
     code, and declaring the same function twice in strict code is a SyntaxError —
-    a step called twice in the chain must still be emitted once.
+    a step called twice (or called by two flows) must still be emitted once.
 
     ON_FAIL fallback chains are followed for the reason swift follows them: their
     call sites are emitted (Task 10), so the functions they call must exist.
@@ -83,32 +88,44 @@ def _collect_reachable_steps(
                 visit(item.body)
             elif isinstance(item, ForEachIR):
                 visit(item.body)
-            # FlowCallIR names a sub-flow, not a step — inlined in Task 9.
+            # FlowCallIR names a sub-flow, not a step. Its chain is not walked from
+            # here: the sub-flow is already IN `flows` (reachable_flows resolved it),
+            # and walking it here too would just re-find the same steps.
 
-    visit(flow.chain)
-    for rescue in flow.rescues:
-        visit(rescue.body)
+    for flow in flows:
+        visit(flow.chain)
+        for rescue in flow.rescues:
+            visit(rescue.body)
     return ordered
 
 
 def render_script(graph: FlowGraph) -> str:
-    """The whole script: header, meta, step functions, flow body.
+    """The whole script: header, meta, step functions, sub-flow functions, flow body.
 
     Order is for the reader, not the parser — function declarations hoist. The
-    author lands on `meta`, scrolls through the steps they may have to fill in, and
-    reads the orchestration last, where the state threading is visible in one page.
+    author lands on `meta`, scrolls through the steps they may have to fill in, then
+    the sub-flows, and reads the orchestration last, where the state threading is
+    visible in one page.
+
+    Every called FLOW is inlined here as a local function rather than invoked
+    through `workflow({scriptPath})`, which caps nesting at one level while CLIO
+    does not (§4.2 — see _workflow_subflows). `reachable_flows` refuses a recursive
+    flow (E_WF_007) before a single line is emitted.
     """
     flow = entry_flow(graph)
     contracts = {c.name: c for c in graph.contracts}
     steps_by_name = {s.name: s for s in graph.steps}
+    sub_flows = reachable_flows(flow, {f.name: f for f in graph.flows})
 
     parts = [_HEADER.format(flow=flow.name), render_meta(graph) + "\n"]
-    for step in _collect_reachable_steps(flow, steps_by_name):
+    for step in _collect_reachable_steps((flow, *sub_flows), steps_by_name):
         parts.append(
             render_exact_step_js(step, contracts)
             if step.mode == "exact"
             else render_judgment_step_js(step, contracts)
         )
+    for sub in sub_flows:
+        parts.append(render_subflow_js(sub, steps_by_name))
     parts.append(render_flow_js(flow, steps_by_name))
     return "\n".join(parts)
 
