@@ -1846,6 +1846,33 @@ def _compile_fixture(name: str, tmp_path: Path, flow: str | None = None) -> Path
     return out
 
 
+def test_emitted_files_pin_utf8_and_do_not_inherit_the_locale(tmp_path, monkeypatch):
+    """`Path.write_text()` with no `encoding=` writes in the LOCALE encoding.
+
+    The emitted script always carries non-ASCII (em-dashes in the header, plus
+    whatever a source's DESCRIPTION and prompts hold). That survives cp1252, but
+    raises UnicodeEncodeError under cp932 — a Windows-JP user could not compile at
+    all. This host's locale is already UTF-8, so asserting on the file's bytes would
+    pass either way and guard nothing; the encoding actually passed to write_text is
+    what has to be pinned.
+    """
+    seen: list[str | None] = []
+    real_write_text = Path.write_text
+
+    def spy(self, data, encoding=None, errors=None, newline=None):  # type: ignore[no-untyped-def]
+        if self.suffix in {".js", ".md"}:
+            seen.append(encoding)
+        return real_write_text(self, data, encoding=encoding, errors=errors, newline=newline)
+
+    monkeypatch.setattr(Path, "write_text", spy)
+    _compile_fixture("swift_judgment.clio", tmp_path)
+
+    assert seen, "no .js/.md file was written — the spy never fired"
+    assert all(e == "utf-8" for e in seen), (
+        f"emitted files must pin utf-8, got encodings {seen}"
+    )
+
+
 def test_emits_sidecar_and_readme(tmp_path):
     """The sidecar is what makes `clio import` round-trip. Layout is dictated by
     _sidecar.py:write_sidecar — `.clio/source.clio`, NOT `.clio/source/<name>.clio`.

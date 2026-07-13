@@ -166,8 +166,16 @@ class WorkflowEmitter(BaseEmitter):
         validate_graph_for_workflow(graph, warn)
         output_dir.mkdir(parents=True, exist_ok=True)
         name = workflow_name(graph)
-        (output_dir / f"{name}.workflow.js").write_text(render_script(graph))
-        (output_dir / "README.md").write_text(render_readme(graph, emitted_steps(graph)))
+        # encoding is explicit: write_text() defaults to the locale encoding, and the
+        # emitted script carries non-ASCII (em-dashes, and whatever the source's
+        # DESCRIPTION / prompts hold). That round-trips under cp1252 but raises
+        # UnicodeEncodeError under cp932 — a Windows-JP user could not compile at all.
+        (output_dir / f"{name}.workflow.js").write_text(
+            render_script(graph), encoding="utf-8"
+        )
+        (output_dir / "README.md").write_text(
+            render_readme(graph, emitted_steps(graph)), encoding="utf-8"
+        )
 
         # Written LAST: the manifest hashes the files above, so it has to see them
         # all. `source_path` is None when the emitter is driven in-process (tests,
