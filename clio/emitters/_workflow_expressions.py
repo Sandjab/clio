@@ -25,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from clio.emitters._workflow_errors import error_access_js
-from clio.emitters._workflow_helpers import js_identifier, js_string
+from clio.emitters._workflow_helpers import js_identifier, js_string, loop_var_js
 from clio.ir.graph import BoolOpIR, CallIR, ConditionIR, ErrorAccessIR, StepIR
 
 # CLIO name -> the JS expression that shadows it at the point being rendered.
@@ -203,10 +203,14 @@ def flow_input(kwargs: tuple[tuple[str, object], ...], bindings: Bindings) -> st
 def loop_binding(loop_var: str, bindings: Bindings) -> dict[str, str]:
     """`bindings` extended with the loop variable, bound to its own JS name.
 
-    js_identifier because a CLIO loop variable is any `[a-zA-Z_][a-zA-Z0-9_]*` —
-    `FOR EACH class IN rows` parses, and `for (const class of …)` is a SyntaxError.
+    loop_var_js and NOT js_identifier: the loop variable lives in a namespace of its
+    own (`$doc`), because a CLIO loop variable may legally be named after a step —
+    and the `const` a `for…of` head (or a `.map()` arrow) binds would then shadow
+    that step's function. See loop_var_js for the whole trap; every read of the
+    variable resolves through this mapping, so this is the one place the name is
+    decided.
     """
-    return {**bindings, loop_var: js_identifier(loop_var)}
+    return {**bindings, loop_var: loop_var_js(loop_var)}
 
 
 def call_js(

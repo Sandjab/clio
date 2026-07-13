@@ -48,7 +48,13 @@ from clio.ir.graph import (
     StepIR,
     WhileBlockIR,
 )
-from clio.parser.ast_nodes import ContractRef, ListType, PrimitiveType, RecordType
+from clio.parser.ast_nodes import (
+    ContractRef,
+    ListType,
+    OptionalType,
+    PrimitiveType,
+    RecordType,
+)
 from tests.conftest import assert_valid_js
 
 
@@ -1313,9 +1319,12 @@ def _foreach_graph(*, parallel: bool, n_steps: int, collector: str | None) -> Fl
 
 
 def test_sequential_for_each_is_a_plain_loop(tmp_path):
+    """`$doc`, not `doc`: the loop variable lives in its own namespace, out of reach
+    of a step function's name (loop_var_js). See the shadowing tests at the end of
+    this file for what a bare name does at run time."""
     src = _emit(_foreach_graph(parallel=False, n_steps=1, collector=None), tmp_path)
 
-    assert "for (const doc of state['docs'])" in src
+    assert "for (const $doc of state['docs'])" in src
     assert "await parallel(" not in src
     assert "await pipeline(" not in src
     assert_valid_js(src, tmp_path)
@@ -1330,7 +1339,7 @@ def test_the_loop_variable_is_bound_from_the_loop_not_from_state(tmp_path):
     on nothing — at run time, with no syntax error to catch it."""
     src = _emit_fixture("swift_parallel.clio", tmp_path)
 
-    assert "{ ...state, 'item': item }" in src
+    assert "{ ...state, 'item': $item }" in src
 
 
 def test_parallel_for_each_with_one_step_uses_parallel(tmp_path):
@@ -1350,7 +1359,7 @@ def test_parallel_is_handed_thunks_not_already_running_promises(tmp_path):
     plausible."""
     src = _emit(_foreach_graph(parallel=True, n_steps=1, collector="reviews"), tmp_path)
 
-    assert "(doc) => () => review(" in src
+    assert "($doc) => () => $$settle(() => review(" in src
 
 
 def test_parallel_for_each_with_several_steps_uses_pipeline(tmp_path):
@@ -1370,26 +1379,45 @@ def test_a_pipeline_stage_reads_its_predecessor_from_prev_not_from_state(tmp_pat
     the stage callback's `prevResult` — it is NOT in state, and it must not be: the
     items run concurrently, so writing each one's output into the shared state key
     would race. A renderer that emitted state['verdict'] here would compile, parse,
-    and score every document on `undefined`."""
+    and score every document on `undefined`.
+
+    `.value`, because a stage returns the outcome envelope $$settle builds and not
+    the bare result — that is what keeps a failed item apart from an item whose
+    result legitimately IS `null`."""
     src = _emit(_foreach_graph(parallel=True, n_steps=2, collector="scores"), tmp_path)
 
-    assert "(doc) => review({ ...state, 'doc': doc }, 'each:docs')" in src
-    assert "(prev, doc) => score({ ...state, 'r': prev }, 'each:docs')" in src
+    assert "($doc) => $$settle(() => review({ ...state, 'doc': $doc }, 'each:docs'))" in src
+    assert "'r': $$prev.value" in src
     assert "state['verdict']" not in src
 
 
-def test_a_failed_item_does_not_flow_into_the_collector(tmp_path):
-    """A thunk that throws resolves to `null` in the result array — parallel() and
-    pipeline() never reject. Unfiltered, those nulls land in state[collector] and
-    fail somewhere else, later.
+def test_a_stage_whose_predecessor_failed_does_not_run(tmp_path):
+    """The failure envelope travels down the chain untouched. Running the next stage
+    on it would hand a step `{ok: false, error: …}` as its INPUT — and a judgment
+    step would dutifully send that to an agent, spending a call to summarize an
+    error object."""
+    src = _emit(_foreach_graph(parallel=True, n_steps=2, collector="scores"), tmp_path)
 
-    Filtered on null/undefined and NOT with `.filter(Boolean)`: a step that GIVES a
-    bool or a str legitimately produces `false` / `''`, and Boolean would silently
-    drop those successful items alongside the failed ones."""
+    assert "($$prev, $doc) => ($$prev && $$prev.ok) ? $$settle(" in src
+    assert ") : $$prev," in src
+
+
+def test_a_failed_item_fails_the_flow_instead_of_being_filtered_out(tmp_path):
+    """A thunk that throws resolves to `null` in the result array — parallel() and
+    pipeline() never reject. The first version of this target FILTERED those nulls
+    out, which conflated two different things: since v0.21 an `Optional<T>` GIVES
+    can legitimately BE `null` on success (contracts.py:56-62 renders it to `anyOf:
+    [T, null]`, and the host validates it), so the filter dropped successful results
+    and silently re-indexed the collector.
+
+    The outcome is reported by the thunk instead of guessed at from its value, and a
+    failure fails the FLOW — the semantics python / go / swift already have. The
+    tests that prove it RUN the script; this one guards the shape they depend on."""
     src = _emit(_foreach_graph(parallel=True, n_steps=1, collector="reviews"), tmp_path)
 
-    assert "filter((r) => r !== null && r !== undefined)" in src
-    assert "filter(Boolean)" not in src
+    assert "state['reviews'] = $$collect(await parallel(" in src
+    assert "), state['docs'], 'FOR EACH doc IN docs (line 5)')" in src
+    assert ".filter(" not in src, "a filter cannot tell a failure from a null result"
 
 
 def test_parallel_agents_carry_phase_via_opts_not_the_global(tmp_path):
@@ -1412,8 +1440,8 @@ def test_a_condition_on_the_loop_variable_reads_the_loop_variable(tmp_path):
     no arm at all. The renderer has to know what is in scope."""
     src = _emit_fixture("swift_foreach_seq.clio", tmp_path)
 
-    assert "switch (a.level) {" in src
-    assert "if (b.level === 'high') {" in src
+    assert "switch ($a.level) {" in src
+    assert "if ($b.level === 'high') {" in src
     assert "state['a']" not in src and "state['b']" not in src
     assert_valid_js(src, tmp_path)
 
@@ -1432,9 +1460,9 @@ def test_a_nested_loop_iterates_the_enclosing_loop_variable(tmp_path):
 
     src = _emit(FlowGraph(steps=(tag,), flow=flow, flows=(flow,)), tmp_path)
 
-    assert "for (const a of state['rows']) {" in src
-    assert "for (const b of a) {" in src
-    assert "{ ...state, 'cell': b }" in src
+    assert "for (const $a of state['rows']) {" in src
+    assert "for (const $b of $a) {" in src
+    assert "{ ...state, 'cell': $b }" in src
     assert_valid_js(src, tmp_path)
 
 
@@ -1590,8 +1618,11 @@ def test_sub_flow_as_parallel_body_collects_its_gives_objects(tmp_path):
     objects — no extraction, which is what that IR rule says a collector holds."""
     src = _emit_fixture("workflow_subflow_parallel.clio", tmp_path, flow="batch")
 
-    assert "state['results'] = (await parallel(" in src
-    assert "state['urls'].map((u) => () => flow_$enrich({ ...state, 'url': u }," in src
+    assert "state['results'] = $$collect(await parallel(" in src
+    assert (
+        "state['urls'].map(($u) => () => $$settle(() => "
+        "flow_$enrich({ ...state, 'url': $u },"
+    ) in src
     assert "workflow(" not in src
     assert_valid_js(src, tmp_path)
 
@@ -2077,7 +2108,278 @@ def test_example_parallel_review_fans_out_for_real(tmp_path):
 
     src = (tmp_path / "parallel-review.workflow.js").read_text()
     assert src.count("await parallel(") == 2
-    assert "for (const f of" not in src
-    assert "for (const d of" not in src
+    # The serialized shape, spelled the way render_foreach would actually emit it:
+    # `$f` / `$d`, since a loop variable is namespaced away from the step functions
+    # (loop_var_js). Asserting the bare names would be asserting nothing.
+    assert "for (const $f of" not in src
+    assert "for (const $d of" not in src
     assert "state['drafts'] =" in src and "state['notes'] =" in src
     assert_valid_js(src, tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# FIX-3 — the two defects the final review found by EXECUTING the emitted script
+#
+# Neither is visible to `node --check`, and neither is visible to a text
+# assertion: the script parses, and it reads plausibly. So these tests RUN it,
+# against a double for the host globals — the same reason the `args` tests above
+# run the preamble instead of reading it.
+#
+# The double models the ONE property of parallel() / pipeline() everything here
+# turns on (§6.1): a thunk that throws resolves to `null` in the result array,
+# and the call itself never rejects. Get that wrong and the tests would agree
+# with any implementation.
+# ---------------------------------------------------------------------------
+
+_HOST_DOUBLE = """\
+function phase(_t) {}
+function log(..._a) {}
+async function parallel(thunks) {
+  return Promise.all(thunks.map(async (t) => {
+    try { return await t() } catch (_e) { return null }
+  }))
+}
+async function pipeline(items, ...stages) {
+  return Promise.all(items.map(async (item, i) => {
+    try {
+      let acc = await stages[0](item, i)
+      for (const stage of stages.slice(1)) acc = await stage(acc, item, i)
+      return acc
+    } catch (_e) { return null }
+  }))
+}
+"""
+
+
+def _run_script(
+    src: str, agent_js: str, args_js: str, tmp_path: Path
+) -> subprocess.CompletedProcess:
+    """Run the whole emitted script under node, with `agent` and the fan-out
+    primitives doubled, and print the final state.
+
+    `agent_js` is the test's own `async function agent(prompt, opts)`. It reads the
+    item out of the prompt (the step renderer interpolates every TAKES into it), so
+    a test can make one item behave differently from another — which is the only way
+    to tell a legitimate `null` from a failed one, and index alignment from luck.
+    """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not installed; skipping JS execution gate")
+    f = tmp_path / "run.mjs"
+    f.write_text(
+        f"const args = {args_js}\n{_HOST_DOUBLE}{agent_js}\n{src}\n"
+        "console.log('__STATE__' + JSON.stringify(state))\n"
+    )
+    return subprocess.run([node, str(f)], capture_output=True, text=True)
+
+
+def _state_of(proc: subprocess.CompletedProcess) -> dict:
+    assert proc.returncode == 0, proc.stderr
+    line = next(ln for ln in proc.stdout.splitlines() if ln.startswith("__STATE__"))
+    return json.loads(line.removeprefix("__STATE__"))
+
+
+# --- Defect A: a loop variable that shadows the step function it calls ------
+
+_ECHO_AGENT = """\
+async function agent(prompt, opts) {
+  const item = JSON.parse(prompt.match(/Input `item`:\\n(.*)/)[1])
+  return { verdict: 'seen:' + item }
+}
+"""
+
+
+def _shadowing_graph(*, parallel: bool) -> FlowGraph:
+    """`FOR EACH classify IN items: classify(item=classify)` — a loop variable named
+    after the step its body calls. Perfectly legal CLIO: the lexer accepts any
+    `[a-zA-Z_][a-zA-Z0-9_]*` for either, and nothing in the language says the two
+    namespaces are shared. In JS they are: `const classify` (block-scoped, from the
+    `for…of` head or the arrow parameter) shadows `async function classify`, and the
+    call site then invokes a string.
+    """
+    classify = _step(name="classify", takes=(FieldIR(name="item", type=_STR),),
+                     gives=FieldIR(name="verdict", type=_STR))
+    fe = ForEachIR(loop_var="classify", collection="items", line=5, parallel=parallel,
+                   collector="verdicts" if parallel else None,
+                   body=(CallIR(step_name="classify",
+                                kwargs=(("item", "@classify"),), line=6),))
+    flow = FlowIR(name="review", chain=(fe,), rescues=(), line=1,
+                  takes=(FieldIR(name="items", type=ListType(inner=_STR)),))
+    return FlowGraph(steps=(classify,), flow=flow, flows=(flow,))
+
+
+def test_a_sequential_loop_variable_does_not_shadow_the_step_it_calls(tmp_path):
+    """`TypeError: classify is not a function`, once per item — and `node --check`
+    passes, because shadowing is legal JS. The fix is a namespace the CLIO lexer
+    cannot reach (`$`), not a rename the author has to guess at."""
+    src = _emit(_shadowing_graph(parallel=False), tmp_path)
+
+    proc = _run_script(src, _ECHO_AGENT, '\'{"items": ["a", "b"]}\'', tmp_path)
+
+    assert "is not a function" not in proc.stderr
+    assert _state_of(proc)["verdict"] == "seen:b"  # the last iteration's write
+    assert_valid_js(src, tmp_path)
+
+
+def test_a_parallel_loop_variable_does_not_shadow_the_step_it_calls(tmp_path):
+    """Same shadowing, through the arrow parameter of the `.map()` that builds the
+    thunks. Worse here: the TypeError is swallowed — a throwing thunk resolves to
+    `null`, so the collector would just come back empty."""
+    src = _emit(_shadowing_graph(parallel=True), tmp_path)
+
+    proc = _run_script(src, _ECHO_AGENT, '\'{"items": ["a", "b"]}\'', tmp_path)
+
+    assert _state_of(proc)["verdicts"] == ["seen:a", "seen:b"]
+    assert_valid_js(src, tmp_path)
+
+
+def test_a_pipeline_stage_result_does_not_shadow_the_step_it_calls(tmp_path):
+    """The other binding the fan-out renderer introduces: the stage's predecessor.
+    Named `prev`, it shadows a step called `prev` exactly as the loop variable did —
+    `(prev, doc) => prev(…)` calls a string. Reachable only from hand-built IR today
+    (the builder refuses a multi-call PARALLEL body), which is why it is fixed with
+    the loop variable rather than after the next release: every binding this module
+    emits now lives in a namespace no CLIO identifier can reach.
+    """
+    first = _step(name="first", takes=(FieldIR(name="d", type=_STR),),
+                  gives=FieldIR(name="a", type=_STR))
+    prev = _step(name="prev", takes=(FieldIR(name="y", type=_STR),),
+                 gives=FieldIR(name="b", type=_STR))
+    fe = ForEachIR(loop_var="doc", collection="docs", line=5, parallel=True,
+                   collector="out",
+                   body=(CallIR(step_name="first", kwargs=(("d", "@doc"),), line=6),
+                         CallIR(step_name="prev", kwargs=(("y", "@a"),), line=7)))
+    flow = FlowIR(name="chain", chain=(fe,), rescues=(), line=1,
+                  takes=(FieldIR(name="docs", type=ListType(inner=_STR)),))
+    graph = FlowGraph(steps=(first, prev), flow=flow, flows=(flow,))
+    agent_js = """\
+async function agent(prompt, opts) {
+  if (opts.label === 'judgment:first') return { a: 'A' }
+  return { b: 'B' }
+}
+"""
+
+    src = _emit(graph, tmp_path)
+    proc = _run_script(src, agent_js, '\'{"docs": ["d1"]}\'', tmp_path)
+
+    assert _state_of(proc)["out"] == ["B"]
+    assert_valid_js(src, tmp_path)
+
+
+# --- Defect B: a legitimate `null` is not a failure -------------------------
+
+def _optional_parallel_graph() -> FlowGraph:
+    """`FOR EACH it IN items PARALLEL AS tags: classify(item=it)`, where classify
+    GIVES `Optional<str>`.
+
+    Since v0.21 that renders to `{"anyOf": [{"type": "string"}, {"type": "null"}]}`
+    (contracts.py:56-62) — so the host validates `null` as a SUCCESSFUL result. It
+    is then indistinguishable, in the array parallel() returns, from the `null` a
+    thunk that threw resolves to.
+    """
+    classify = _step(name="classify", takes=(FieldIR(name="item", type=_STR),),
+                     gives=FieldIR(name="tag", type=OptionalType(inner=_STR)))
+    fe = ForEachIR(loop_var="it", collection="items", line=5, parallel=True,
+                   collector="tags",
+                   body=(CallIR(step_name="classify",
+                                kwargs=(("item", "@it"),), line=6),))
+    flow = FlowIR(name="tagger", chain=(fe,), rescues=(), line=1,
+                  takes=(FieldIR(name="items", type=ListType(inner=_STR)),))
+    return FlowGraph(steps=(classify,), flow=flow, flows=(flow,))
+
+
+# `null` for a SUCCESSFUL item ({tag: null} validates against Optional<str>);
+# `null` from agent() itself for a FAILED one (§6.1: agent() does not throw).
+_OPTIONAL_AGENT = """\
+async function agent(prompt, opts) {
+  const item = JSON.parse(prompt.match(/Input `item`:\\n(.*)/)[1])
+  if (item === 'boom') return null
+  return { tag: item === 'none' ? null : 'T:' + item }
+}
+"""
+
+
+def test_a_legitimate_null_survives_the_collector(tmp_path):
+    """An `Optional<T>` step that returns `null` SUCCEEDED. Dropping it loses data
+    the flow was told to keep — silently, since JS neither throws nor warns."""
+    src = _emit(_optional_parallel_graph(), tmp_path)
+
+    proc = _run_script(src, _OPTIONAL_AGENT, '\'{"items": ["none"]}\'', tmp_path)
+
+    assert _state_of(proc)["tags"] == [None]
+
+
+def test_the_collector_stays_index_aligned_with_the_collection(tmp_path):
+    """The collector is read positionally — `tags[i]` is the tag OF `items[i]`.
+    Compacting the array silently re-indexes every item after the first null, so
+    every downstream read is off by one and nothing says so."""
+    src = _emit(_optional_parallel_graph(), tmp_path)
+
+    proc = _run_script(
+        src, _OPTIONAL_AGENT, '\'{"items": ["a", "none", "b"]}\'', tmp_path
+    )
+
+    assert _state_of(proc)["tags"] == ["T:a", None, "T:b"]
+
+
+def test_a_failed_item_fails_the_flow_and_names_itself(tmp_path):
+    """The semantics every other target has: a step that fails fails the FLOW (its
+    ON_FAIL / RESCUE have already run, inside the step function). Dropping the item
+    instead makes this target the only one that continues on partial data — and the
+    only one that cannot tell you it did."""
+    src = _emit(_optional_parallel_graph(), tmp_path)
+
+    proc = _run_script(
+        src, _OPTIONAL_AGENT, '\'{"items": ["a", "boom"]}\'', tmp_path
+    )
+
+    assert proc.returncode != 0, f"the flow continued on a failed item: {proc.stdout}"
+    assert "clio:" in proc.stderr
+    assert "boom" in proc.stderr, "the failing item is not named"
+    assert "agent returned no result" in proc.stderr, "the cause is not reported"
+
+
+def test_a_failed_pipeline_stage_fails_the_flow(tmp_path):
+    """Same rule through pipeline(): a stage that throws leaves `null` for that item
+    in the result array, and the collector must not read it as a value."""
+    review = _step(name="review", takes=(FieldIR(name="doc", type=_STR),),
+                   gives=FieldIR(name="verdict", type=_STR))
+    score = _step(name="score", takes=(FieldIR(name="r", type=_STR),),
+                  gives=FieldIR(name="rating", type=OptionalType(inner=_STR)))
+    fe = ForEachIR(loop_var="doc", collection="docs", line=5, parallel=True,
+                   collector="ratings",
+                   body=(CallIR(step_name="review", kwargs=(("doc", "@doc"),), line=6),
+                         CallIR(step_name="score", kwargs=(("r", "@verdict"),), line=7)))
+    flow = FlowIR(name="rev", chain=(fe,), rescues=(), line=1,
+                  takes=(FieldIR(name="docs", type=ListType(inner=_STR)),))
+    graph = FlowGraph(steps=(review, score), flow=flow, flows=(flow,))
+    agent_js = """\
+async function agent(prompt, opts) {
+  if (opts.label === 'judgment:review') {
+    const doc = JSON.parse(prompt.match(/Input `doc`:\\n(.*)/)[1])
+    return doc === 'boom' ? null : { verdict: 'V:' + doc }
+  }
+  return { rating: null }
+}
+"""
+    src = _emit(graph, tmp_path)
+
+    ok = _run_script(src, agent_js, '\'{"docs": ["a", "b"]}\'', tmp_path)
+    assert _state_of(ok)["ratings"] == [None, None], "a legitimate null was dropped"
+
+    bad = _run_script(src, agent_js, '\'{"docs": ["a", "boom"]}\'', tmp_path)
+    assert bad.returncode != 0, f"the flow continued on a failed stage: {bad.stdout}"
+    assert "clio:" in bad.stderr
+
+
+def test_a_flow_that_never_fans_out_carries_no_fan_out_runtime(tmp_path):
+    """$$settle / $$collect are emitted only into a script that has a PARALLEL FOR
+    EACH. This file is one the author reads and fills stubs into: two functions it
+    never calls are two functions they have to rule out first."""
+    linear = _emit(_linear_graph(), tmp_path / "linear")
+    fanned = _emit(_optional_parallel_graph(), tmp_path / "fanned")
+
+    assert "$$settle" not in linear and "$$collect" not in linear
+    assert linear.count("function $$") == 0
+    assert fanned.count("async function $$settle") == 1
+    assert fanned.count("function $$collect") == 1

@@ -14,6 +14,7 @@ from clio.emitters._workflow_helpers import (
     validate_graph_for_workflow,
     workflow_name,
 )
+from clio.emitters._workflow_loops import PARALLEL_RUNTIME, needs_parallel_runtime
 from clio.emitters._workflow_step_renderers import (
     render_exact_step_js,
     render_judgment_step_js,
@@ -138,6 +139,8 @@ def render_script(graph: FlowGraph) -> str:
     sub_flows = reachable_flows(flow, {f.name: f for f in graph.flows})
 
     parts = [_HEADER.format(flow=flow.name), render_meta(graph) + "\n"]
+    if needs_parallel_runtime((flow, *sub_flows)):
+        parts.append(PARALLEL_RUNTIME)
     for step in emitted_steps(graph):
         parts.append(
             render_exact_step_js(step, contracts)

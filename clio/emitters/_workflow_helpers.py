@@ -145,6 +145,36 @@ def js_identifier(name: str) -> str:
     return f"{name}$" if name in _JS_RESERVED | _WF_SCRIPT_NAMES else name
 
 
+def loop_var_js(name: str) -> str:
+    """A CLIO loop variable rendered as a JS identifier — in its OWN namespace.
+
+    `FOR EACH classify IN items: classify(item=classify)` is legal CLIO: nothing in
+    the language shares the namespace of loop variables with the namespace of steps.
+    In JS they are one. Rendering the loop variable under its own name emits
+
+        for (const classify of state['items']) { … await classify(…) }
+
+    where the block-scoped `const` SHADOWS `async function classify` — legal JS,
+    which `node --check` accepts, and a `TypeError: classify is not a function` at
+    every iteration. Under `parallel()` it is worse: the arrow parameter shadows the
+    same way, the TypeError is swallowed into the thunk's `null`, and the collector
+    just comes back empty.
+
+    So the two namespaces are separated here, with the `$` the module already relies
+    on: the CLIO lexer accepts only `[a-zA-Z_][a-zA-Z0-9_]*` (lexer.py:126-142), so
+    no source identifier can start with one — the same reasoning that makes `$args`
+    (the preamble) and `flow_$x` (an inlined sub-flow) unable to collide with a step.
+    js_identifier only ever APPENDS a `$`, so a prefixed name is unreachable from it
+    too: `$classify` cannot be any step's function name, whatever the step is called.
+
+    Everything this module's own JS binds sits one level further out, on `$$`
+    (`$$settle`, `$$collect`, `$$prev` — _workflow_loops), which a loop variable
+    cannot reach either: the character after the prefix here is always a letter or an
+    underscore.
+    """
+    return f"${name}"
+
+
 def js_string(s: str) -> str:
     """A single-quoted JS string literal.
 

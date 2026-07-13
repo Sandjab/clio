@@ -565,7 +565,7 @@ Then run the workflow from Claude Code. The emitter never writes outside `<outpu
 | `MODE: exact` (code / no `impl`) | a **pure-JS stub** that throws until you fill it in |
 | `FLOW.TAKES` | the `args` global, presence-checked at script start |
 | `FOR EACH` (sequential) | `for…of` |
-| `FOR EACH … PARALLEL AS c` | `state['c'] = (await parallel(items.map(x => () => step(x)))).filter(…)` — real fan-out |
+| `FOR EACH … PARALLEL AS c` | `state['c'] = $$collect(await parallel(items.map(x => () => $$settle(() => step(x)))), items, …)` — real fan-out |
 | `IF` / `MATCH` / `WHILE … MAX N` | native `if` / `switch` / bounded `while` |
 | sub-flow call | **inlined** as a local `async function` in the same script |
 | `ON_FAIL` / `RESCUE` / `RESUME` | `try` / `catch` + retry loop / fallback step / abort |
@@ -573,6 +573,8 @@ Then run the workflow from Claude Code. The emitter never writes outside `<outpu
 | `TEST` | ignored (only `--target python` emits pytest) |
 
 `agent()` returns **null** on terminal failure rather than throwing, so every emitted step wrapper converts that null into a thrown error — otherwise `ON_FAIL` and `RESCUE` would be dead code.
+
+Inside a fan-out, a thunk that throws resolves to `null` in the array `parallel()` returns — the same value a step whose `GIVES` is `Optional<T>` produces when it legitimately returns `null`. The two are told apart by the emitted `$$settle` wrapper, which makes each item report its outcome (`{ok, value}` / `{ok, error}`) instead of having it inferred from its value. `$$collect` then **fails the flow** on any failed item, naming it and its cause — the semantics `python` / `go` / `swift` already have, the step's `ON_FAIL` chain having already run inside its own function — and maps the successes back **in order**, so `state['c'][i]` stays the result of `items[i]` and a legitimate `null` survives.
 
 ### Refused at compile time
 
