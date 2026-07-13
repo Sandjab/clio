@@ -7,14 +7,22 @@ from collections.abc import Callable
 from clio.ir.contracts import type_to_json_schema
 from clio.ir.graph import (
     ApiInvokeIR,
+    BoolOpIR,
+    CallIR,
     CodeImplIR,
+    ConditionIR,
     ContractIR,
+    FlowCallIR,
     FlowGraph,
     FlowIR,
+    ForEachIR,
+    IfBlockIR,
+    MatchBlockIR,
     McpToolImplIR,
     RestImplIR,
     ShellImplIR,
     SqlImplIR,
+    WhileBlockIR,
 )
 from clio.parser.ast_nodes import TypeExpr
 
@@ -98,6 +106,19 @@ _JS_RESERVED = frozenset({
 })
 
 
+# The names the emitted script itself binds or calls. A step named after one of
+# these is not a style problem: `function state(…)` beside the script's own
+# `const state = {}` is a duplicate declaration — a SyntaxError in module code —
+# and `function agent(…)` would SHADOW the host global, so the judgment wrapper
+# would recurse into itself instead of spawning a subagent. Mangled like the
+# reserved words, and for the same reason: the file must parse, and it must mean
+# what it says.
+_WF_SCRIPT_NAMES = frozenset({
+    "state", "args", "meta",                                      # bound by the script
+    "agent", "parallel", "pipeline", "workflow", "phase", "log",  # host globals
+})
+
+
 def js_identifier(name: str) -> str:
     """A CLIO step/flow name rendered as a legal JS identifier.
 
@@ -114,7 +135,7 @@ def js_identifier(name: str) -> str:
     `delete_`, and in a single JS module the second function would silently
     overwrite the first.
     """
-    return f"{name}$" if name in _JS_RESERVED else name
+    return f"{name}$" if name in _JS_RESERVED | _WF_SCRIPT_NAMES else name
 
 
 def js_string(s: str) -> str:
@@ -217,9 +238,46 @@ def workflow_name(graph: FlowGraph) -> str:
 
 
 def phase_titles(flow: FlowIR) -> list[str]:
-    """One phase per top-level element of the flow chain. Task 6 implements the
-    non-empty cases; an empty chain has no phases."""
-    return []
+    """One title per TOP-LEVEL element of the flow chain — never one per step.
+
+    §4.3, and the reason it is a rule rather than a preference: `phase()` is
+    *global* state in the Workflow runtime, so calling it from inside a
+    parallel()/pipeline() stage is racy — the last writer wins and the UI reports
+    a phase no one is in. Agents spawned inside a block therefore carry the
+    block's phase through `agent({phase})`, and only the top level moves the
+    global. `meta.phases` lists exactly these titles, in order (the runtime
+    rejects a phase() it never saw declared), which is why the renderer walks the
+    chain and this list in lockstep.
+
+    A block is named after what it branches on / iterates, so the title stays
+    stable when its body changes.
+    """
+    titles: list[str] = []
+    for item in flow.chain:
+        if isinstance(item, CallIR):
+            titles.append(item.step_name)
+        elif isinstance(item, FlowCallIR):
+            titles.append(item.flow_name)
+        elif isinstance(item, ForEachIR):
+            titles.append(f"each:{item.collection}")
+        elif isinstance(item, IfBlockIR):
+            titles.append(_branch_title("if", item.condition))
+        elif isinstance(item, MatchBlockIR):
+            titles.append(f"match:{item.state_field}")
+        elif isinstance(item, WhileBlockIR):
+            titles.append(_branch_title("while", item.condition))
+        else:
+            raise AssertionError(f"unreachable: chain node {type(item).__name__}")
+    return titles
+
+
+def _branch_title(kind: str, condition: ConditionIR | BoolOpIR) -> str:
+    """`if:<state field>` — §4.3 names a branch after the field it branches on.
+    A BoolOpIR reads several fields, so there is no single one to name: the bare
+    kind is the honest title."""
+    if isinstance(condition, ConditionIR):
+        return f"{kind}:{condition.step_name}"
+    return kind
 
 
 def render_meta(graph: FlowGraph) -> str:

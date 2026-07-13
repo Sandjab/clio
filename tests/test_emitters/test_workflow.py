@@ -1,5 +1,6 @@
 """target: claude-workflow — emitter tests."""
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from clio.emitters.workflow import WorkflowEmitter
 from clio.ir.graph import (
     ApiInvokeIR,
     CacheConfigIR,
+    CallIR,
     CliInvokeIR,
     CodeImplIR,
     ContractIR,
@@ -752,3 +754,245 @@ def test_a_step_named_undefined_does_not_shadow_the_null_guard(tmp_path):
     assert "function undefined(" not in js
     assert "result === undefined" in js, "the null guard must still be the guard"
     assert_valid_js(js, tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Task 6 — the linear chain: state, args, phases
+# ---------------------------------------------------------------------------
+
+_STR = PrimitiveType(name="str")
+
+
+def _linear_graph() -> FlowGraph:
+    """`fetch(url=@url) -> summarize(text=@text)`, entered with args.url.
+
+    `state` is keyed by GIVES **field** name, not by step name: `fetch` GIVES
+    `text`, so its output lands in state['text'] and summarize's `@text` reads it
+    back. That is what the builder produces (swift_minimal.clio compiles the
+    `-> summarize(rows)` sugar to `rows=@rows`, where `rows` is *load*'s GIVES)
+    and what every other target emits — python.py:635 `state[gives.name] = …`,
+    _swift_flow_renderer.py:264 `state["<gives.name>"] = …`. Conditions read the
+    same key: ConditionIR(step_name='r') where `r` is assess's GIVES field.
+    """
+    fetch = _step(name="fetch", takes=(FieldIR(name="url", type=_STR),),
+                  gives=FieldIR(name="text", type=_STR))
+    summarize = _step(name="summarize", takes=(FieldIR(name="text", type=_STR),),
+                      gives=FieldIR(name="summary", type=_STR))
+    flow = FlowIR(
+        name="brief",
+        chain=(CallIR(step_name="fetch", kwargs=(("url", "@url"),), line=10),
+               CallIR(step_name="summarize", kwargs=(("text", "@text"),), line=11)),
+        rescues=(), line=1,
+        takes=(FieldIR(name="url", type=_STR),),
+    )
+    return FlowGraph(steps=(fetch, summarize), flow=flow, flows=(flow,))
+
+
+def test_linear_chain_threads_state_and_declares_phases(tmp_path):
+    src = _emit(_linear_graph(), tmp_path)
+
+    assert "const state = {}" in src
+    assert "state['url'] = args['url']" in src
+    assert "state['text'] = await fetch(state, 'fetch')" in src
+    assert "state['summary'] = await summarize(state, 'summarize')" in src
+    assert "phase('fetch')" in src and "phase('summarize')" in src
+    assert "{ title: 'fetch' }" in src   # meta.phases mirrors the phase() calls
+    # The body calls the functions the emitter also writes into the same file.
+    assert "async function fetch(state, phaseName)" in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_meta_phases_mirror_the_phase_calls_in_order(tmp_path):
+    """§4.3: one phase per TOP-LEVEL chain element, and meta.phases lists exactly
+    those titles, in order. Drift either way is a real defect — a phase() the meta
+    never declared, or a declared phase the run never enters."""
+    src = _emit(_linear_graph(), tmp_path)
+
+    declared = re.findall(r"\{ title: '([^']+)' \}", src)
+    called = re.findall(r"^phase\('([^']+)'\)", src, re.M)
+
+    assert declared == called == ["fetch", "summarize"]
+
+
+def test_a_literal_kwarg_is_bound_without_mutating_shared_state(tmp_path):
+    """`analyze(text="Great product!")` (swift_judgment.clio) binds a TAKES from a
+    literal: nothing in state holds it, yet the step body reads state['text'].
+    The call site supplies it through a shadowed COPY, never by writing state:
+    a literal TAKES named like some step's GIVES would clobber that output, and
+    inside parallel()/pipeline() (Task 8) concurrent items would race on the key.
+    """
+    analyze = _step(name="analyze", takes=(FieldIR(name="text", type=_STR),),
+                    gives=FieldIR(name="verdict", type=_STR))
+    flow = FlowIR(name="c", rescues=(), line=1,
+                  chain=(CallIR(step_name="analyze",
+                                kwargs=(("text", "Great product!"),), line=3),))
+
+    src = _emit(FlowGraph(steps=(analyze,), flow=flow, flows=(flow,)), tmp_path)
+
+    assert "{ ...state, 'text': 'Great product!' }" in src
+    assert "state['text'] =" not in src, "a literal TAKES must not mutate state"
+    assert_valid_js(src, tmp_path)
+
+
+def test_a_renamed_ref_kwarg_reads_the_source_key(tmp_path):
+    """`summarize(text=@raw)`: the TAKES name and the state key differ, so the call
+    site maps one onto the other. Passing `state` untouched would leave the step
+    reading state['text'] — undefined."""
+    load = _step(name="load", gives=FieldIR(name="raw", type=_STR))
+    summarize = _step(name="summarize", takes=(FieldIR(name="text", type=_STR),),
+                      gives=FieldIR(name="summary", type=_STR))
+    flow = FlowIR(name="c", rescues=(), line=1, chain=(
+        CallIR(step_name="load", kwargs=(), line=3),
+        CallIR(step_name="summarize", kwargs=(("text", "@raw"),), line=4),
+    ))
+
+    src = _emit(FlowGraph(steps=(load, summarize), flow=flow, flows=(flow,)), tmp_path)
+
+    assert "{ ...state, 'text': state['raw'] }" in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_an_identity_ref_passes_state_untouched(tmp_path):
+    """`@text` bound to TAKES `text` — what the `->` pipe sugar produces, and the
+    common case. The key is already in state under that name: copying it onto
+    itself would be noise in the file the author has to read."""
+    src = _emit(_linear_graph(), tmp_path)
+
+    assert "await summarize(state, 'summarize')" in src
+    assert "...state" not in src
+
+
+def test_judgment_result_is_unwrapped_into_state():
+    """agent() returns the schema object — { <gives.name>: value } (§4.1). What
+    lands in state must be the VALUE: downstream reads are state['r'] (a kwarg
+    ref) and state['r'].score (a condition), exactly as in python and swift.
+    Storing the wrapper would nest it twice and every read would come back
+    undefined — at run time, far from here."""
+    js = render_judgment_step_js(
+        _step(name="assess", gives=FieldIR(name="r", type=_STR)), contracts={})
+
+    assert "return result['r']" in js
+
+
+def test_a_step_without_gives_is_called_for_its_effect(tmp_path):
+    """A step may declare no GIVES. There is no state key to assign — but the call
+    must still happen, and `state[undefined] = …` must not be emitted."""
+    notify = _step(name="notify", takes=(), gives=None)
+    flow = FlowIR(name="f", rescues=(), line=1,
+                  chain=(CallIR(step_name="notify", kwargs=(), line=2),))
+
+    src = _emit(FlowGraph(steps=(notify,), flow=flow, flows=(flow,)), tmp_path)
+
+    assert "await notify(state, 'notify')" in src
+    assert "= await notify" not in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_a_flow_without_takes_never_references_args(tmp_path):
+    """swift_judgment.clio declares no TAKES. An args guard emitted anyway would
+    throw when the runtime legitimately hands the script nothing."""
+    src = _emit_fixture("swift_judgment.clio", tmp_path)
+
+    assert "args" not in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_a_missing_required_arg_fails_loudly(tmp_path):
+    """A declared TAKES that never arrives must stop the run at the top, naming the
+    flow and the arg — not flow `undefined` into a prompt and produce a plausible
+    answer to a question nobody asked."""
+    src = _emit(_linear_graph(), tmp_path)
+
+    assert "if (args['url'] === undefined)" in src
+    assert "brief" in src and "url" in src
+    assert "throw new Error" in src
+
+
+def test_the_linear_fixture_compiles_end_to_end(tmp_path):
+    """Hand-built IR can drift from what the builder produces. swift_minimal.clio
+    is the real thing: `load(file=file) -> summarize(rows)`, two exact steps."""
+    src = _emit_fixture("swift_minimal.clio", tmp_path)
+
+    assert "state['file'] = args['file']" in src
+    assert "state['rows'] = await load(state, 'load')" in src
+    assert "state['summary'] = await summarize(state, 'summarize')" in src
+    assert "function load(state)" in src and "function summarize(state)" in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_each_reachable_step_is_emitted_exactly_once(tmp_path):
+    """A step called twice in the chain is still ONE JS function. Emitting it twice
+    would redeclare it — and module code is strict code, where a duplicate
+    declaration is a SyntaxError, not a silent overwrite."""
+    refine = _step(name="refine", gives=FieldIR(name="p", type=_STR))
+    flow = FlowIR(name="f", rescues=(), line=1, chain=(
+        CallIR(step_name="refine", kwargs=(), line=2),
+        CallIR(step_name="refine", kwargs=(), line=3),
+    ))
+
+    src = _emit(FlowGraph(steps=(refine,), flow=flow, flows=(flow,)), tmp_path)
+
+    assert src.count("async function refine(") == 1
+    assert_valid_js(src, tmp_path)
+
+
+def test_a_reserved_step_name_is_called_by_its_mangled_name(tmp_path):
+    """The declaration is `delete$` (js_identifier). The CALL SITE must agree:
+    `await delete(state, …)` is a SyntaxError, and a renderer that mangles one but
+    not the other emits a file that never parses. The phase title keeps the source
+    name — it is a label, not an identifier."""
+    from clio.ir.builder import build_ir
+    from clio.parser.parser import parse
+
+    graph = build_ir(parse(
+        "STEP delete\n"
+        "  TAKES: path: str\n"
+        "  GIVES: gone: bool\n"
+        "  MODE:  judgment\n"
+        "\n"
+        "FLOW purge\n"
+        "  TAKES: path: str\n"
+        "  delete(path=path)\n"
+    ))
+
+    src = _emit(graph, tmp_path)
+
+    assert "await delete$(" in src
+    assert "phase('delete')" in src
+    assert_valid_js(src, tmp_path)
+
+
+@pytest.mark.parametrize("name", ["state", "args", "meta", "agent", "phase", "log",
+                                  "parallel", "pipeline"])
+def test_a_step_named_after_a_script_global_does_not_shadow_it(name: str, tmp_path):
+    """The script now declares `const state` and `export const meta`, and calls the
+    agent() / phase() / log() globals. A step named after one of them is not a
+    style problem: `function state(…)` beside `const state` is a duplicate
+    declaration (SyntaxError), and `function agent(…)` would silently SHADOW the
+    global — the judgment wrapper would then call itself, forever. Mangled for the
+    same reason as the reserved words, and only reachable now that the flow body
+    exists."""
+    step = _step(name=name, gives=FieldIR(name="out", type=_STR))
+    flow = FlowIR(name="f", rescues=(), line=1,
+                  chain=(CallIR(step_name=name, kwargs=(), line=2),))
+
+    src = _emit(FlowGraph(steps=(step,), flow=flow, flows=(flow,)), tmp_path)
+
+    assert f"function {name}(" not in src, "the step shadows a script global"
+    assert_valid_js(src, tmp_path)
+
+
+def test_the_whole_script_calls_no_sandbox_forbidden_global(tmp_path):
+    """Trap §6.2, checked on the assembled script and not only on one step:
+    Date.now(), new Date() and Math.random() THROW in the sandbox.
+
+    Comments are stripped first, and that is not a loophole — naming the three
+    traps in the stub the author types into is *required*
+    (test_exact_stub_names_the_globals_that_throw_in_the_sandbox). What must not
+    exist is a line that CALLS them."""
+    src = _emit(_linear_graph(), tmp_path)
+
+    code = "\n".join(ln for ln in src.splitlines() if not ln.strip().startswith("//"))
+
+    for forbidden in ("Date.now(", "new Date(", "Math.random("):
+        assert forbidden not in code

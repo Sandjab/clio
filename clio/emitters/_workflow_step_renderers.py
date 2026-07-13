@@ -86,6 +86,15 @@ def render_judgment_step_js(step: StepIR, contracts: dict[str, ContractIR]) -> s
     opts.append("phase: phaseName")
     opts_js = "".join(f"      {o},\n" for o in opts)
 
+    # The agent returns the schema object — { <gives.name>: value } (§4.1). What
+    # the flow stores is the VALUE: downstream reads are state['<gives>'] (a kwarg
+    # ref) and state['<gives>'].<field> (a condition), the same shape python
+    # (state[gives.name]) and swift emit. Returning the wrapper would nest it
+    # twice and every read would come back undefined, at run time, far from here.
+    unwrap = (
+        f"result[{js_string(step.gives.name)}]" if step.gives is not None else "result"
+    )
+
     return f"""\
 async function {js_identifier(step.name)}(state, phaseName) {{
   const result = await agent(
@@ -98,7 +107,7 @@ async function {js_identifier(step.name)}(state, phaseName) {{
   if (result === null || result === undefined) {{
     throw new Error({js_string(f"clio: step '{step.name}' failed (agent returned no result)")})
   }}
-  return result
+  return {unwrap}
 }}
 """
 
