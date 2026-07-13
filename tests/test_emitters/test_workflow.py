@@ -18,15 +18,20 @@ from clio.emitters._workflow_step_renderers import (
 from clio.emitters.workflow import WorkflowEmitter
 from clio.ir.graph import (
     ApiInvokeIR,
+    BoolOpIR,
     CacheConfigIR,
     CallIR,
     CliInvokeIR,
     CodeImplIR,
+    ConditionIR,
     ContractIR,
     FieldIR,
     FlowGraph,
     FlowIR,
+    IfBlockIR,
     ImplIR,
+    MatchBlockIR,
+    MatchCaseIR,
     McpToolImplIR,
     OnFailChainIR,
     OnFailStrategyIR,
@@ -34,6 +39,7 @@ from clio.ir.graph import (
     ShellImplIR,
     SqlImplIR,
     StepIR,
+    WhileBlockIR,
 )
 from clio.parser.ast_nodes import ContractRef, ListType, PrimitiveType, RecordType
 from tests.conftest import assert_valid_js
@@ -996,3 +1002,199 @@ def test_the_whole_script_calls_no_sandbox_forbidden_global(tmp_path):
 
     for forbidden in ("Date.now(", "new Date(", "Math.random("):
         assert forbidden not in code
+
+
+# ---------------------------------------------------------------------------
+# Task 7 — IF / MATCH / WHILE render to native JS control flow
+# ---------------------------------------------------------------------------
+
+_BOOL = PrimitiveType(name="bool")
+
+
+def _bool_step(name: str, field: str) -> StepIR:
+    """A judgment step whose GIVES lands in state under `field`."""
+    return _step(name=name, gives=FieldIR(name=field, type=_BOOL))
+
+
+def test_control_flow_fixture_emits_valid_js(tmp_path):
+    """swift_control_flow.clio is `assess -> MATCH r.level -> IF r.score > 0.5
+    -> refine -> WHILE p.done != true MAX 3`. The three blocks become native JS."""
+    src = _emit_fixture("swift_control_flow.clio", tmp_path)
+
+    assert "if (" in src
+    assert "switch (" in src
+    assert "while (" in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_condition_reads_the_state_key_not_the_step_name(tmp_path):
+    """ConditionIR.step_name is the state key — the producing step's GIVES *field*
+    name — despite what the attribute is called. In the fixture, `assess` GIVES
+    `r`, so `IF r.score > 0.5` must read state['r'].score. Reading state['assess']
+    would be `undefined` at run time, and `undefined > 0.5` is silently false: the
+    ELSE branch would always win and no test comparing text alone would notice."""
+    src = _emit_fixture("swift_control_flow.clio", tmp_path)
+
+    assert "if (state['r'].score > 0.5) {" in src
+    assert "switch (state['r'].level) {" in src
+    assert "state['assess']" not in src
+
+
+def test_conditions_use_strict_equality(tmp_path):
+    """JS loose equality makes `0 == false` true. Emitting `==` would silently
+    change flow semantics for int/bool comparisons."""
+    cond = ConditionIR(step_name="done", field="value", op="==",
+                       literal_value=False, literal_kind="bool")
+    check = _bool_step("check", "done")
+    flow = FlowIR(name="g",
+                  chain=(IfBlockIR(condition=cond,
+                                   then_body=(CallIR(step_name="check", kwargs=(), line=3),),
+                                   else_body=(), line=2),),
+                  rescues=(), line=1)
+
+    src = _emit(FlowGraph(steps=(check,), flow=flow, flows=(flow,)), tmp_path)
+
+    assert "state['done'].value === false" in src
+    assert " == " not in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_inequality_is_strict_too(tmp_path):
+    """The fixture's `WHILE p.done != true` — `!=` must become `!==` for the same
+    reason `==` becomes `===`; `null != true` and `null !== true` agree here, but
+    `0 != false` is false while `0 !== false` is true."""
+    src = _emit_fixture("swift_control_flow.clio", tmp_path)
+
+    assert "state['p'].done !== true" in src
+    assert " != " not in src
+
+
+def test_boolop_renders_native_js_operators(tmp_path):
+    """BoolOpIR nests, so the renderer must recurse and parenthesize: dropping the
+    parens would let JS precedence (&& binds tighter than ||) re-associate the
+    tree the author wrote."""
+    left = ConditionIR(step_name="done", field="value", op="==",
+                       literal_value=True, literal_kind="bool")
+    right = ConditionIR(step_name="score", field="value", op=">",
+                        literal_value=3, literal_kind="int")
+    other = ConditionIR(step_name="done", field="value", op="!=",
+                        literal_value=False, literal_kind="bool")
+    cond = BoolOpIR(op="or", left=BoolOpIR(op="and", left=left, right=right), right=other)
+
+    check = _bool_step("check", "done")
+    flow = FlowIR(name="g",
+                  chain=(IfBlockIR(condition=cond,
+                                   then_body=(CallIR(step_name="check", kwargs=(), line=3),),
+                                   else_body=(), line=2),),
+                  rescues=(), line=1)
+
+    src = _emit(FlowGraph(steps=(check,), flow=flow, flows=(flow,)), tmp_path)
+
+    assert ("((state['done'].value === true) && (state['score'].value > 3)) "
+            "|| (state['done'].value !== false)") in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_match_renders_a_switch_with_one_break_per_arm(tmp_path):
+    """A switch arm without `break` falls through into the next one — a real bug,
+    not a style nit: `CASE low` would run `archive` AND then `flag`. Counted, not
+    merely `'break' in src`, because a single break somewhere would satisfy that
+    while three of the fixture's arms still fell through."""
+    src = _emit_fixture("swift_control_flow.clio", tmp_path)
+    lines = src.splitlines()
+
+    labels = [ln for ln in lines if ln.strip().startswith(("case ", "default:"))]
+    breaks = [ln for ln in lines if ln.strip() == "break"]
+
+    assert "switch (state['r'].level) {" in src
+    assert [ln.strip() for ln in labels] == ["case 'low':", "case 'mid':", "case 'high':"]
+    assert len(breaks) == len(labels), "every arm must break, or it falls through"
+
+
+def test_match_default_arm_becomes_default(tmp_path):
+    """MatchCaseIR.value is None for DEFAULT (graph.py:336)."""
+    archive = _bool_step("archive", "archived")
+    flag = _bool_step("flag", "flagged")
+    block = MatchBlockIR(
+        state_field="r", sub_field="level",
+        cases=(MatchCaseIR(value="low",
+                           body=(CallIR(step_name="archive", kwargs=(), line=3),), line=3),
+               MatchCaseIR(value=None,
+                           body=(CallIR(step_name="flag", kwargs=(), line=4),), line=4)),
+        line=2,
+    )
+    flow = FlowIR(name="g", chain=(block,), rescues=(), line=1)
+
+    src = _emit(FlowGraph(steps=(archive, flag), flow=flow, flows=(flow,)), tmp_path)
+
+    assert "case 'low':" in src
+    assert "default:" in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_while_emits_the_mandatory_max_bound(tmp_path):
+    """WhileBlockIR.max_iters is mandatory. A `while` whose only exit is the
+    condition is a runaway — a latent bug of exactly this shape is already on
+    file against the go target. Built by hand so the bound is a known value."""
+    cond = ConditionIR(step_name="done", field="value", op="==",
+                       literal_value=False, literal_kind="bool")
+    check = _bool_step("check", "done")
+    work = _step(name="work")
+    flow = FlowIR(
+        name="loop",
+        chain=(WhileBlockIR(condition=cond, max_iters=7,
+                            body=(CallIR(step_name="work", kwargs=(), line=5),),
+                            line=4),),
+        rescues=(), line=1,
+    )
+    graph = FlowGraph(steps=(check, work), flow=flow, flows=(flow,))
+
+    src = _emit(graph, tmp_path)
+
+    assert "let _i_4 = 0" in src, "the counter is suffixed with the WHILE's source line"
+    assert "while ((state['done'].value === false) && _i_4 < 7) {" in src
+    assert "_i_4++" in src, "the bound needs a counter that actually increments"
+    assert_valid_js(src, tmp_path)
+
+
+def test_nested_while_counters_do_not_collide(tmp_path):
+    """Two WHILEs, one inside the other. A shared counter name would make the
+    inner loop's `let` a redeclaration (a SyntaxError only if in the same block —
+    here it shadows instead, and the OUTER bound would then never be reached: its
+    counter stops incrementing the moment the inner loop shadows it). The source
+    line is what keeps the two apart."""
+    cond = ConditionIR(step_name="done", field="value", op="==",
+                       literal_value=False, literal_kind="bool")
+    check = _bool_step("check", "done")
+    work = _step(name="work")
+    inner = WhileBlockIR(condition=cond, max_iters=2,
+                         body=(CallIR(step_name="work", kwargs=(), line=7),), line=6)
+    outer = WhileBlockIR(condition=cond, max_iters=9, body=(inner,), line=4)
+    flow = FlowIR(name="loop", chain=(outer,), rescues=(), line=1)
+
+    src = _emit(FlowGraph(steps=(check, work), flow=flow, flows=(flow,)), tmp_path)
+
+    assert "let _i_4 = 0" in src and "let _i_6 = 0" in src
+    assert "_i_4 < 9" in src and "_i_6 < 2" in src
+    assert_valid_js(src, tmp_path)
+
+
+def test_agents_inside_a_block_carry_the_blocks_phase(tmp_path):
+    """§4.3: `phase()` is global state in the Workflow runtime, so only the top
+    level moves it — a step nested in an IF gets the BLOCK's phase passed through
+    the call, and the flow never calls phase() from inside the block."""
+    cond = ConditionIR(step_name="done", field="value", op="==",
+                       literal_value=True, literal_kind="bool")
+    check = _bool_step("check", "done")
+    flow = FlowIR(name="g",
+                  chain=(IfBlockIR(condition=cond,
+                                   then_body=(CallIR(step_name="check", kwargs=(), line=3),),
+                                   else_body=(), line=2),),
+                  rescues=(), line=1)
+
+    src = _emit(FlowGraph(steps=(check,), flow=flow, flows=(flow,)), tmp_path)
+    body = src.split("export const meta")[0]
+
+    assert "phase('if:done')" in src           # declared once, at the top level
+    assert "await check(state, 'if:done')" in src   # the nested call carries it
+    assert body.count("phase('if:done')") <= 1, "phase() must not be called in-block"
