@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [0.25.0] — unreleased
+## [0.25.0] — 2026-07-24
 
 Minor release adding **`target: claude-workflow`**, the eighth compilation target — a `.clio` FLOW compiles to a **Claude Code Workflow script**: one JS module (`export const meta` + `agent()` / `parallel()` / `phase()`) that orchestrates **subagents**. Like `claude-cli` and `claude-skill` it is host-orchestrated — the Claude Code session is the runtime, so there is **no API key** and nothing to install. It exists for one reason: it is the **only target where `FOR EACH … PARALLEL` is really parallel** (`claude-skill` serialises it with a warning, `claude-cli` rejects it). The workflow sandbox has no process, no network, no filesystem and no clock, and the target refuses or degrades accordingly rather than emitting code that would fail at run time.
 
