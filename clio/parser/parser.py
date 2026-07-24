@@ -429,11 +429,13 @@ class _Parser:
                 value_tok = self.expect(TokenType.KEYWORD)
                 _valid_targets = {
                     "claude-cli", "python", "mcp-server", "langgraph", "claude-skill", "go", "swift",
+                    "claude-workflow",
                 }
                 if value_tok.value not in _valid_targets:
                     raise ParseError(
                         f"target {value_tok.value!r} is not supported "
-                        "(valid targets: claude-cli, python, mcp-server, langgraph, claude-skill, go, swift)",
+                        "(valid targets: claude-cli, python, mcp-server, langgraph, claude-skill, go, swift, "
+                        "claude-workflow)",
                         value_tok.line, value_tok.col,
                     )
                 target = value_tok.value

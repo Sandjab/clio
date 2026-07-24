@@ -1,6 +1,6 @@
 # Compilation targets
 
-CLIO emits a runnable project for **one of seven targets** today, selected via `--target`:
+CLIO emits a runnable project for **one of eight targets** today, selected via `--target`:
 
 | Target | Output | Best for |
 |---|---|---|
@@ -11,6 +11,7 @@ CLIO emits a runnable project for **one of seven targets** today, selected via `
 | `claude-skill` | Claude Code skill directory (`SKILL.md` + `scripts/` + `schemas/` + `prompts/`) | LLM-host-orchestrated skills; ship a flow as a Claude Code skill with no external runtime or API key after install |
 | `go` | Go module (`flow.Run` package + `cmd/<flow>/main.go`) | Single static binary, no runtime to install; Go exact steps + Anthropic judgment |
 | `swift` | Swift package (SwiftPM, zero external SPM deps, macOS + Linux) | Native Swift binary; URLSession Anthropic client; `withThrowingTaskGroup` parallel FOR EACH |
+| `claude-workflow` | Claude Code Workflow script — one JS module (`export const meta` + `agent()` / `parallel()` / `phase()`) | Fan-out flows: the only target where `FOR EACH … PARALLEL` is really parallel (one concurrent subagent per item). Host-orchestrated, no API key |
 
 The `RESOURCES.target:` field in the `.clio` source is **informational** — the `--target` flag at compile time is what actually selects the emitter.
 
@@ -201,36 +202,67 @@ You get a **two-target** `Package.swift` (a library `ClioFlow` plus an executabl
 
 See [`docs/COMPILATION_TARGETS.md`](../COMPILATION_TARGETS.md#target-swift) for the full layout and refused-combo table.
 
+### `claude-workflow`
+
+```bash
+uv run python -m clio compile examples/parallel_review.clio --target claude-workflow --output ./wf-out
+cp ./wf-out/parallel-review.workflow.js .claude/workflows/
+# then run the workflow from Claude Code
+```
+
+You get a **single JS module**: `export const meta` (name, description, phases), one `async function` per step, and the flow body at the bottom threading a `state` object between them. A `judgment` step becomes `await agent(prompt, {label, phase, schema})` — a Claude Code **subagent**, forced through the step's `GIVES` schema by the host. An `exact` step becomes a **pure-JS stub that throws until you fill it in**. A `.clio/` sidecar ships beside the script, so `clio import` recovers the source verbatim.
+
+Like `claude-cli` and `claude-skill`, it is **host-orchestrated**: the Claude Code session *is* the runtime, so there is **no API key** and no package to install.
+
+**Use when:**
+
+- Your flow **fans out**. `FOR EACH … PARALLEL` compiles to `parallel()` over concurrent subagents — this is the only target where it is really parallel (`claude-skill` serialises it with a warning, `claude-cli` rejects it).
+- You want the flow to run *inside* Claude Code, with no runtime and no key.
+- Your `exact` steps are pure transforms (parse, map, filter, aggregate) you are happy to write in JavaScript.
+
+**Don't use when:**
+
+- Any `exact` step does **IO** — `impl.mode: shell / rest / sql / mcp_tool` is refused (`E_WF_003`): the workflow sandbox has no process, no network and no filesystem. Use `--target python / go / swift`.
+- Your `exact` bodies are not JavaScript — an explicit `LANG:` other than `node` / `auto` is refused (`E_WF_004`).
+- You need a non-Anthropic provider — `invoke.api.openai / bedrock / vertex` is refused (`E_WF_002`); an `agent()` cannot call them.
+- You depend on `CACHE:` (**ignored**, `W_WF_001` — no filesystem, no clock), on retry **backoff** (`ON_FAIL` retries run back-to-back, `W_WF_002` — `Date.now()` throws in the sandbox), or on `CONTRACT … ASSERT` (**not enforced**, `W_WF_003` — the host validates the JSON Schema, not the predicate).
+
+Two more refusals worth knowing: a source with several `FLOW`s needs `--flow <name>` (`E_WF_006` — this target emits exactly one script and will not silently drop the others), and a recursive `FLOW` is rejected (`E_WF_007` — sub-flows are *inlined*, so recursion would overflow the stack at run time).
+
+See [`docs/COMPILATION_TARGETS.md`](../COMPILATION_TARGETS.md#target-claude-workflow) for the full layout and refused-combo table.
+
 ## Cross-target feature support
 
-| Feature | claude-cli | python | mcp-server | langgraph | claude-skill | go | swift |
-|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| `MODE: exact` (code stub) | ✅ | ✅ | ✅ | ✅ | ✅ (`scripts/NN.py` stub) | ✅ (Go stub) | ✅ (Swift stub) |
-| `MODE: exact` + `LANG: swift / auto` | ⚠️ LANG ignored | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ❌ E_GO_001 | ✅ |
-| `MODE: exact` + `LANG: go / auto` | ⚠️ LANG ignored (always Python stub) | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ✅ | ❌ E_SWIFT_001 |
-| `MODE: exact` + `LANG: python / bash / rust / node` | ⚠️ LANG ignored (always Python stub) | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ❌ E_GO_001 | ❌ E_SWIFT_001 |
-| `MODE: exact` + `impl.shell` | ✅ | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ✅ os/exec | ❌ Phase 4 |
-| `MODE: exact` + `impl.shell` + `parse: json` | ⚠️ silently ignored | ✅ | ✅ | ✅ | ✅ | ✅ json.Unmarshal | ❌ Phase 4 |
-| `MODE: exact` + `impl.rest` | ✅ (uses `requests` at runtime) | ✅ | ✅ | ✅ | ✅ | ✅ net/http + retry (json/raw bodies only; form/file/multipart → E_GO_013) | ❌ Phase 4 |
-| `MODE: judgment` + `invoke: cli` (default) | ✅ | ❌ rejected | ❌ rejected | ❌ rejected | ✅ host-driven | ❌ E_GO_002 | ❌ E_SWIFT_002 |
-| `MODE: judgment` + `invoke.api.anthropic` | (uses `RESOURCES.models` chain) | ✅ | ❌ rejected | ✅ | ✅ host-driven | ✅ | ✅ URLSession |
-| `MODE: judgment` + `invoke.api.openai` | ❌ | ✅ | ❌ | ❌ rejected (v0) | ✅ host-driven | ❌ E_GO_005 | ❌ E_SWIFT_005 |
-| `MODE: judgment` + `invoke.api.bedrock`/`vertex` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ E_GO_003 | ❌ E_SWIFT_003 |
-| `CACHE: ttl(...)` | ✅ | ✅ | ✅ | ✅ (reuses python runtime) | ⚠️ documented in `SKILL.md`; helper bundled | ✅ | ✅ (keys byte-identical with python + go) |
-| `ON_FAIL: retry(N)` | ✅ | ✅ | ✅ | ✅ via `RetryPolicy` | ⚠️ documented in `SKILL.md` (host-followed) | ✅ | ✅ (exponential backoff via `Task.sleep`) |
-| `ON_FAIL: escalate / fallback` | ✅ | ✅ | ✅ minimum-compliance | ❌ rejected (v0) | ⚠️ documented in `SKILL.md` | ✅ | ✅ fallback; escalate no-op |
-| `ON_FAIL: abort` | ✅ | ✅ | ✅ | ✅ | ⚠️ documented in `SKILL.md` | ✅ | ✅ |
-| `RESCUE` + `step.error.*` + `RESUME` | ❌ rejected | ✅ | ✅ | ❌ rejected | ⚠️ documented in `SKILL.md` | ✅ | ❌ Phase 5 |
-| `FOR EACH` (sequential) | ✅ | ✅ | ✅ | ❌ rejected (v0; v0.7) | ✅ | ✅ | ✅ |
-| `FOR EACH ... PARALLEL AS` | ❌ rejected | ✅ ThreadPool | ✅ asyncio.gather | ❌ rejected (v0; v0.7 via Send) | ⚠️ serialised with warning | ✅ errgroup | ✅ withThrowingTaskGroup (cap 10) |
-| `FLOW.TAKES` / `FLOW.GIVES` (v0.16, optional) | ✅ README section | ✅ typed `run()` | ✅ inputSchema / outputSchema | ✅ State subset | ✅ SKILL.md Inputs / Outputs | ✅ typed `Run()` | ✅ typed `Flow.run(kwargs:)` |
-| **FLOW composition** (sub-flow callable, v0.17) | ❌ rejected | ✅ `run_<name>()` | ✅ + multi-tool | ✅ sub-`StateGraph` | ⚠️ documented in SKILL.md (linear-only, `scripts/sub_<name>.py`) | ✅ `run<Name>()` func | ❌ Phase 5 |
-| `FOR EACH PARALLEL` body = sub-flow (v0.17) | ❌ rejected | ✅ | ✅ asyncio.gather | ❌ rejected (v0; v0.7 via Send) | ⚠️ linear sub-flow only | ✅ single-GIVES, terminal-only (typed downstream consumption of the collector → v0.24; multi-GIVES → E_GO_006) | ❌ Phase 5 (needs FLOW composition; `E_SWIFT_006` reserved/dormant until then) |
-| mcp-server multi-tool (multi-FLOW source, v0.17) | n/a | n/a | ✅ one tool per uncalled signed FLOW | n/a | n/a | n/a | n/a |
-| `TEST` blocks (v0.15) | ⚠️ ignored | ✅ pytest emitted | ⚠️ ignored | ⚠️ ignored | ⚠️ ignored | ❌ E_GO_012 | ❌ E_SWIFT_012 |
-| `--from-step N` resume | ❌ | ✅ | ❌ | ❌ (use LangGraph checkpointers) | ❌ | ⚠️ not implemented (re-runs full flow) | ⚠️ not implemented (re-runs full flow) |
-| JSONL logging (`CLIO_LOG=1`) | ❌ | ✅ | ✅ | ⏸ delegated to LangSmith | ❌ | ⏸ silent no-op | ❌ not emitted |
-| `clio graph --format html` | n/a (graph is target-independent) | n/a | n/a | n/a | n/a | n/a | n/a |
+| Feature | claude-cli | python | mcp-server | langgraph | claude-skill | go | swift | claude-workflow |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| `MODE: exact` (code stub) | ✅ | ✅ | ✅ | ✅ | ✅ (`scripts/NN.py` stub) | ✅ (Go stub) | ✅ (Swift stub) | ✅ (pure-JS stub; throws until filled) |
+| `MODE: exact` + `LANG: swift / auto` | ⚠️ LANG ignored | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ❌ E_GO_001 | ✅ | `auto` ✅ / `swift` ❌ E_WF_004 |
+| `MODE: exact` + `LANG: go / auto` | ⚠️ LANG ignored (always Python stub) | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ✅ | ❌ E_SWIFT_001 | `auto` ✅ / `go` ❌ E_WF_004 |
+| `MODE: exact` + `LANG: python / bash / rust / node` | ⚠️ LANG ignored (always Python stub) | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ❌ E_GO_001 | ❌ E_SWIFT_001 | `node` ✅ / others ❌ E_WF_004 |
+| `MODE: exact` + `impl.shell` | ✅ | ✅ | ✅ | ✅ | ✅ (Python or Bash only) | ✅ os/exec | ❌ Phase 4 | ❌ E_WF_003 (no process) |
+| `MODE: exact` + `impl.shell` + `parse: json` | ⚠️ silently ignored | ✅ | ✅ | ✅ | ✅ | ✅ json.Unmarshal | ❌ Phase 4 | ❌ E_WF_003 |
+| `MODE: exact` + `impl.rest` | ✅ (uses `requests` at runtime) | ✅ | ✅ | ✅ | ✅ | ✅ net/http + retry (json/raw bodies only; form/file/multipart → E_GO_013) | ❌ Phase 4 | ❌ E_WF_003 (no network) |
+| `MODE: judgment` + `invoke: cli` (default) | ✅ | ❌ rejected | ❌ rejected | ❌ rejected | ✅ host-driven | ❌ E_GO_002 | ❌ E_SWIFT_002 | ✅ host-driven (`agent()` subagent) |
+| `MODE: judgment` + `invoke.api.anthropic` | (uses `RESOURCES.models` chain) | ✅ | ❌ rejected | ✅ | ✅ host-driven | ✅ | ✅ URLSession | ✅ model → `opus`/`sonnet`/`haiku` tier |
+| `MODE: judgment` + `invoke.api.openai` | ❌ | ✅ | ❌ | ❌ rejected (v0) | ✅ host-driven | ❌ E_GO_005 | ❌ E_SWIFT_005 | ❌ E_WF_002 |
+| `MODE: judgment` + `invoke.api.bedrock`/`vertex` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ E_GO_003 | ❌ E_SWIFT_003 | ❌ E_WF_002 |
+| `CACHE: ttl(...)` | ✅ | ✅ | ✅ | ✅ (reuses python runtime) | ⚠️ documented in `SKILL.md`; helper bundled | ✅ | ✅ (keys byte-identical with python + go) | ⚠️ **ignored** — W_WF_001 (no filesystem, no clock) |
+| `ON_FAIL: retry(N)` | ✅ | ✅ | ✅ | ✅ via `RetryPolicy` | ⚠️ documented in `SKILL.md` (host-followed) | ✅ | ✅ (exponential backoff via `Task.sleep`) | ⚠️ retries, but **no backoff** — W_WF_002 (no clock) |
+| `ON_FAIL: escalate / fallback` | ✅ | ✅ | ✅ minimum-compliance | ❌ rejected (v0) | ⚠️ documented in `SKILL.md` | ✅ | ✅ fallback; escalate no-op | ✅ fallback; escalate no-op |
+| `ON_FAIL: abort` | ✅ | ✅ | ✅ | ✅ | ⚠️ documented in `SKILL.md` | ✅ | ✅ | ✅ |
+| `RESCUE` + `step.error.*` + `RESUME` | ❌ rejected | ✅ | ✅ | ❌ rejected | ⚠️ documented in `SKILL.md` | ✅ | ❌ Phase 5 | ✅ `try` / `catch` |
+| `FOR EACH` (sequential) | ✅ | ✅ | ✅ | ❌ rejected (v0; v0.7) | ✅ | ✅ | ✅ | ✅ `for…of` |
+| `FOR EACH ... PARALLEL AS` | ❌ rejected | ✅ ThreadPool | ✅ asyncio.gather | ❌ rejected (v0; v0.7 via Send) | ⚠️ serialised with warning | ✅ errgroup | ✅ withThrowingTaskGroup (cap 10) | ✅ **`parallel()` — one concurrent subagent per item** |
+| `FLOW.TAKES` / `FLOW.GIVES` (v0.16, optional) | ✅ README section | ✅ typed `run()` | ✅ inputSchema / outputSchema | ✅ State subset | ✅ SKILL.md Inputs / Outputs | ✅ typed `Run()` | ✅ typed `Flow.run(kwargs:)` | ⚠️ TAKES → `args`, presence-checked; the entry flow's GIVES stays in `state` (nothing is returned) |
+| **FLOW composition** (sub-flow callable, v0.17) | ❌ rejected | ✅ `run_<name>()` | ✅ + multi-tool | ✅ sub-`StateGraph` | ⚠️ documented in SKILL.md (linear-only, `scripts/sub_<name>.py`) | ✅ `run<Name>()` func | ❌ Phase 5 | ✅ **inlined** as a local `async function` (recursion → E_WF_007) |
+| `FOR EACH PARALLEL` body = sub-flow (v0.17) | ❌ rejected | ✅ | ✅ asyncio.gather | ❌ rejected (v0; v0.7 via Send) | ⚠️ linear sub-flow only | ✅ single-GIVES, terminal-only (typed downstream consumption of the collector → v0.24; multi-GIVES → E_GO_006) | ❌ Phase 5 (needs FLOW composition; `E_SWIFT_006` reserved/dormant until then) | ✅ `parallel()` — the collector holds the sub-flow's **GIVES objects**, not bare values |
+| mcp-server multi-tool (multi-FLOW source, v0.17) | n/a | n/a | ✅ one tool per uncalled signed FLOW | n/a | n/a | n/a | n/a | n/a (one script per FLOW; `--flow` required → E_WF_006) |
+| `TEST` blocks (v0.15) | ⚠️ ignored | ✅ pytest emitted | ⚠️ ignored | ⚠️ ignored | ⚠️ ignored | ❌ E_GO_012 | ❌ E_SWIFT_012 | ⚠️ ignored |
+| `--from-step N` resume | ❌ | ✅ | ❌ | ❌ (use LangGraph checkpointers) | ❌ | ⚠️ not implemented (re-runs full flow) | ⚠️ not implemented (re-runs full flow) | ❌ |
+| JSONL logging (`CLIO_LOG=1`) | ❌ | ✅ | ✅ | ⏸ delegated to LangSmith | ❌ | ⏸ silent no-op | ❌ not emitted | ❌ not emitted (the host shows phases + subagents) |
+| `clio graph --format html` | n/a (graph is target-independent) | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+
+On `claude-workflow`, `CONTRACT … ASSERT` is **not enforced** (`W_WF_003`): the emitted schema is handed to the subagent and the host validates types, ranges and enums against it, but the `ASSERT` predicate is dropped. The compiler says so at compile time, once per contract that declares one.
 
 ## A common workflow: `python` for production, `claude-cli` for sketches
 
@@ -241,7 +273,8 @@ A `.clio` file is target-independent (modulo the limitations above). A common pa
 3. **Distribute** as `--target mcp-server` if you want it consumable by other AI clients.
 4. **Bridge** to `--target langgraph` if you need to plug into LangChain runtime features (checkpointers, human-in-the-loop, streaming). Subset features today, full parity is planned (not yet shipped).
 5. **Ship as a Claude Code skill** with `--target claude-skill` when the audience is Claude Code users who want a zero-runtime install (no API key, no Python env).
+6. **Fan out inside Claude Code** with `--target claude-workflow` when the flow's cost is in a `FOR EACH … PARALLEL`: there, and only there, the iterations run as concurrent subagents.
 
-The same source compiles all seven (within each target's scope).
+The same source compiles all eight (within each target's scope).
 
 Next: [CLI reference](05-cli-reference.md) for every command and flag.

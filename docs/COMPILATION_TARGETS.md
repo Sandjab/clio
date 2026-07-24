@@ -15,6 +15,7 @@ Each target is an emitter module that transforms the IR graph into a runnable pr
 | `rust` | Future | Cargo async project | Performance-critical `exact` steps | planned | High |
 | `go` | Implemented | Go module (package `flow.Run` + `cmd/<flow>/main.go`) | Single static binary, no runtime to install; concurrent `exact` steps via goroutines | ✅ | — |
 | `swift` | Implemented | Swift package (SwiftPM); zero external SPM dependencies | Native Swift binary (macOS + Linux), URLSession Anthropic client, `withThrowingTaskGroup` parallel FOR EACH | ❌ (deferred) | — |
+| `claude-workflow` | Implemented | Claude Code Workflow script — one JS module (`export const meta` + `agent()` / `parallel()` / `phase()`) | The only target where `FOR EACH … PARALLEL` really is parallel: each iteration is a concurrent subagent. Host-orchestrated — no API key, no runtime | ✅ | — |
 | `docker` | Future | Multi-stage Dockerfile + compose | Mixed-language flows | planned | Medium |
 | `hybrid` | Future | Claude CLI + precompiled binaries for `exact` | Heavy `exact` within CLI orchestration | planned | Medium |
 | `fastapi` | Candidate | HTTP server (FLOW = endpoint, CONTRACT = `response_model`) | Deploy a `.clio` as a microservice | planned | Low–Medium |
@@ -524,6 +525,94 @@ Structured JSONL logging is not emitted by the Swift target. To get `CLIO_LOG=1`
 ### Resume
 
 `--from-step N` resume is not implemented. The Swift binary runs the full flow on each invocation without error. For incremental re-runs on a long pipeline, compile to `--target python` today.
+
+---
+
+## `target: claude-workflow`
+
+Produces a **Claude Code Workflow script**: a single JS module that orchestrates **subagents**. Like `claude-cli` and `claude-skill`, it is host-orchestrated — the Claude Code session is the runtime, so there is **no API key** and nothing to install.
+
+It exists for one reason: it is the **only target where `FOR EACH … PARALLEL` is really parallel**. `claude-skill` serialises it (with a warning) and `claude-cli` rejects it; here each iteration becomes a concurrent subagent under `parallel()`. A linear flow gains nothing from this target; a fan-out flow gains everything.
+
+### Layout
+
+```
+output/
+  <flow-name>.workflow.js   # the script (kebab-cased flow name)
+  README.md                 # how to install it, and which stubs you must fill in
+  .clio/
+    source.clio             # verbatim entry source
+    manifest.json           # clio_version, emitted_at, source_hash, file_hashes
+    sources/                # multi-file projects only (FROM … IMPORT)
+```
+
+The `.clio/` sidecar is the same one `claude-skill` writes (v0.19), so `clio import` recovers the source verbatim, hash-drift detection included.
+
+### Use
+
+```bash
+python -m clio compile examples/parallel_review.clio --target claude-workflow --output ./wf-out
+cp ./wf-out/parallel-review.workflow.js .claude/workflows/
+```
+
+Then run the workflow from Claude Code. The emitter never writes outside `<output>` — installing into `.claude/workflows/` is an explicit copy.
+
+### What each IR node becomes
+
+| CLIO | Emitted JS |
+|---|---|
+| `MODE: judgment` | `await agent(prompt, { label, phase, schema })` — a subagent, forced through the step's `GIVES` schema by the host |
+| `MODE: exact` (code / no `impl`) | a **pure-JS stub** that throws until you fill it in |
+| `FLOW.TAKES` | the `args` global, presence-checked at script start |
+| `FOR EACH` (sequential) | `for…of` |
+| `FOR EACH … PARALLEL AS c` | `state['c'] = $$collect(await parallel(items.map(x => () => $$settle(() => step(x)))), items, …)` — real fan-out |
+| `IF` / `MATCH` / `WHILE … MAX N` | native `if` / `switch` / bounded `while` |
+| sub-flow call | **inlined** as a local `async function` in the same script |
+| `ON_FAIL` / `RESCUE` / `RESUME` | `try` / `catch` + retry loop / fallback step / abort |
+| `CONTRACT` | a self-contained schema literal — every `$ref` is **inlined** (the sandbox cannot resolve a `$ref` at run time) |
+| `TEST` | ignored (only `--target python` emits pytest) |
+
+`agent()` returns **null** on terminal failure rather than throwing, so every emitted step wrapper converts that null into a thrown error — otherwise `ON_FAIL` and `RESCUE` would be dead code.
+
+`parallel()` is the **only** fan-out primitive emitted. The Workflow host also offers `pipeline()` (one item threaded through several stages), but the language has no source that reaches it: a `FOR EACH … PARALLEL` body is always **exactly one** step or sub-flow call — [`LANGUAGE_SPEC.md`](LANGUAGE_SPEC.md#parallel-for-each-bodies), enforced by the IR builder for every target. A flow that wants several steps per item writes several `FOR EACH … PARALLEL` blocks, as [`examples/parallel_review.clio`](../examples/parallel_review.clio) does (review, then triage).
+
+Inside a fan-out, a thunk that throws resolves to `null` in the array `parallel()` returns — the same value a step whose `GIVES` is `Optional<T>` produces when it legitimately returns `null`. The two are told apart by the emitted `$$settle` wrapper, which makes each item report its outcome (`{ok, value}` / `{ok, error}`) instead of having it inferred from its value. `$$collect` then **fails the flow** on any failed item, naming it and its cause — the semantics `python` / `go` / `swift` already have, the step's `ON_FAIL` chain having already run inside its own function — and maps the successes back **in order**, so `state['c'][i]` stays the result of `items[i]` and a legitimate `null` survives.
+
+### Refused at compile time
+
+- `E_WF_001` — the source declares no `FLOW`; nothing to orchestrate.
+- `E_WF_002` — `invoke.api.openai / bedrock / vertex`: an `agent()` cannot call a non-Anthropic provider. Use `--target python`.
+- `E_WF_003` — `impl.mode: shell | rest | sql | mcp_tool`: the workflow sandbox has **no process, no network and no filesystem**. Move the IO out of the flow, or use `--target python / go / swift`.
+- `E_WF_004` — an explicit `LANG:` other than `node` / `auto` on an exact step: this target's language is JavaScript.
+- `E_WF_005` — a `CONTRACT` reference **cycle**: schemas are inlined, and a cycle cannot be.
+- `E_WF_006` — the source declares **several `FLOW`s** and none was selected. This target emits exactly one script, and compiling the first declared FLOW would silently drop the others: re-run with `--flow <name>`.
+- `E_WF_007` — a `FLOW` that calls **itself**, directly or through a cycle: sub-flows are inlined, so recursion would overflow the stack at run time.
+
+### Degraded, with a compile-time warning
+
+- `W_WF_001` — **`CACHE:` is ignored.** The sandbox has no filesystem and no clock. A cache miss is slower, never wrong.
+- `W_WF_002` — **`ON_FAIL` retries run without backoff.** They fire back-to-back: `Date.now()` throws in the sandbox, so there is no delay and no jitter.
+- `W_WF_003` — **`CONTRACT … ASSERT` is not enforced.** The host validates the subagent's output against the emitted JSON Schema (types, ranges, enums); the `ASSERT` predicate is dropped. Use `--target python` if the predicate is load-bearing.
+
+Each warning names the step (or contract) and its source line. The emitted `README.md` repeats exactly the warnings this flow actually triggered — and stays silent when it triggers none.
+
+### Model name mapping
+
+A declared Anthropic model id maps to the tier enum `agent()` accepts:
+
+| Declared model | `agent({ model })` |
+|---|---|
+| `claude-opus-*` | `'opus'` |
+| `claude-sonnet-*` | `'sonnet'` |
+| `claude-haiku-*` | `'haiku'` |
+| *(nothing declared)* | **omitted** — the subagent inherits the session model |
+
+`invoke.mode: cli` needs no mapping: here, the `agent()` call *is* the Claude Code invocation.
+
+### Known limitations
+
+- The entry flow's `GIVES` is not returned anywhere — the values are left in the script's `state` object. Sub-flow `GIVES` **is** returned (that is how a sub-flow's result reaches the caller).
+- No structured JSONL logging (`CLIO_LOG=1`) and no `--from-step N` resume: use `--target python` for either.
 
 ---
 
