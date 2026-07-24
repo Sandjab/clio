@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Go emitter: four codegen bugs that made emitted modules fail `go build`**, found by build-checking every `examples/*.clio` output (none had build coverage; the suite's string assertions pinned two of the wrong forms):
+  - a step referenced **only by `ON_FAIL: … fallback(<name>)`** (never called in the FLOW chain) got no `steps/NN_<name>.go` file, so the primary step's generated fallback call was `undefined: <Cls>` — hit `examples/mvp_go.clio`, the Go target's own demo;
+  - an `ON_FAIL` chain ending with **neither `fallback` nor `abort`** (e.g. `retry(3) then escalate` — escalate is a documented no-op for Go) emitted a step function with no terminal return (`missing return`) — hit `examples/critical_pipeline.clio`;
+  - **`IF` / `MATCH` / `WHILE` over a sub-field of a step's GIVES** read the field on the Out wrapper (`.(steps.XOut).Safe`) instead of hopping through the GIVES field (`.(steps.XOut).X.Safe`) — hit `examples/feedback_routing.clio`; the three suite assertions pinning the one-hop form were corrected;
+  - a **RESCUE body sub-step not consumed by a `RESUME`** declared a named output variable inside the deferred recover block (`declared and not used`) — hit both `critical_pipeline` examples.
+
+  Each fix is locked by a new `go build` test in `tests/test_emitters/test_go_compile.py`; the `expected_go/mvp_go` golden gains the previously missing `03_detect_churn_naive.go`. `examples/README.md` target lists for `classify_corpus` and `ticket_routing` brought back in line with what the compiler actually accepts (with a pointer to #107 for the Go parallel-collector limitation).
+
 ## [0.25.0] — 2026-07-24
 
 Minor release adding **`target: claude-workflow`**, the eighth compilation target — a `.clio` FLOW compiles to a **Claude Code Workflow script**: one JS module (`export const meta` + `agent()` / `parallel()` / `phase()`) that orchestrates **subagents**. Like `claude-cli` and `claude-skill` it is host-orchestrated — the Claude Code session is the runtime, so there is **no API key** and nothing to install. It exists for one reason: it is the **only target where `FOR EACH … PARALLEL` is really parallel** (`claude-skill` serialises it with a warning, `claude-cli` rejects it). The workflow sandbox has no process, no network, no filesystem and no clock, and the target refuses or degrades accordingly rather than emitting code that would fail at run time.
