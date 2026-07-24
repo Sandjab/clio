@@ -311,7 +311,7 @@ def test_go_condition_eq_ident_str() -> None:
         s.gives.name: s for s in graph.steps if s.gives is not None
     }
     result = _go_condition_expr(cond, set(), state_field_to_step)
-    assert result == 'state["assessment"].(steps.DetectOut).Level == "high"'
+    assert result == 'state["assessment"].(steps.DetectOut).Assessment.Level == "high"'
 
 
 def test_go_condition_lt_float() -> None:
@@ -342,7 +342,7 @@ def test_go_condition_lt_float() -> None:
         s.gives.name: s for s in graph.steps if s.gives is not None
     }
     result = _go_condition_expr(cond, set(), state_field_to_step)
-    assert result == 'state["result"].(steps.ClassifyOut).Confidence < float64(0.7)'
+    assert result == 'state["result"].(steps.ClassifyOut).Result.Confidence < float64(0.7)'
 
 
 def test_go_condition_and_composition() -> None:
@@ -390,8 +390,8 @@ def test_go_condition_and_composition() -> None:
     )
     result = _go_condition_expr(cond, set(), state_field_to_step)
     assert result == (
-        '(state["out_a"].(steps.StepAOut).Score == int64(1)) && '
-        '(state["out_b"].(steps.StepBOut).Score == int64(2))'
+        '(state["out_a"].(steps.StepAOut).OutA.Score == int64(1)) && '
+        '(state["out_b"].(steps.StepBOut).OutB.Score == int64(2))'
     )
 
 
