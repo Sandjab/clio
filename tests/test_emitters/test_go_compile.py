@@ -487,6 +487,8 @@ def test_go_build_passes_on_retry_then_escalate(tmp_path: Path) -> None:
     )
     out = tmp_path / "out"
     _compile(src, out)
+    step_src = (out / "steps" / "01_detect.go").read_text()
+    assert "detect: retries exhausted (line 1)" in step_src
     tidy_env = {
         "GOFLAGS": "-mod=mod",
         "HOME": str(out / ".gohome"),
