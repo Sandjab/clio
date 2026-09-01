@@ -101,6 +101,32 @@ def _collect_reachable_steps(graph: FlowGraph) -> list[StepIR]:
         for rescue in fl.rescues:
             visit_chain(rescue.body)
 
+    # ON_FAIL fallback targets: a step referenced only by `fallback(<name>)`
+    # never appears in a chain, but the primary step's generated body calls
+    # it — without a file the module fails `go build` with `undefined: <Cls>`.
+    # Walk transitively: a fallback step may itself declare a fallback.
+    queue = list(ordered)
+    while queue:
+        step = queue.pop(0)
+        if step.on_fail is None:
+            continue
+        for strat in step.on_fail.strategies:
+            if strat.kind != "fallback":
+                continue
+            fb_name = (
+                strat.fallback_step.name
+                if strat.fallback_step is not None
+                else strat.fallback_step_name
+            )
+            if fb_name is None or fb_name in seen:
+                continue
+            fb = steps_by_name.get(fb_name)
+            if fb is None:
+                continue
+            seen.add(fb_name)
+            ordered.append(fb)
+            queue.append(fb)
+
     return ordered
 
 
