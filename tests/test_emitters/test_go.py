@@ -710,12 +710,13 @@ def test_if_else_emits_go_branches(tmp_path: Path) -> None:
     """IF/ELSE block renders as `if <cond> { ... } else { ... }` in flow.go.
 
     The condition accesses a contract field on the typed step output via a
-    Go type assertion:  state["assessment"].(steps.DetectOut).Level == "high".
+    Go type assertion plus the Out struct's GIVES field:
+    state["assessment"].(steps.DetectOut).Assessment.Level == "high".
     """
     out = tmp_path / "out"
     _compile(FIXTURES / "go_control_flow.clio", out)
     body = (out / "flow" / "flow.go").read_text()
-    assert 'if state["assessment"].(steps.DetectOut).Level == "high" {' in body
+    assert 'if state["assessment"].(steps.DetectOut).Assessment.Level == "high" {' in body
     assert "} else {" in body
     assert "steps.NotifyTeam(ctx," in body
     assert "steps.StoreRecord(ctx," in body
@@ -731,7 +732,7 @@ def test_match_emits_go_switch(tmp_path: Path) -> None:
     out = tmp_path / "out"
     _compile(FIXTURES / "go_control_flow.clio", out)
     body = (out / "flow" / "flow.go").read_text()
-    assert 'switch state["assessment"].(steps.DetectOut).Level {' in body
+    assert 'switch state["assessment"].(steps.DetectOut).Assessment.Level {' in body
     assert 'case "low":' in body
     assert 'case "mid":' in body
     assert 'case "high":' in body
@@ -762,7 +763,7 @@ def test_while_loop_emits_for_with_condition(tmp_path: Path) -> None:
     out = tmp_path / "out"
     _compile(src, out)
     body = (out / "flow" / "flow.go").read_text()
-    assert 'for state["result"].(steps.PollOut).Done != true {' in body, \
+    assert 'for state["result"].(steps.PollOut).Result.Done != true {' in body, \
            f"Expected WHILE→for loop in flow.go, got:\n{body}"
     assert "steps.Poll(ctx," in body
 

@@ -420,6 +420,203 @@ def test_go_build_passes_on_loopvar_control_flow(tmp_path: Path) -> None:
     assert ".(any).Level" not in flow_src
 
 
+def test_go_build_passes_on_fallback_only_step(tmp_path: Path) -> None:
+    """A step referenced ONLY by an ON_FAIL `fallback(<name>)` (never called in
+    the FLOW chain) must still get its steps/NN_<name>.go file: the primary
+    step's generated body calls it, so omitting it is an
+    `undefined: <Cls>` / `undefined: <Cls>In` build error. Mirrors
+    examples/mvp_go.clio (detect_churn_naive)."""
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "CONTRACT customer_risk\n"
+        "  SHAPE: {client: str, risk: str}\n"
+        "STEP detect_naive\n"
+        "  TAKES: customers: str\n"
+        "  GIVES: risks: List<customer_risk>\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "STEP detect\n"
+        "  TAKES: customers: str\n"
+        "  GIVES: risks: List<customer_risk>\n"
+        "  MODE:  judgment\n"
+        '  ON_FAIL: retry(2) then fallback(detect_naive) then abort("exhausted")\n'
+        "FLOW pipeline\n"
+        '  detect(customers="c")\n'
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile(src, out)
+    step_files = sorted(f.name for f in (out / "steps").iterdir())
+    assert any(f.endswith("_detect_naive.go") for f in step_files), (
+        f"fallback-only step got no file: {step_files}"
+    )
+    tidy_env = {
+        "GOFLAGS": "-mod=mod",
+        "HOME": str(out / ".gohome"),
+        "PATH": os.environ.get("PATH", "/usr/bin:/usr/local/bin:/bin"),
+    }
+    subprocess.run(
+        ["go", "mod", "tidy"], cwd=out, check=True, capture_output=True, env=tidy_env
+    )
+    result = _go_build(out)
+    assert result.returncode == 0, (
+        f"go build failed:\n--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+    )
+
+
+def test_go_build_passes_on_retry_then_escalate(tmp_path: Path) -> None:
+    """`ON_FAIL: retry(N) then escalate` ends the chain with neither fallback
+    nor abort (escalate is a documented no-op for the Go target). The generated
+    step function must still end with a terminal return after the retry loop —
+    otherwise `go build` fails with "missing return". Mirrors
+    examples/critical_pipeline.clio."""
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "STEP detect\n"
+        "  TAKES: x: str\n"
+        "  GIVES: y: str\n"
+        "  MODE:  judgment\n"
+        "  ON_FAIL: retry(2) then escalate\n"
+        "FLOW pipeline\n"
+        '  detect(x="hi")\n'
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile(src, out)
+    step_src = (out / "steps" / "01_detect.go").read_text()
+    assert "detect: retries exhausted (line 1)" in step_src
+    tidy_env = {
+        "GOFLAGS": "-mod=mod",
+        "HOME": str(out / ".gohome"),
+        "PATH": os.environ.get("PATH", "/usr/bin:/usr/local/bin:/bin"),
+    }
+    subprocess.run(
+        ["go", "mod", "tidy"], cwd=out, check=True, capture_output=True, env=tidy_env
+    )
+    result = _go_build(out)
+    assert result.returncode == 0, (
+        f"go build failed:\n--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+    )
+
+
+def test_go_build_passes_on_rescue_body_calls(tmp_path: Path) -> None:
+    """Inside a RESCUE body, a sub-step's typed output is only consumed by a
+    later `RESUME(<that_step>.<field>)`. A sub-step no RESUME references must
+    not declare a named output variable — Go rejects `declared and not used`
+    inside the deferred recover block. Mirrors
+    examples/critical_pipeline_resume.clio (notify_slack unused,
+    fallback_detect_churn consumed by RESUME)."""
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "CONTRACT report\n"
+        "  SHAPE: {total: int}\n"
+        "STEP work\n"
+        "  TAKES: x: str\n"
+        "  GIVES: result: report\n"
+        "  MODE:  judgment\n"
+        "  ON_FAIL: retry(2) then escalate\n"
+        "STEP notify\n"
+        "  TAKES: msg: str\n"
+        "  GIVES: sent: bool\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "STEP fallback_work\n"
+        "  TAKES: x: str\n"
+        "  GIVES: result: report\n"
+        "  MODE:  exact\n"
+        "  LANG:  go\n"
+        "FLOW pipeline\n"
+        '  work(x="hi")\n'
+        "\n"
+        "  RESCUE work:\n"
+        '    -> notify(msg="failed")\n'
+        '    -> fallback_work(x="hi")\n'
+        "    -> RESUME(fallback_work.result)\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile(src, out)
+    flow_src = (out / "flow" / "flow.go").read_text()
+    assert "_, _ = steps.Notify(ctx, " in flow_src, flow_src
+    assert "fallback_workOut, _ := steps.FallbackWork(ctx, " in flow_src
+    tidy_env = {
+        "GOFLAGS": "-mod=mod",
+        "HOME": str(out / ".gohome"),
+        "PATH": os.environ.get("PATH", "/usr/bin:/usr/local/bin:/bin"),
+    }
+    subprocess.run(
+        ["go", "mod", "tidy"], cwd=out, check=True, capture_output=True, env=tidy_env
+    )
+    result = _go_build(out)
+    assert result.returncode == 0, (
+        f"go build failed:\n--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+    )
+
+
+def test_go_build_passes_on_if_match_over_judgment_gives(tmp_path: Path) -> None:
+    """An IF / MATCH over a sub-field of a step's GIVES must hop through the
+    Out struct's GIVES field: state["check"].(steps.ModerateOut).Check.Safe —
+    the Out wrapper itself has no .Safe field, so the one-hop form is a
+    `has no field or method` build error. Mirrors
+    examples/feedback_routing.clio."""
+    src = tmp_path / "src.clio"
+    src.write_text(
+        "CONTRACT check_result\n"
+        "  SHAPE: {safe: bool, category: enum(bug|other)}\n"
+        "STEP moderate\n"
+        "  TAKES: text: str\n"
+        "  GIVES: check: check_result\n"
+        "  MODE:  judgment\n"
+        "STEP classify\n"
+        "  TAKES: check: check_result\n"
+        "  GIVES: label: check_result\n"
+        "  MODE:  judgment\n"
+        "STEP route_a\n"
+        "  TAKES: check: check_result\n"
+        "  GIVES: routed: str\n"
+        "  MODE:  judgment\n"
+        "STEP route_b\n"
+        "  TAKES: check: check_result\n"
+        "  GIVES: routed: str\n"
+        "  MODE:  judgment\n"
+        "FLOW pipeline\n"
+        '    moderate(text="hi")\n'
+        "    -> IF check.safe == true:\n"
+        "        classify(check=check)\n"
+        "        -> MATCH label.category:\n"
+        "            CASE bug: route_a(check=check)\n"
+        "            DEFAULT:  route_b(check=check)\n"
+        "    ELSE:\n"
+        "        route_b(check=check)\n"
+        "RESOURCES\n"
+        "  target: go\n"
+        "  models: [haiku]\n"
+    )
+    out = tmp_path / "out"
+    _compile(src, out)
+    flow_src = (out / "flow" / "flow.go").read_text()
+    assert 'if state["check"].(steps.ModerateOut).Check.Safe == true {' in flow_src
+    assert 'switch state["label"].(steps.ClassifyOut).Label.Category {' in flow_src
+    tidy_env = {
+        "GOFLAGS": "-mod=mod",
+        "HOME": str(out / ".gohome"),
+        "PATH": os.environ.get("PATH", "/usr/bin:/usr/local/bin:/bin"),
+    }
+    subprocess.run(
+        ["go", "mod", "tidy"], cwd=out, check=True, capture_output=True, env=tidy_env
+    )
+    result = _go_build(out)
+    assert result.returncode == 0, (
+        f"go build failed:\n--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+    )
+
+
 @pytest.mark.parametrize(
     "fixture,entry,typed_read",
     [
