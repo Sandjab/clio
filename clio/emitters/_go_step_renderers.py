@@ -401,6 +401,14 @@ def render_judgment_step_go(step: StepIR, graph: FlowGraph) -> str:
             lines.append(
                 f'\treturn {cls}Out{{}}, fmt.Errorf("{abort_msg}")'
             )
+        else:
+            # Chain ends with neither fallback nor abort (e.g. `retry(N) then
+            # escalate` — escalate is a no-op for Go): the function still needs
+            # a terminal return or `go build` fails with "missing return".
+            lines.append(
+                f'\treturn {cls}Out{{}}, '
+                f'fmt.Errorf("{step.name}: retries exhausted (line {step.line})")'
+            )
     else:
         # No ON_FAIL chain — original simple path.
         lines.append("\tclient := anthropic.NewClient()")

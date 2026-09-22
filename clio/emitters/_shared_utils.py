@@ -475,19 +475,21 @@ def _go_condition_expr(
     contract field requires a type assertion.
 
     `ConditionIR.step_name` is the *state field name* (the GIVES name of
-    whatever step produced it — not the step's own name).  The type
-    assertion form is:
+    whatever step produced it — not the step's own name).  State holds the
+    step's whole Out struct, so the type assertion form is:
 
-        state["<state_field>"].(steps.<StepClassName>Out).<GoField>
+        state["<state_field>"].(steps.<StepClassName>Out).<GivesField>.<GoField>
 
     where `<StepClassName>` is the UpperCamelCase rendering of the *step*
-    that GIVES into `<state_field>`.  `state_field_to_step` supplies this
-    mapping (built by the caller).
+    that GIVES into `<state_field>` and `<GivesField>` is the Out struct
+    field holding the GIVES value.  `state_field_to_step` supplies the
+    step mapping (built by the caller).
 
     When `state_field` is in `scope_local` (loop variable inside FOR EACH
-    body) the local identifier is used directly without `state[...]`:
+    body) it is already bound to the GIVES element value, so the local
+    identifier is used directly without `state[...]`:
 
-        <state_field>.(steps.<StepClassName>Out).<GoField>
+        <state_field>.<GoField>
 
     `BoolOpIR` nodes render as `(<left>) &&/|| (<right>)` — unconditional
     parens preserve IR precedence regardless of nesting depth."""
@@ -514,8 +516,14 @@ def _go_condition_expr(
         # directly via the bare identifier.
         base = state_field
     elif step is not None:
+        # state holds the whole Out struct; the GIVES value lives under the
+        # Out field named after the state field, so reading a sub-field needs
+        # two hops: .(steps.<Cls>Out).<GivesField>.<SubField>.
         cls = _to_class_name(step.name)
-        base = f'state["{state_field}"].(steps.{cls}Out)'
+        base = (
+            f'state["{state_field}"].(steps.{cls}Out)'
+            f'.{_to_go_field_name(state_field)}'
+        )
     elif state_field in _takes:
         # Flow TAKE (contract) — direct value assertion to its Go type.
         base = f'state["{state_field}"].({_takes[state_field]})'
