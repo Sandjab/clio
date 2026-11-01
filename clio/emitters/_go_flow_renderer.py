@@ -348,14 +348,27 @@ def _render_chain_item(
                         sub, sub_step, contracts_by_name, state_field_to_step,
                         scope_local, _takes,
                     )
-                    sub_out_var = f"{sub.step_name}Out"
-                    defer_lines.append(
-                        f"{on_fail_indent}{sub_out_var}, _ := steps.{sub_cls}(ctx, {sub_input})"
-                    )
                     # Do NOT write to state here: if the rescue body ends with
                     # RESUME(<this_step>.<field>), the RESUME terminal writes
                     # the extracted field value into state.  For abort-terminated
                     # rescues there is no continuation, so state writes are moot.
+                    # Declare a named output var only when a RESUME in this
+                    # rescue body reads it — otherwise Go rejects the build
+                    # with `declared and not used`.
+                    resumed = any(
+                        isinstance(other, ResumeIR)
+                        and other.fallback_step == sub.step_name
+                        for other in rb.body
+                    )
+                    if resumed:
+                        defer_lines.append(
+                            f"{on_fail_indent}{sub.step_name}Out, _ := "
+                            f"steps.{sub_cls}(ctx, {sub_input})"
+                        )
+                    else:
+                        defer_lines.append(
+                            f"{on_fail_indent}_, _ = steps.{sub_cls}(ctx, {sub_input})"
+                        )
                 # Other node types inside rescue body are not supported by the Go target.
             defer_lines.extend([
                 f"{body_indent}\t}}",
@@ -460,8 +473,14 @@ def _render_chain_item(
             # error.  Use the bare identifier and access the field directly.
             base = state_field
         elif step is not None:
+            # state holds the whole Out struct; the GIVES value lives under
+            # the Out field named after the state field (same two-hop form
+            # as _go_condition_expr).
             cls = _to_class_name(step.name)
-            base = f'state["{state_field}"].(steps.{cls}Out)'
+            base = (
+                f'state["{state_field}"].(steps.{cls}Out)'
+                f'.{_to_go_field_name(state_field)}'
+            )
         elif state_field in _takes:
             base = f'state["{state_field}"].({_takes[state_field]})'
         else:

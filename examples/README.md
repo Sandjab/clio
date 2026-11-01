@@ -103,10 +103,11 @@ What this example exercises that the first two do not:
 - A contract with `ASSERT` (`confidence > 0.0`) compiled into a Pydantic
   `@field_validator` in the emitted package.
 
-This example compiles to `--target python` only. The `claude-cli` target rejects
-it because its `FOR EACH` body contains a **judgment** step — `claude-cli` does
-not implement `FOR EACH` with a judgment body. (`invoke.protocol: openai` is
-accepted silently by `claude-cli`; it is not the reason for the rejection.)
+This example compiles to `--target python` and `--target claude-skill`; every
+other target rejects it. The `claude-cli` target rejects it because its
+`FOR EACH` body contains a **judgment** step — `claude-cli` does not implement
+`FOR EACH` with a judgment body. (`invoke.protocol: openai` is accepted
+silently by `claude-cli`; it is not the reason for the rejection.)
 
 ```bash
 uv run python -m clio compile examples/classify_corpus.clio --target python --output ./out
@@ -239,6 +240,8 @@ cd ./out && ANTHROPIC_API_KEY=... ticket_routing
 cat state.json
 ```
 
-Compiles to `--target python` and `--target mcp-server`. The `claude-cli`
-target rejects this file at compile time because it does not implement
-`FOR EACH PARALLEL` (use one of the other two targets).
+Compiles to `--target python`, `--target mcp-server`, and
+`--target claude-skill`. The `claude-cli` target rejects this file at compile
+time because it does not implement `FOR EACH PARALLEL`. The `go` target
+accepts it but the emitted module does not `go build` yet — the parallel
+collector's typed downstream read is still open as issue #107.
